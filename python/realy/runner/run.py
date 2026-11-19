@@ -48,6 +48,7 @@ class RunHandle:
     abort_reason: str | None = None
     phase: str = "PREPARE"
     live: dict[str, Any] = field(default_factory=dict)
+    service_errors: float = 0.0   # this run's gateway pipeline errors + Flink async timeouts (1 s windows summed)
 
 
 def new_run_id(sc: Scenario) -> str:
@@ -153,6 +154,16 @@ def _guardrails(handle: RunHandle, sc: Scenario, snap: dict, log) -> None:
         decided = sum(v.get("counters", {}).get("decided_total", 0) for k, v in handle.live.items() if k.startswith("collector:"))
         if emitted - decided > g.max_consumer_lag:
             handle.abort_reason = f"pipeline backlog {emitted - decided:.0f} > {g.max_consumer_lag}"
+    # failed produces (emitter, per-run process) + failed scoring pipelines (gateway) + async scoring
+    # timeouts (Flink). Service `*_total` counters live as long as the process, so sum their 1 s windows.
+    if snap.get("source") in ("gateway", "flink"):
+        c = snap.get("counters", {})
+        handle.service_errors += c.get("pipeline_errors", 0) + c.get("async_timeouts", 0)
+    emitted = sum(v.get("counters", {}).get("emitted_total", 0) for k, v in handle.live.items() if k.startswith("emitter:"))
+    errors = handle.service_errors + sum(v.get("counters", {}).get("errors_total", 0)
+                                         for k, v in handle.live.items() if k.startswith("emitter:"))
+    if emitted >= 1000 and errors / emitted > g.max_error_rate:
+        handle.abort_reason = f"error rate {errors / emitted:.2%} > {g.max_error_rate:.0%} ({errors:.0f} errors)"
     if handle.abort_reason:
         log(f"GUARDRAIL: {handle.abort_reason} -> aborting run")
         handle.stop.set()

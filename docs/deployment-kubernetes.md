@@ -69,7 +69,7 @@ open http://localhost:8090
 
 | Variable | Default | |
 |---|---|---|
-| `REALY_K8S` | `auto` | `k3d`, `kind`, or `current` (use the current kubectl context; images must be pullable) |
+| `REALY_K8S` | `auto` | `k3d`, `kind`, or `current` (use the current kubectl context; images must be pullable). k3d pulls its helper images (`k3d-proxy`, `k3d-tools`) from ghcr.io; if your network blocks ghcr.io, use `kind`, whose node image comes from Docker Hub |
 | `REALY_CLUSTER` | `realy` | cluster name |
 | `REALY_K8S_PORT` / `REALY_K8S_FLINK_PORT` | `8090` / `8081` | host ports; change them when the compose stack is also running |
 | `SKIP_BUILD` | | `1` = reuse images already in the Docker daemon |

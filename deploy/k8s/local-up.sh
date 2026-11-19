@@ -8,7 +8,9 @@
 # Console: http://localhost:${REALY_K8S_PORT:-8090}   Flink UI: http://localhost:${REALY_K8S_FLINK_PORT:-8081}
 #
 # Environment knobs:
-#   REALY_K8S=auto|k3d|kind|current   cluster provider (auto: k3d, then kind, then current context)
+#   REALY_K8S=auto|k3d|kind|current   cluster provider (auto: k3d, then kind, then current context).
+#                                     k3d pulls helper images from ghcr.io; where that is blocked use kind
+#                                     (its node image comes from Docker Hub).
 #   REALY_CLUSTER=realy               cluster name for k3d/kind
 #   REALY_K8S_PORT=8090               host port for the console (k3d/kind port mapping to NodePort 30090)
 #   REALY_K8S_FLINK_PORT=8081         host port for the Flink UI (NodePort 30081)

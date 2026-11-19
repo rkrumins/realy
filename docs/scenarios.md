@@ -127,10 +127,14 @@ A run **passes** when every condition holds:
 * the run was not aborted.
 
 The report lists every failed condition as a reason. Guardrails also protect the run while it is
-running: if the emitter's schedule-lag p99 exceeds `max_schedule_lag_ms`, or the backlog (emitted
-minus decided) exceeds `max_consumer_lag`, the driver aborts the run with a `GUARDRAIL` log line and
-the report shows the reason. That way an overloaded pipeline fails fast instead of queueing for
-minutes. `max_error_rate` is accepted but not enforced yet.
+running. The driver aborts the run with a `GUARDRAIL` log line, and the report shows the reason, if
+any of these is exceeded:
+* the emitter's schedule-lag p99 exceeds `max_schedule_lag_ms`;
+* the backlog (emitted minus decided) exceeds `max_consumer_lag`;
+* errors exceed `max_error_rate` of emitted events. Errors are failed produces, gateway pipeline
+  errors and Flink async scoring timeouts.
+
+That way an overloaded or failing pipeline fails fast instead of queueing for minutes.
 
 `expect: { verdict: FAIL }` marks a scenario designed to fail, such as `user-example-100ms`, so CI
 treats the FAIL as the correct outcome.
