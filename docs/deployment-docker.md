@@ -18,7 +18,7 @@ make images      # build only              make up-obs   + Prometheus / Grafana
 | `gateway` | `realy/scoring-gateway:dev` | `eclipse-temurin:21-jre` | scoring gateway distribution, ZGC |
 | `mock-model` | `realy/mock-model-server:dev` | `eclipse-temurin:21-jre` | KServe v2 mock and `models/proxy` weights |
 | `flink` | `realy/flink:dev` | `flink:2.2.1-java21` | job jar at `/opt/flink/lib/realy/` on the system classpath |
-| `console` | `realy/console:dev` | `python:3.13-slim` + JRE 21 | realy Python package, UI build, Java load emitter, Flink job jar, scenarios, docs |
+| `console` | `realy/console:dev` | `python:3.13-slim` + JRE 21 | pulsebench Python package, UI build, Java load emitter, Flink job jar, scenarios, docs |
 
 The same four images run on Kubernetes (see [deployment-kubernetes.md](deployment-kubernetes.md)).
 In the flink image the job jar loads **parent-first** from `lib/`, so a TaskManager holds one

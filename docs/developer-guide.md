@@ -11,7 +11,7 @@
 | `python/realy/` | `world` / `gen` (synthetic data), `emit` / `collect` (driver), `runner`, `report`, `verify`, `budget`, `features` / `scoring` (reference implementations), `train`, `control` (console API), `codegen` / `k8s` / `docsgen` (generators) |
 | `ui/` | console: React 19 + TypeScript + Vite + Tailwind CSS v4 |
 | `deploy/` | `docker/Dockerfile`, `compose/`, `k8s/` (Kustomize), Prometheus/Grafana config |
-| `models/` | proxy-model weights (mock) and Triton model repositories (`realy train`) |
+| `models/` | proxy-model weights (mock) and Triton model repositories (`pulsebench train`) |
 | `docs/` | these docs; `docs/reference/` is generated |
 
 ## Host toolchain (optional)
@@ -60,8 +60,8 @@ Edit sources, never outputs. `make codegen` runs every generator; CI fails on dr
    A **derived** feature additionally needs the same function in
    `java/scoring-core/.../features/DerivedFeatures.java` and `python/realy/features/derived.py`.
 4. `make test` (Java `EntityAggregatorTest`, Python feature engine tests).
-5. Retrain the proxy model, because the tensor width changed: `realy train --run <run>`.
-6. Run `flink-inline-smoke` and then `realy verify <run>`. This is the Java-vs-Python parity proof:
+5. Retrain the proxy model, because the tensor width changed: `pulsebench train --run <run>`.
+6. Run `flink-inline-smoke` and then `pulsebench verify <run>`. This is the Java-vs-Python parity proof:
    the verifier recomputes every served feature with the Python reference engine. It demands exact
    equality for customer and card features and reports the agreement rate for shared entities.
 
@@ -71,7 +71,7 @@ Edit `rules/baseline.yaml`, or add `rules/<name>.yaml` and set `rules: <name>` i
 * Rules are CEL over `f` (features as doubles: write `3.0`, not `3`) and `event` (enums by name).
 * Every run sends the rule set to the services (`rule_set_yaml` in `ScoringConfig`), so no rebuild
   is needed.
-* `realy verify` re-evaluates every decision with the Python CEL implementation and reports any
+* `pulsebench verify` re-evaluates every decision with the Python CEL implementation and reports any
   mismatch. Precedence is documented in the [rule catalog](reference/rules.md).
 
 ### Add a fraud typology
@@ -116,9 +116,9 @@ A topology decides which component consumes `payments.events.raw` and produces d
 |---|---|---|
 | Java | `java/*/src/test` | feature aggregators, CEL rule sets, orchestrator deadlines and fallbacks, latency models, mock-model capacity model, Flink MiniCluster end to end on RocksDB |
 | Python | `python/tests` | world and generator determinism, fraud typologies tripping their rules, feature engine, budget Monte Carlo, report, console API (auth, env, explorer, docs, topology, SPA fallback) |
-| Parity (runtime) | `realy verify <run>` | Java vs Python features and CEL decisions on every event of a real run, plus ClickHouse audit completeness |
+| Parity (runtime) | `pulsebench verify <run>` | Java vs Python features and CEL decisions on every event of a real run, plus ClickHouse audit completeness |
 | UI | `ui/src/**/*.test.ts` | distribution math, YAML-to-form round trips |
-| End to end | CI `e2e` job, manual `workflow_dispatch` | `make up`, then `smoke`, `flink-inline-smoke` and `realy verify` inside the console container |
+| End to end | CI `e2e` job, manual `workflow_dispatch` | `make up`, then `smoke`, `flink-inline-smoke` and `pulsebench verify` inside the console container |
 
 ## Releasing images
 

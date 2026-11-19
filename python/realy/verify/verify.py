@@ -43,12 +43,21 @@ class ProxyScorer:
     def for_version(cls, version: str | None) -> "ProxyScorer":
         """Weights file whose `version` matches the model version recorded in the decisions."""
         if version:
-            for p in sorted((REPO_ROOT / "models" / "proxy").glob("*.weights.json")):
+            from ..train.proxy import MODELS
+            # trained models live in REALY_MODELS (the shared models volume in Docker), versioned under
+            # proxy/versions/; bundled weights ship in the repository
+            dirs = [MODELS / "proxy" / "versions", MODELS / "proxy", REPO_ROOT / "models" / "proxy"]
+            direct = MODELS / "proxy" / "versions" / f"{version}.weights.json"
+            candidates = [direct] + [p for d in dirs if d.is_dir() for p in sorted(d.glob("*.weights.json"))]
+            for p in candidates:
                 try:
-                    if json.loads(p.read_text()).get("version") == version:
+                    if p.exists() and json.loads(p.read_text()).get("version") == version:
                         return cls(p)
                 except ValueError:
                     continue
+            import warnings
+            warnings.warn(f"no weights for served model {version}: score parity uses the default weights "
+                          "and will not match", stacklevel=2)
         return cls()
 
     def __init__(self, path: str | Path | None = None) -> None:
@@ -285,11 +294,33 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     return out
 
 
-def _q(ch: str, sql: str) -> list[dict]:
+class ClickHouseError(RuntimeError):
+    """ClickHouse failed a query, possibly after HTTP 200: it streams results, so an exception raised
+    mid-query arrives in the body (`Code: N. DB::Exception: ...`), not as an HTTP error status."""
+
+
+def _q(ch: str, sql: str, retries: int = 2) -> list[dict]:
+    import time
+
     import httpx
-    r = httpx.post(ch, params={"default_format": "JSONEachRow"}, content=sql, timeout=60)
-    r.raise_for_status()
-    return [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    last: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            r = httpx.post(ch, params={"default_format": "JSONEachRow"}, content=sql, timeout=120)
+            if r.status_code >= 400:
+                raise ClickHouseError(f"HTTP {r.status_code}: {r.text.strip()[:300]}")
+            rows = []
+            for line in r.text.splitlines():
+                if not line.strip():
+                    continue
+                if line.startswith("Code:") or "DB::Exception" in line:
+                    raise ClickHouseError(line.strip()[:300])
+                rows.append(json.loads(line))
+            return rows
+        except (ClickHouseError, httpx.HTTPError, ValueError) as e:   # transient under load: retry, then fail clearly
+            last = e
+            time.sleep(2 * (attempt + 1))
+    raise ClickHouseError(f"{last} (query: {' '.join(sql.split())[:160]})")
 
 
 def audit_checks(ch: str, run_id: str, emitted: int, scorer: ProxyScorer, rules: Rules, schema) -> dict[str, Any]:

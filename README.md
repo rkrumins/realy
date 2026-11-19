@@ -1,19 +1,23 @@
-# realy
+# PulseBench
 
 **A deterministic benchmarking and correctness instrument for real-time fraud-scoring pipelines**
 (Kafka → Flink → Redis / ClickHouse → KServe / Triton). It answers one question with evidence: *can
 this pipeline hold 10k+ TPS inside a per-event latency budget (p99 < 100 ms hot path, < 150 ms end to
 end) without losing or corrupting a single decision?*
 
-![realy console: live run](docs/img/live-dark.png)
+![PulseBench console: live run](docs/img/live-dark.png)
 
 ```bash
 make up                      # builds everything from source in Docker and starts the stack
 open http://localhost:8090   # launch "smoke", watch it live, read the report
 ```
 
-Docker is the only requirement. On Kubernetes, with Kafka (3-broker KRaft) and Flink inside the same
-local cluster: `make k8s-local && make k8s-test` ([guide](docs/deployment-kubernetes.md)).
+Docker is the only requirement. The CLI is `pulsebench` (`realy`, the project's former name, still
+works as an alias). Internal identifiers keep the old name, so existing runs, volumes and baselines
+carry over: the `python/realy` package, `realy/*` images, the `realy` ClickHouse database and
+Kubernetes namespace, and `REALY_*` settings.
+
+On Kubernetes, with Kafka (3-broker KRaft) and Flink inside the same local cluster: `make k8s-local && make k8s-test` ([guide](docs/deployment-kubernetes.md)).
 
 ## What you get
 
@@ -74,7 +78,7 @@ local cluster: `make k8s-local && make k8s-test` ([guide](docs/deployment-kubern
 | `flink-inline` | async | Flink does everything: exact features, async model call, policy |
 
 Every topology emits the same `DecisionRecord` from the same scoring code, so results are comparable
-on identical inputs. `realy scenarios` lists the 21 bundled packs: fraud typologies, a Black Friday
+on identical inputs. `pulsebench scenarios` lists the 21 bundled packs: fraud typologies, a Black Friday
 spike, tail stress, capacity saturation, a 60-minute soak, exactly-once cost, and a step ramp to
 10k TPS ([catalog](docs/reference/scenarios.md)).
 
@@ -90,7 +94,7 @@ console container. The others ran on the same services built on the host.
 | † async gateway, warm, trained proxy, 9 fraud typologies | 500 | 19.3 / 76.0 ms | 40.7 ms | PASS · verify PASS · detection in-sample (out-of-sample: [fraud-detection.md](docs/fraud-detection.md#training-and-evaluation)) |
 | † Flink-inline (fresh state) | 500 | 24.6 / 111.5 ms | 80.4 ms | PASS · features **exact** · verify PASS · tail = 42% keyBy shuffles |
 | sync gRPC unary / bidi stream | 500 | 18.9 / 96.4 ms · 14.7 / 43.5 ms | 45.7 / 32.7 ms | PASS |
-| brief's example (100 ms feature + 30–100 ms model vs 150 ms) | 1,000 | 171 / 593 ms | 162 ms | FAIL as predicted by `realy budget` |
+| brief's example (100 ms feature + 30–100 ms model vs 150 ms) | 1,000 | 171 / 593 ms | 162 ms | FAIL as predicted by `pulsebench budget` |
 | exactly-once sink | 500 | 5.3 s / 10.2 s | 61 ms | FAIL (visible only at checkpoint) |
 | step ramp 1k → 10k | n/a | knee at 2k TPS, ceiling ≈ 5–6k/s on this box | n/a | FAIL (guardrail abort, zero loss) |
 

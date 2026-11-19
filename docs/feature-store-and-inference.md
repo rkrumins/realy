@@ -47,7 +47,7 @@ flowchart LR
 | **Redis** | a low-latency serving copy of the latest per-entity aggregates + static profiles | Flink (`fs:*`), the profile seeder (`pf:*`) | the gateway (one pipelined round trip per event) | compute, or be the system of record |
 | **Gateway** | the decision: deadlines, tensor assembly, rules, policy, audit | Kafka decisions | Kafka events (async) or gRPC/HTTP (sync), Redis | keep state between events |
 | **KServe / Triton** | model math (MLP / GBDT) on CPU or GPU | nothing | the tensor in the request | look anything up |
-| **ClickHouse** | the offline store: every decision with the exact features it was scored on, labels, history | Kafka engine → materialized views | analysts, `realy verify`, `realy train`, Grafana | sit on the hot path |
+| **ClickHouse** | the offline store: every decision with the exact features it was scored on, labels, history | Kafka engine → materialized views | analysts, `pulsebench verify`, `pulsebench train`, Grafana | sit on the hot path |
 
 The split exists because **each store answers a different question at a different speed**:
 - **RocksDB:** "what exactly happened to this card in the last 10 minutes" (local, exact, durable through checkpoints).
@@ -91,7 +91,7 @@ event to the subtask that owns that entity's key group (a network shuffle each t
 3. **Writes the entity's blob to Redis:** `SET fs:<entity>:<id>` with an 8-day TTL. The write is
    fire-and-forget: the operator never waits for Redis.
 
-After this event, the customer's blob, decoded with `realy store get customer 97327`, has this
+After this event, the customer's blob, decoded with `pulsebench store get customer 97327`, has this
 shape (output from a live run; values differ per customer):
 
 ```text
@@ -353,7 +353,7 @@ trip), up to 7 Redis SETs from Flink, a 54-float tensor (216 B), and a decision 
 | Model | 20k rows/s, micro-batched client-side and dynamically batched by Triton | GPU instances / replicas; batch size trades latency for throughput |
 | ClickHouse | 20k rows/s of ~1.5 KB, asynchronous | Kafka engine consumers, shards; never on the hot path |
 
-`realy size` turns measured per-event costs into node counts, and `realy store get` shows what one
+`pulsebench size` turns measured per-event costs into node counts, and `pulsebench store get` shows what one
 entity costs in Redis.
 
 ## Alternatives considered

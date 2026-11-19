@@ -6,12 +6,12 @@
 make up                                   # build every image from source + start the stack
 open http://localhost:8090                # console: Launch -> smoke -> watch Live -> report
 make smoke                                # or from the CLI, inside the console container
-docker compose -f deploy/compose/docker-compose.yml exec console realy budget smoke
-docker compose -f deploy/compose/docker-compose.yml exec console sh -c 'realy verify $(ls -td /runs/*/ | head -1)'
+docker compose -f deploy/compose/docker-compose.yml exec console pulsebench budget smoke
+docker compose -f deploy/compose/docker-compose.yml exec console sh -c 'pulsebench verify $(ls -td /runs/*/ | head -1)'
 ```
-The CLI (`realy ...`, [reference](reference/cli.md)) and the console share one run queue and one
+The CLI (`pulsebench ...`, [reference](reference/cli.md)) and the console share one run queue and one
 run directory (`/runs` volume), so a run started from either shows up in both. `make up-obs` adds
-Prometheus (:9090) and Grafana (:3000, dashboard "realy - pipeline"). With the host toolchain
+Prometheus (:9090) and Grafana (:3000, dashboard "PulseBench - pipeline"). With the host toolchain
 (`make dev-venv dev-build`) the same commands run as `.venv/bin/realy ...` against `make up`'s stack.
 
 ## What a run does
@@ -79,19 +79,19 @@ fraud:
   campaigns: [ { kind: atm_cashout, at_s: 40, params: { cards: 2000 } } ]
 budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }
 guardrails: { max_consumer_lag: 500000, max_schedule_lag_ms: 2000 }
-flink_state: warm                            # fresh => exact `realy verify`
+flink_state: warm                            # fresh => exact `pulsebench verify`
 exactly_once: false
 expect: { verdict: FAIL }                    # for scenarios that must fail (CI)
 ```
-Any key can be overridden: `realy run smoke --set traffic.profile.tps=2000 --set scoring.budget_ms=80`.
+Any key can be overridden: `pulsebench run smoke --set traffic.profile.tps=2000 --set scoring.budget_ms=80`.
 
 ## Live control during sustained runs
 
 ```bash
-realy control emitter --run-id <id> --tps 2000                         # live rate change
-realy control model --model-server '{"service_time":{"lognormal":{"median_ms":20,"p99_ms":60}}}'
-realy control '*' --scoring '{"feature_deadline_ms": 15}'
-realy control '*' --run-id <id> --abort
+pulsebench control emitter --run-id <id> --tps 2000                         # live rate change
+pulsebench control model --model-server '{"service_time":{"lognormal":{"median_ms":20,"p99_ms":60}}}'
+pulsebench control '*' --scoring '{"feature_deadline_ms": 15}'
+pulsebench control '*' --run-id <id> --abort
 ```
 All services subscribe to the compacted `bench.control` topic (latest config survives restarts) and
 apply updates with *presence* semantics (every field present overrides, absent fields are kept).
@@ -99,7 +99,7 @@ apply updates with *presence* semantics (every field present overrides, absent f
 ## Training proxy models
 
 ```bash
-realy train --run runs/<a> --run runs/<b> --hidden 64,32 --trees 300   # served vectors + labels
+pulsebench train --run runs/<a> --run runs/<b> --hidden 64,32 --trees 300   # served vectors + labels
 MODEL_WEIGHTS=/models/proxy/fraud_mlp.weights.json make up             # mock server uses the trained MLP
 ```
 Outputs `models/proxy/fraud_mlp.weights.json` (mock server), `models/triton/fraud_mlp` (ONNX,

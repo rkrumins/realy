@@ -35,12 +35,12 @@ helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack -n
 make images                                   # gateway, mock-model, flink, console (all from source)
 for i in scoring-gateway mock-model-server flink console; do
   docker tag realy/$i:dev REGISTRY/realy/$i:v0.2.0 && docker push REGISTRY/realy/$i:v0.2.0; done
-realy train --run runs/<a> --run runs/<b>     # -> models/triton/{fraud_mlp,fraud_gbdt}
+pulsebench train --run runs/<a> --run runs/<b>     # -> models/triton/{fraud_mlp,fraud_gbdt}
 gsutil -m cp -r models/triton gs://BUCKET/realy/models/
 ```
 Replace `REGISTRY` and `REPLACE_BUCKET` in `deploy/k8s/overlays/gke-l4` and `components/operators/flink.yaml`. For
 "structurally identical" proxies, train with the production tensor width and capacity
-(`realy train --input-dim 512 --hidden 512,256,128 --trees 800 --depth 8`) and set
+(`pulsebench train --input-dim 512 --hidden 512,256,128 --trees 800 --depth 8`) and set
 `MODEL_INPUT_DIM` on gateway/Flink to the same width — the GPU then executes real GEMMs and
 host→device transfers of production size.
 

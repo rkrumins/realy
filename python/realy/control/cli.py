@@ -1,4 +1,4 @@
-"""`realy console` — wire into the main CLI with: app.command()(console)."""
+"""`pulsebench console` — wire into the main CLI with: app.command()(console)."""
 from __future__ import annotations
 
 import typer

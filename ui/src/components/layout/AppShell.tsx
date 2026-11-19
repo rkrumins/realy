@@ -24,7 +24,7 @@ function Logo({ collapsed }: { collapsed?: boolean }) {
       </div>
       {!collapsed && (
         <div className="leading-none">
-          <div className="text-[15px] font-semibold tracking-tight text-fg">realy</div>
+          <div className="text-[15px] font-semibold tracking-tight text-fg">PulseBench</div>
           <div className="mt-1 text-[10.5px] font-medium uppercase tracking-[0.14em] text-subtle">fraud bench</div>
         </div>
       )}

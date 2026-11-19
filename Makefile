@@ -19,7 +19,7 @@ help:
 # ----------------------------------------------------------------------------- Docker only
 up: ## Build everything from source in Docker and start the full stack (console: http://localhost:8090)
 	$(COMPOSE) up -d --build
-	@echo "realy console: http://localhost:8090   (Flink UI :8081 · ClickHouse :8123)"
+	@echo "pulsebench console: http://localhost:8090   (Flink UI :8081 · ClickHouse :8123)"
 
 up-proxy: ## Same as `up` behind a TLS-intercepting proxy (REALY_BUILD_CA=<pem> HTTPS_PROXY=<url>)
 	$(COMPOSE_PROXY) up -d --build
@@ -39,7 +39,7 @@ ps: ## Service status / health
 images: ## Build all images (gateway, mock-model, flink, console) without starting
 	$(COMPOSE) build
 
-console-shell: ## Shell into the console container (realy CLI available)
+console-shell: ## Shell into the console container (pulsebench CLI available)
 	$(COMPOSE) exec console bash
 
 migrate: ## Re-apply the ClickHouse DDL to a running stack (idempotent: upgrades tables created by an older release)
@@ -52,7 +52,7 @@ live-test: ## Live acceptance: launch/steer/abort/bulk/lease/signals + restart f
 	deploy/compose/live-test.sh
 
 smoke: ## Run the smoke scenario inside the console container
-	$(COMPOSE) exec console realy run smoke
+	$(COMPOSE) exec console pulsebench run smoke
 
 k8s-local: ## Build images, create a local kind/k3d/minikube cluster, deploy Kafka (3 brokers) + Flink + realy
 	deploy/k8s/local-up.sh
@@ -102,7 +102,7 @@ flink-reload: ## Recreate Flink after rebuilding its image
 	$(COMPOSE) up -d --build --force-recreate flink-jobmanager flink-taskmanager
 
 verify: ## Verify the latest run (inside the console container)
-	$(COMPOSE) exec console sh -c 'realy verify $$(ls -td /runs/*/ | head -1)'
+	$(COMPOSE) exec console sh -c 'pulsebench verify $$(ls -td /runs/*/ | head -1)'
 
 budget: ## Budget feasibility of every scenario (Monte Carlo, host venv)
 	@for s in scenarios/*.yaml; do $(REALY) budget $$(basename $$s .yaml) || true; done

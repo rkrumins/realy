@@ -17,8 +17,8 @@ out=()
 
 run() {  # run_id scenario [--set ...]
   local id=$1 sc=$2; shift 2
-  echo "=== realy run $sc ($id)"
-  "${EX[@]}" realy run "$sc" --run-id "$id" "$@" | grep -E "^=== |^emitted|^e2e|^reasons|^detection|^evaluation|^model alone|^report" || true
+  echo "=== pulsebench run $sc ($id)"
+  "${EX[@]}" pulsebench run "$sc" --run-id "$id" "$@" | grep -E "^=== |^emitted|^e2e|^reasons|^detection|^evaluation|^model alone|^report" || true
   out+=("$id")
 }
 
@@ -27,22 +27,22 @@ TRAIN="${TRAIN_RUN:-fraud-train-$TS}"
 [ -n "${TRAIN_RUN:-}" ] || run "$TRAIN" fraud-train
 
 echo "=== train (observed labels)"
-OBS=$("${EX[@]}" realy train --run "/runs/$TRAIN" --labels observed | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["weights_path"]); print("labels", json.dumps(d["label_stats"]), "metrics", json.dumps(d["metrics"]), file=sys.stderr)')
+OBS=$("${EX[@]}" pulsebench train --run "/runs/$TRAIN" --labels observed | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["weights_path"]); print("labels", json.dumps(d["label_stats"]), "metrics", json.dumps(d["metrics"]), file=sys.stderr)')
 echo "=== train (ground truth)"
-GT=$("${EX[@]}" realy train --run "/runs/$TRAIN" --labels ground-truth | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["weights_path"]); print("labels", json.dumps(d["label_stats"]), "metrics", json.dumps(d["metrics"]), file=sys.stderr)')
+GT=$("${EX[@]}" pulsebench train --run "/runs/$TRAIN" --labels ground-truth | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["weights_path"]); print("labels", json.dumps(d["label_stats"]), "metrics", json.dumps(d["metrics"]), file=sys.stderr)')
 [ -n "$OBS" ] && [ -n "$GT" ] || { echo "training failed"; exit 1; }
 
-"${EX[@]}" realy deploy-model "$OBS"
+"${EX[@]}" pulsebench deploy-model "$OBS"
 run "fraud-eval-obs-$TS" fraud-eval
-"${EX[@]}" realy verify "/runs/fraud-eval-obs-$TS" | tail -12
+"${EX[@]}" pulsebench verify "/runs/fraud-eval-obs-$TS" | tail -12
 
-"${EX[@]}" realy deploy-model "$GT"
+"${EX[@]}" pulsebench deploy-model "$GT"
 run "fraud-eval-gt-$TS" fraud-eval
 
 echo "=== baseline-v1 (ATO rule as DECLINE) replayed over the evaluation run"
-"${EX[@]}" realy rules-whatif "/runs/fraud-eval-obs-$TS" --rules /opt/realy/rules/baseline-v1.yaml
+"${EX[@]}" pulsebench rules-whatif "/runs/fraud-eval-obs-$TS" --rules /opt/realy/rules/baseline-v1.yaml
 
-"${EX[@]}" realy deploy-model "$OBS"
+"${EX[@]}" pulsebench deploy-model "$OBS"
 run "lost-stolen-$TS" lost-stolen-contactless
 run "tail-stress-nohedge-$TS" tail-stress
 run "tail-stress-hedge-$TS" tail-stress --set scoring.hedge_after_ms=30

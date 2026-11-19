@@ -147,8 +147,8 @@ treats the FAIL as the correct outcome.
 ## Overrides without editing
 
 ```bash
-realy run smoke --set traffic.profile.tps=2000 --set traffic.duration_s=300
-realy run step-ramp --set topology=flink-inline --set flink_state=fresh
+pulsebench run smoke --set traffic.profile.tps=2000 --set traffic.duration_s=300
+pulsebench run step-ramp --set topology=flink-inline --set flink_state=fresh
 ```
 
 The console's **Launch** page has the same overrides as fields (TPS, duration, topology, backfill,

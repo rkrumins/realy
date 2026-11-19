@@ -18,21 +18,21 @@ the cause, and what the code or config now does about it.
 ## Controlling live runs
 
 One run at a time per pipeline is enforced, whoever starts it:
-- **Where runs come from:** the console's queue, `realy run` from a shell, or the Kubernetes bench Job.
+- **Where runs come from:** the console's queue, `pulsebench run` from a shell, or the Kubernetes bench Job.
 - **The pipeline lease:** a Redis key with a 1 s heartbeat.
-  - **Who holds it:** shown on the Live and Runs pages and by `realy status`.
-  - **What waits:** console jobs wait for it, and `realy run --wait-lease 600` waits up to 10 min.
+  - **Who holds it:** shown on the Live and Runs pages and by `pulsebench status`.
+  - **What waits:** console jobs wait for it, and `pulsebench run --wait-lease 600` waits up to 10 min.
   - **Crashes:** a crashed owner's lease expires after 15 s.
   - **Separate pipelines:** set different `REALY_PIPELINE` names, one per namespace.
 
 | To | Console | API | CLI |
 |---|---|---|---|
-| abort the running run | Live → Controls → Abort, or Runs → Queue → Abort | `POST /api/runs/{id}/abort` | `realy abort RUN_ID` (any process), Ctrl-C / SIGTERM on a CLI run |
-| abort / cancel several | Runs → Queue: select → Abort / cancel selected | `POST /api/runs/abort {"ids": [...]}` | `realy abort A B C` |
+| abort the running run | Live → Controls → Abort, or Runs → Queue → Abort | `POST /api/runs/{id}/abort` | `pulsebench abort RUN_ID` (any process), Ctrl-C / SIGTERM on a CLI run |
+| abort / cancel several | Runs → Queue: select → Abort / cancel selected | `POST /api/runs/abort {"ids": [...]}` | `pulsebench abort A B C` |
 | cancel everything queued | Runs → Queue → Cancel all queued | `POST /api/queue/clear` | n/a |
-| stop everything | Stop all (Runs, Live, ⌘K) | `POST /api/stop-all` (aborts the lease holder too, pauses schedules, wildcard abort on bench.control) | `realy abort --all [--console URL]` |
+| stop everything | Stop all (Runs, Live, ⌘K) | `POST /api/stop-all` (aborts the lease holder too, pauses schedules, wildcard abort on bench.control) | `pulsebench abort --all [--console URL]` |
 | pause / resume schedules | Runs → Schedules → ⏸ / ▶ | `POST /api/schedules/{id}/pause\|resume`, `/pause-all`, `/resume-all` | n/a |
-| see what is running anywhere | Live / Runs banner | `GET /api/active` | `realy status [--console URL]` |
+| see what is running anywhere | Live / Runs banner | `GET /api/active` | `pulsebench status [--console URL]` |
 
 **How aborts arrive:**
 - **Two channels:** a Redis flag polled by the run's heartbeat every second, and a `bench.control`
@@ -77,7 +77,7 @@ One run at a time per pipeline is enforced, whoever starts it:
    stopped gracefully and SIGKILLed.
 
 Results go to `/runs/live-test-*.json`. Latency budgets are reported as warnings there, because they
-depend on the host; `realy gate` owns them.
+depend on the host; `pulsebench gate` owns them.
 
 ## Resilience (measured)
 
@@ -129,7 +129,7 @@ decision were silently never scored; in production, skipped fraud checks):
 
 ## Runs that fail or look wrong
 
-| Symptom | Cause | What realy does |
+| Symptom | Cause | What PulseBench does |
 |---|---|---|
 | Report flags a high **schedule lag** | the emitter host cannot keep up (CPU starved), so events leave late | open-loop pacing records intended vs sent time; late events count against the run ([architecture](architecture.md)) instead of silently lowering the load |
 | First run after `make up` fails its p99, with seconds of latency in the first ~15 s | cold JVMs (JIT) and a just-submitted Flink job compete for CPU | the runner detects a cold pipeline (gateway scored < 20k events, or Flink job < 90 s old) and primes it with 30 s of unmeasured history events at the scenario's rate (`REALY_PRIME_S`; scored by the gateway or Flink, then discarded) before measuring (`cold pipeline ... priming` in the log; `auto_prime` in the manifest). Disable with `REALY_AUTO_PRIME=0`. Not applied to `flink_state: fresh` (exact verification) or the sync rail |
@@ -143,7 +143,7 @@ decision were silently never scored; in production, skipped fraud checks):
 
 ## Throughput and tail latency
 
-| Symptom | Cause | Fix in realy |
+| Symptom | Cause | Fix in PulseBench |
 |---|---|---|
 | Broker CPU high, p99 jitter with idle topics | consumers polling with `fetch.max.wait.ms=5` churn the broker | collectors and the gateway use 100 ms (latency is still bounded by `fetch.min.bytes=1`) |
 | Collector burns a core while idle | busy-polling `consume(timeout=0)` | batch consume with a real timeout |
@@ -159,15 +159,15 @@ decision were silently never scored; in production, skipped fraud checks):
 | Symptom | Cause | Fix |
 |---|---|---|
 | `run history: not stored in ClickHouse` in a run log | ClickHouse unreachable, or the `realy.runs` table missing (a stack created before it existed) | `docker compose ... exec clickhouse clickhouse-client --multiquery < contracts/storage/clickhouse/06_runs.sql`; history is best-effort and never fails a run (`REALY_RUN_HISTORY=0` disables it) |
-| Grafana's `realy - run history` dashboard has no datasource | the ClickHouse plugin is downloaded from grafana.com at start (`GF_PLUGINS_PREINSTALL`); blocked egress prevents it | allow grafana.com, or bake the plugin into a Grafana image / mount it under `/var/lib/grafana/plugins` |
-| `realy gate` fails `same scenario` | the baseline is from another scenario | gate against `baselines/<scenario>.json` (`realy gate RUN --save-baseline baselines/<scenario>.json` to adopt a run) |
-| `realy size` warns "measured at only N events/s" | the calibration run was too light: fixed per-process costs dominate | calibrate from a step-ramp that reaches the design rate on the target nodes |
+| Grafana's `PulseBench - run history` dashboard has no datasource | the ClickHouse plugin is downloaded from grafana.com at start (`GF_PLUGINS_PREINSTALL`); blocked egress prevents it | allow grafana.com, or bake the plugin into a Grafana image / mount it under `/var/lib/grafana/plugins` |
+| `pulsebench gate` fails `same scenario` | the baseline is from another scenario | gate against `baselines/<scenario>.json` (`pulsebench gate RUN --save-baseline baselines/<scenario>.json` to adopt a run) |
+| `pulsebench size` warns "measured at only N events/s" | the calibration run was too light: fixed per-process costs dominate | calibrate from a step-ramp that reaches the design rate on the target nodes |
 
 ## Day-2 tasks
 
 ```bash
 # Reset Flink state (next run starts cold) - or use flink_state: fresh in the scenario
-docker compose -f deploy/compose/docker-compose.yml exec console realy run smoke --set flink_state=fresh
+docker compose -f deploy/compose/docker-compose.yml exec console pulsebench run smoke --set flink_state=fresh
 
 # Free disk: runs and worlds live in volumes
 docker compose -f deploy/compose/docker-compose.yml exec console sh -c 'du -sh /runs/* | sort -h | tail'
@@ -180,6 +180,6 @@ curl 'localhost:8123/?query=SELECT+run_id,count()+FROM+realy.decisions+GROUP+BY+
 docker compose -f deploy/compose/docker-compose.yml down -v
 ```
 
-On Kubernetes, run the same `realy` commands with `kubectl -n realy exec deploy/console -- ...`.
+On Kubernetes, run the same `pulsebench` commands with `kubectl -n realy exec deploy/console -- ...`.
 To reset Flink there, delete the `flink-checkpoints` PVC (standalone) or suspend and restore the
 FlinkDeployment with `upgradeMode: stateless` (operators).

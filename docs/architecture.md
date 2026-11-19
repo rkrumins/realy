@@ -1,6 +1,6 @@
 # Architecture
 
-realy is a **measuring instrument** for real-time fraud-scoring pipelines. It drives a
+PulseBench is a **measuring instrument** for real-time fraud-scoring pipelines. It drives a
 production-shaped system (Kafka → Flink → Redis / ClickHouse → KServe / Triton) with deterministic
 synthetic payments and times every event through every stage. It then independently proves that
 the decisions were complete and correct, and that they would have caught the fraud.
@@ -32,13 +32,13 @@ flowchart LR
     A --> C["ClickHouse<br/>decision + served features"]
     L["Labels arrive days later<br/>(chargeback, report, investigation)"] --> C
     C --> T["Training view<br/>point-in-time correct"]
-    T --> M["realy train<br/>(observed labels)"]
-    M --> D["realy deploy-model<br/>(hot swap, mock or Triton repo)"]
+    T --> M["pulsebench train<br/>(observed labels)"]
+    M --> D["pulsebench deploy-model<br/>(hot swap, mock or Triton repo)"]
     D --> S
   end
 ```
 
-The loop is closed inside realy itself:
+The loop is closed inside PulseBench itself:
 - **What gets scored:** every payment is scored by the same code on whichever topology is chosen.
 - **What gets kept:** every decision is kept with the exact features it was scored on.
 - **Labels:** they arrive late and noisy, as they do in a bank.
@@ -49,9 +49,9 @@ The loop is closed inside realy itself:
 ```mermaid
 flowchart LR
   subgraph driver["Console pod / container (one clock domain)"]
-    EM["realy emitter<br/>open-loop, paced per event"]
+    EM["PulseBench emitter<br/>open-loop, paced per event"]
     JE["Java gRPC emitter<br/>(sync rail)"]
-    CO["realy collector<br/>-> Parquet"]
+    CO["PulseBench collector<br/>-> Parquet"]
   end
   RAW[("payments.events.raw<br/>48 partitions<br/>key = customer_id")]
   DEC[("payments.decisions<br/>48 partitions, LogAppendTime<br/>audit WAL, acks=all")]
@@ -311,7 +311,7 @@ In short:
 
 At 20k TPS, what changes per tier is in
 [feature-store-and-inference.md](feature-store-and-inference.md#how-it-scales). The node-level plan
-is `realy size` and [production.md](production.md). The headline:
+is `pulsebench size` and [production.md](production.md). The headline:
 - **Kafka:** the 48 partitions cap consumers.
 - **Flink:** 140k keyed state updates/s across 7 shuffles.
 - **Redis:** ≤ 180k GET/s and ≤ 140k SET/s, pipelined. State blobs dominate the bandwidth.
@@ -352,14 +352,14 @@ sequenceDiagram
 traffic would distort. The pipeline lease therefore keeps two runs off one pipeline, whoever
 started them: two consoles, the console and a CLI, or a Kubernetes bench Job.
 - **Waiting:** console jobs stay queued while another process holds the lease;
-  `realy run --wait-lease` waits.
+  `pulsebench run --wait-lease` waits.
 - **Crashes:** a crashed owner's lease expires after 15 s.
 - **Separate pipelines:** set different `REALY_PIPELINE` names, one per namespace.
 
 **Abort from anywhere,** over two independent channels: a Redis flag polled every second, and a
 `bench.control` message. Either alone is enough, so an abort still lands when Kafka or Redis is the
 component that failed.
-- **Single runs:** the console, `realy abort RUN`, and SIGINT/SIGTERM to a CLI run or the bench Job.
+- **Single runs:** the console, `pulsebench abort RUN`, and SIGINT/SIGTERM to a CLI run or the bench Job.
 - **Many at once:** `POST /api/runs/abort`, Stop all, Cancel queued.
 - **In every phase:** prepare, backfill, priming, warm-up, measure and drain, including the sync
   rail's Java emitter.
@@ -404,12 +404,12 @@ with its clock **domain** (host/process).
 
 ## Correctness instruments
 
-* completeness / duplicates per `(gen_id, seq)` (collector) and in ClickHouse (`realy verify`)
+* completeness / duplicates per `(gen_id, seq)` (collector) and in ClickHouse (`pulsebench verify`)
 * features recomputed by a Python mirror of the Java feature engine (exact for customer/card)
 * CEL rule parity (Java `dev.cel` vs Python `cel`), proxy-score recompute, outcome re-derivation
 * ClickHouse audit: completeness, duplicate collapse, visibility lag, replay from stored inputs
 * detection KPIs per typology and per rule against ground truth, with an in-/out-of-sample guard
-* `realy rules-whatif`: replay any rule set or thresholds over a finished run's served features
+* `pulsebench rules-whatif`: replay any rule set or thresholds over a finished run's served features
 * `make live-test`: the run lifecycle itself (launch, steer, abort in every phase and from every
   process, bulk control, guardrails, dead processes, signals, restarts of every component)
 
@@ -422,7 +422,7 @@ with its clock **domain** (host/process).
    - **Exactness regained:** state blobs restore exactness for customer and card.
 2. **Mock model capacity, not just delay.** Workers, dynamic batching and a queue limit make
    saturation visible; a pure sleep never fails.
-3. **Budget feasibility first** (`realy budget`). The brief's example (100 ms of features plus
+3. **Budget feasibility first** (`pulsebench budget`). The brief's example (100 ms of features plus
    30–100 ms of model against a 150 ms budget) is infeasible by construction: 75% fallback was
    predicted.
 4. **At-least-once + idempotent decisions by default.** Exactly-once is a scenario (`eos-cost`).

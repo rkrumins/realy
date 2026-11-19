@@ -5,8 +5,8 @@
 #
 #   1. platform    every pod Ready, kafka-topics + clickhouse-init Jobs complete, all brokers Ready,
 #                  topics at the expected replication factor, console /api/env: every component up
-#   2. smoke       realy run smoke: zero loss + latency budget PASS (async gateway, Flink features)
-#   3. flink       realy run flink-inline-smoke: zero loss + latency budget; realy verify: features exact,
+#   2. smoke       pulsebench run smoke: zero loss + latency budget PASS (async gateway, Flink features)
+#   3. flink       pulsebench run flink-inline-smoke: zero loss + latency budget; pulsebench verify: features exact,
 #                  rules/score parity, ClickHouse audit complete
 #   4. failover    (3 brokers) smoke for 90 s, one broker pod deleted mid-run -> zero missing decisions;
 #                  the broker rejoins and every partition is back to a full ISR
@@ -81,10 +81,10 @@ import json; s = json.load(open('/runs/$1/report.json'))['summary']
 print(s['missing'], s['decided'], round(s['e2e_p99_ms'] or -1), s['verdict'], s.get('within_budget') or 0)" 2>/dev/null
 }
 LAT_HINT="node CPU-starved? check 'kubectl top pods -n $NS' / give the node more vCPUs or use REALY_KAFKA_BROKERS=1"
-run_scenario() {  # $1 label, $2.. realy run args
+run_scenario() {  # $1 label, $2.. pulsebench run args
   local label=$1; shift
   local log rc id missing decided p99 within
-  log=$(cexec realy run "$@" 2>&1); rc=$?
+  log=$(cexec pulsebench run "$@" 2>&1); rc=$?
   id=$(printf '%s\n' "$log" | run_id_of)
   if [ -z "$id" ]; then
     record "$label" FAIL "run did not complete: $(printf '%s\n' "$log" | grep -iE 'error|exception' | tail -1)"
@@ -111,7 +111,7 @@ if ! skipped flink; then
   say "flink-inline-smoke (Flink does everything) + independent verification"
   run_scenario flink-inline flink-inline-smoke
   if [ -n "$LAST_ID" ]; then
-    vlog=$(cexec realy verify "/runs/$LAST_ID" 2>&1); rc=$?
+    vlog=$(cexec pulsebench verify "/runs/$LAST_ID" 2>&1); rc=$?
     [ $rc = 0 ] && record "verify (exact features, audit)" PASS "$(printf '%s\n' "$vlog" | grep -E '^audit' | cut -c1-90)" \
                 || record "verify (exact features, audit)" FAIL "$(printf '%s\n' "$vlog" | grep -iE 'FAIL|mismatch|Error' | head -2 | tr '\n' ' ')"
   fi
@@ -124,7 +124,7 @@ if [ "${want:-0}" -ge 3 ] && ! skipped failover; then
   say "broker failover: smoke for 90 s, deleting $broker after ${REALY_FAILOVER_AT_S:-40} s"
   # latency is expected to suffer during leader election, so the latency verdict is informational and the
   # schedule-lag guardrail is relaxed; what must hold is RF 3 / min ISR 2 / acks=all -> nothing lost
-  cexec realy run smoke --run-id "$fid" --set traffic.duration_s=90 --set guardrails.max_schedule_lag_ms=10000 \
+  cexec pulsebench run smoke --run-id "$fid" --set traffic.duration_s=90 --set guardrails.max_schedule_lag_ms=10000 \
     > "$OUT/$fid.log" 2>&1 &
   pid=$!
   sleep "${REALY_FAILOVER_AT_S:-40}"

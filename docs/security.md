@@ -1,6 +1,6 @@
 # Security
 
-realy is a benchmarking instrument, not a payment system. All data is synthetic, and the services
+PulseBench is a benchmarking instrument, not a payment system. All data is synthetic, and the services
 assume a trusted network: the gateway and model admin endpoints and Kafka, Redis and ClickHouse have
 no authentication. The console is the one component meant to face people, and its access control is
 simple and optional. Read this before exposing anything beyond your machine.

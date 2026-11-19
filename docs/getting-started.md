@@ -35,11 +35,11 @@ healthy, the console is ready.
 The same run from a terminal:
 
 ```bash
-make smoke                                          # realy run smoke, inside the console container
-make console-shell                                  # a shell with the realy CLI
-realy scenarios                                     #   list the scenario packs
-realy budget step-ramp                              #   Monte Carlo feasibility before a long run
-realy run flink-inline-smoke && realy verify $(ls -td /runs/*/ | head -1)
+make smoke                                          # pulsebench run smoke, inside the console container
+make console-shell                                  # a shell with the pulsebench CLI
+pulsebench scenarios                                     #   list the scenario packs
+pulsebench budget step-ramp                              #   Monte Carlo feasibility before a long run
+pulsebench run flink-inline-smoke && pulsebench verify $(ls -td /runs/*/ | head -1)
 ```
 
 ## What is running
@@ -48,7 +48,7 @@ realy run flink-inline-smoke && realy verify $(ls -td /runs/*/ | head -1)
 |---|---|---|
 | console | 8090 | UI + API + bench driver (emitters and collectors) |
 | kafka | 9092 | KRaft single broker, topics from `contracts/kafka/topics.yaml` |
-| flink-jobmanager / taskmanager | 8081 | Flink 2.2 session cluster with the realy job on RocksDB |
+| flink-jobmanager / taskmanager | 8081 | Flink 2.2 session cluster with the PulseBench job on RocksDB |
 | redis | 6379 | online feature store |
 | gateway | 8080 | scoring gateway (gRPC + HTTP admin + Kafka ingress) |
 | mock-model | 8001 / 8002 | KServe v2 gRPC mock model with a capacity model / admin |
@@ -64,6 +64,6 @@ until `docker compose -f deploy/compose/docker-compose.yml down -v`.
 * [Scenarios](scenarios.md): write your own load and fraud scenarios, visually or as YAML.
 * [Running benchmarks](running-benchmarks.md): what a run does and how to read a report.
 * [Deployment with Docker](deployment-docker.md): building behind proxies, mirrors, tuning.
-* [Kubernetes](deployment-kubernetes.md): Kafka (3 brokers) + Flink + realy in a local cluster with
+* [Kubernetes](deployment-kubernetes.md): Kafka (3 brokers) + Flink + PulseBench in a local cluster with
   `make k8s-local && make k8s-test`, then GKE with L4 GPUs.
 * [Architecture](architecture.md): how the measurement works and why you can trust it.

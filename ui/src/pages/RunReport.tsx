@@ -213,7 +213,7 @@ function Verify({ v }: { v: VerifyResult | null }) {
   if (!v) return (
     <>
       <SectionTitle>Correctness verification</SectionTitle>
-      <EmptyState icon={<Microscope />} title="Not verified">Launch the run with “Verify correctness” (or run <code className="font-mono">realy verify</code>) to recompute features, rules and scores independently.</EmptyState>
+      <EmptyState icon={<Microscope />} title="Not verified">Launch the run with “Verify correctness” (or run <code className="font-mono">pulsebench verify</code>) to recompute features, rules and scores independently.</EmptyState>
     </>
   );
   const f = v.features;

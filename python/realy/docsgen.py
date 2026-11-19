@@ -5,7 +5,7 @@ CI regenerates it and fails on a diff. Pages:
 
   scenario-schema.md  scenario YAML fields (pydantic models + their source comments)
   config.md           ScoringConfig / ModelServerConfig / control-plane messages (control.proto comments)
-  cli.md              every `realy` command and option (typer)
+  cli.md              every `pulsebench` command and option (typer)
   http-api.md         console REST + WebSocket API (FastAPI OpenAPI)
   features.md         feature catalog (contracts/features/feature_schema.yaml)
   rules.md            rule catalog (rules/*.yaml)
@@ -224,20 +224,21 @@ def cli() -> str:
 
     root = typer.main.get_command(app)
     parts = [HEADER.format(src="python/realy/cli.py"), "# CLI reference\n\n",
-             "`realy` drives everything the console does, from a shell or CI. In the Docker stack it is on the "
-             "console container's PATH (`make console-shell`, or `docker compose exec console realy ...`).\n\n"]
+             "`pulsebench` drives everything the console does, from a shell or CI. In the Docker stack it is on the "
+             "console container's PATH (`make console-shell`, or `docker compose exec console pulsebench ...`). "
+             "`realy` is a legacy alias of the same command.\n\n"]
 
     def walk(cmd: Any, path: list[str]) -> None:
         if hasattr(cmd, "commands"):
             for name in sorted(cmd.commands):
                 walk(cmd.commands[name], path + [name])
             return
-        parts.append(f"## `realy {' '.join(path)}`\n\n")
+        parts.append(f"## `pulsebench {' '.join(path)}`\n\n")
         if cmd.help:
             parts.append(inspect.cleandoc(cmd.help).split("\n\n")[0].replace("\n", " ") + "\n\n")
         args = [p for p in cmd.params if p.param_type_name == "argument"]
         opts = [p for p in cmd.params if p.param_type_name == "option" and p.name != "help"]
-        ctx = cmd.context_class(cmd, info_name="realy")
+        ctx = cmd.context_class(cmd, info_name="pulsebench")
 
         def typ(p: Any) -> str:
             try:
@@ -245,7 +246,7 @@ def cli() -> str:
             except Exception:  # noqa: BLE001
                 return ""
 
-        usage = "realy " + " ".join(path) + "".join(f" {a.name.upper()}" for a in args) + (" [OPTIONS]" if opts else "")
+        usage = "pulsebench " + " ".join(path) + "".join(f" {a.name.upper()}" for a in args) + (" [OPTIONS]" if opts else "")
         parts.append(f"```\n{usage}\n```\n\n")
         rows = []
         for a in args:
@@ -331,7 +332,7 @@ def features() -> str:
 def rules() -> str:
     parts = [HEADER.format(src="rules/*.yaml"), "# Rule catalog\n\n",
              "Rule sets are CEL over `f` (features, doubles) and `event` (transaction fields, enums by name). "
-             "Evaluated by the Java scoring core and re-evaluated by `realy verify` for parity. Precedence: "
+             "Evaluated by the Java scoring core and re-evaluated by `pulsebench verify` for parity. Precedence: "
              "DECLINE rule > ALLOW rule > score >= decline > REVIEW rule > score >= review > APPROVE.\n\n"]
     for p in sorted((REPO_ROOT / "rules").glob("*.yaml")):
         spec = yaml.safe_load(p.read_text())
@@ -369,7 +370,7 @@ def scenarios() -> str:
 
     parts = [HEADER.format(src="scenarios/*.yaml"), "# Scenario catalog\n\n",
              "The bundled scenario packs. Run one from the console's **Launch** page, or "
-             "`realy run <name>`. Edit them in the **Scenarios** builder or as YAML "
+             "`pulsebench run <name>`. Edit them in the **Scenarios** builder or as YAML "
              "([scenario-schema.md](scenario-schema.md)).\n\n"]
     rows = []
     for p in sorted((REPO_ROOT / "scenarios").glob("*.yaml")):

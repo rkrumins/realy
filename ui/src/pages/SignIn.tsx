@@ -29,7 +29,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
             <KeyRound className="size-5" />
           </div>
           <div>
-            <h1 className="text-[17px] font-semibold tracking-tight">Sign in to realy</h1>
+            <h1 className="text-[17px] font-semibold tracking-tight">Sign in to PulseBench</h1>
             <p className="text-[12.5px] text-muted">This console is protected by an access token.</p>
           </div>
         </div>

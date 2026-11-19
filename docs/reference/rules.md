@@ -2,7 +2,7 @@
 
 # Rule catalog
 
-Rule sets are CEL over `f` (features, doubles) and `event` (transaction fields, enums by name). Evaluated by the Java scoring core and re-evaluated by `realy verify` for parity. Precedence: DECLINE rule > ALLOW rule > score >= decline > REVIEW rule > score >= review > APPROVE.
+Rule sets are CEL over `f` (features, doubles) and `event` (transaction fields, enums by name). Evaluated by the Java scoring core and re-evaluated by `pulsebench verify` for parity. Precedence: DECLINE rule > ALLOW rule > score >= decline > REVIEW rule > score >= review > APPROVE.
 
 ## `baseline-v1` - version `baseline-v1`
 

@@ -10,7 +10,7 @@ deploy/k8s/
     kafka-3-brokers/        turns standalone Kafka into a 3-broker quorum: RF 3, min ISR 2, PDB
     local-sizing/           laptop requests, NodePorts, images never pulled, gateway pinned to 1 replica
     operators/              Strimzi Kafka + KafkaTopics, FlinkDeployments, PodMonitors
-    bench-job/              optional headless `realy run` Job
+    bench-job/              optional headless `pulsebench run` Job
     console-ingress/        optional Ingress for the console
   overlays/
     local/                  base + standalone + kafka-3-brokers + local-sizing -> kind / k3d / minikube / Docker Desktop
@@ -97,7 +97,7 @@ rows fail. That is a statement about the node, not the pipeline. See [Measured h
 | `SKIP_BUILD` | | `1` = reuse images already in the Docker daemon |
 
 Tear down with `make k8s-down`. To use the CLI in the cluster:
-`kubectl -n realy exec -it deploy/console -- realy run smoke`.
+`kubectl -n realy exec -it deploy/console -- pulsebench run smoke`.
 
 ### How Kafka and Flink run in the cluster
 
@@ -113,8 +113,8 @@ Tear down with `make k8s-down`. To use the CLI in the cluster:
     `acks=all`. Every write is on two brokers before it is acknowledged, so losing any one broker
     loses nothing.
 * **Flink:** a session cluster (JobManager + TaskManager Deployments) on the `realy/flink` image.
-  * The console submits, savepoints, restores and cancels the realy jobs over REST, exactly as in
-    compose. Fresh and warm state, savepoint-based topology switches and `realy verify` all behave
+  * The console submits, savepoints, restores and cancels the PulseBench jobs over REST, exactly as in
+    compose. Fresh and warm state, savepoint-based topology switches and `pulsebench verify` all behave
     identically.
   * Checkpoints sit on one RWO volume. Required pod affinity keeps the TaskManager on the
     JobManager's node, and likewise `bench-run` with the console. On multi-node clusters, point

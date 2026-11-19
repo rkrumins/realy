@@ -63,7 +63,7 @@ order. Window semantics, identical in Flink, the gateway and the Python verifier
 
 Amounts in stream features are USD **minor** units (cents); `amount_usd` is dollars.
 
-**Exactness by topology** (measured by `realy verify`):
+**Exactness by topology** (measured by `pulsebench verify`):
 
 | Topology | Customer / card features | Shared entities (device, IP, merchant, terminal, payee) |
 |---|---|---|
@@ -81,7 +81,7 @@ out-of-sample evaluation run (fraud-eval, seed 1337).
 
 **What changed from `baseline-v1`, and how it was decided:**
 - **`ATO_NEW_DEVICE_NEW_COUNTRY`: DECLINE → REVIEW.**
-  - **Why:** on a seed-42 run, a world other than the evaluation's, `realy rules-whatif` measured
+  - **Why:** on a seed-42 run, a world other than the evaluation's, `pulsebench rules-whatif` measured
     precision 0.047 over 1,876 fires.
   - **Effect as REVIEW:** 3.68% → 0.82% of good customers declined, with flagged recall unchanged.
   - **Rejected alternative:** a DECLINE split on `amount_to_avg_ratio ≥ 8 / 12` added under 1 point
@@ -96,7 +96,7 @@ out-of-sample evaluation run (fraud-eval, seed 1337).
 
 - **Architecture:** a structural proxy, `StandardScaler` → MLP (64, 32), plus an XGBoost GBDT for
   Triton FIL. It runs as ONNX on Triton, or as weights JSON on the mock model server.
-- **Training data** (`realy train`): the **served** feature vectors of a training run. There is no
+- **Training data** (`pulsebench train`): the **served** feature vectors of a training run. There is no
   recomputation, and therefore no train/serve skew.
 - **Labels:** `--labels observed` (the default) uses what the bank knows 30 days after the last
   event:
@@ -110,7 +110,7 @@ out-of-sample evaluation run (fraud-eval, seed 1337).
   (`models/proxy/versions/<version>.training.json`).
 - **Leakage guard:** every report checks the served model against that provenance and prints
   **in-sample** (a warning: optimistic numbers), **out-of-sample** or **unknown**.
-- **Redeploying:** `realy deploy-model <weights>` hot-swaps the weights in the mock model server
+- **Redeploying:** `pulsebench deploy-model <weights>` hot-swaps the weights in the mock model server
   through `ModelServerConfig.weights_path`. With Triton, publish to the model repository instead.
 
 ## Labels: late, partial and noisy
@@ -246,12 +246,12 @@ That is where false positives come from, measured per rule as the `legit_hit_rat
 
 ```bash
 make eval                     # all of the below, in Docker (deploy/compose/eval.sh)
-realy run fraud-train         # seed 7: a world of its own
-realy train --run /runs/fraud-train-…            # observed labels (default) -> /models/proxy/versions/<v>.weights.json
-realy train --run /runs/fraud-train-… --labels ground-truth
-realy deploy-model /models/proxy/versions/<v>.weights.json
-realy run fraud-eval          # seed 1337: no customer, card, device, merchant or campaign in common
-realy rules-whatif /runs/fraud-eval-… --rules rules/baseline-v1.yaml
+pulsebench run fraud-train         # seed 7: a world of its own
+pulsebench train --run /runs/fraud-train-…            # observed labels (default) -> /models/proxy/versions/<v>.weights.json
+pulsebench train --run /runs/fraud-train-… --labels ground-truth
+pulsebench deploy-model /models/proxy/versions/<v>.weights.json
+pulsebench run fraud-eval          # seed 1337: no customer, card, device, merchant or campaign in common
+pulsebench rules-whatif /runs/fraud-eval-… --rules rules/baseline-v1.yaml
 ```
 
 «EVAL_TABLE»

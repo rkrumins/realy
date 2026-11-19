@@ -1,6 +1,6 @@
 # Capacity planning for 10,000+ TPS under a 100 ms hot-path / 150 ms end-to-end budget
 
-> **Use `realy size`** ([production.md](production.md#capacity-sizing)): it applies the rules below to
+> **Use `pulsebench size`** ([production.md](production.md#capacity-sizing)): it applies the rules below to
 > per-event costs *measured* on your nodes (`--from <run>`), maps them onto GKE node pools, adds N+1 /
 > zone redundancy, checks the latency budget with queueing, and can write the kustomize overlay. The
 > table here is the reasoning behind its defaults.
@@ -44,7 +44,7 @@ the instrument exists precisely because these estimates are where projects get s
 
 ## How to validate a sizing
 
-1. `realy budget baseline-10k` — the composition of your stage distributions must be feasible.
-2. `realy run step-ramp` (gke-l4 overlay) — find the knee (TPS where p99 breaks or backlog grows).
-3. `realy run baseline-10k` at the design point, then `soak-60m` for drift, lag and state growth.
-4. `realy run capacity-saturation` / `tail-stress` / `black-friday` for capacity, tails and peaks.
+1. `pulsebench budget baseline-10k` — the composition of your stage distributions must be feasible.
+2. `pulsebench run step-ramp` (gke-l4 overlay) — find the knee (TPS where p99 breaks or backlog grows).
+3. `pulsebench run baseline-10k` at the design point, then `soak-60m` for drift, lag and state growth.
+4. `pulsebench run capacity-saturation` / `tail-stress` / `black-friday` for capacity, tails and peaks.

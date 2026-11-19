@@ -129,7 +129,7 @@ def test_docs_index_page_and_traversal(tmp_path):
     assert page["title"] and "#" in page["markdown"]
     assert c.get("/api/docs/page", params={"path": "../../etc/passwd"}).status_code == 400
     assert "properties" in c.get("/api/reference/scenario-schema").json()
-    assert c.get("/api/openapi.json").json()["info"]["title"] == "realy console"
+    assert c.get("/api/openapi.json").json()["info"]["title"] == "PulseBench console"
 
 
 def test_env_reports_down_components_quickly(tmp_path, monkeypatch):

@@ -1,4 +1,4 @@
-"""realy command line: `realy --help`."""
+"""PulseBench command line: `pulsebench --help` (`realy` is a legacy alias)."""
 from __future__ import annotations
 
 import json

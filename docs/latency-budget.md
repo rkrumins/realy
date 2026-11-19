@@ -27,7 +27,7 @@ All runs: zero missing decisions and zero duplicates unless stated. Budget: e2e 
 | flink-inline-smoke (fresh) | flink-inline | 500 | 23.1 ms | 99.4 ms | 70.6 ms | PASS | tail: **keyBy shuffles 61%**; features verified **exact** |
 | sync-smoke | gateway-grpc (unary) | 500 | 18.9 ms | 96.4 ms | 45.7 ms | PASS | audit ack p99 39.8 ms = 27% of tail |
 | sync-vs-async | gateway-grpc (bidi stream) | 500 | 14.7 ms | 43.5 ms | 32.7 ms | PASS | streaming halves the sync p99 |
-| user-example-100ms | gateway-kafka, 100 ms feature build + 30–100 ms model | 1,000 | 170.8 ms | 592.6 ms | 162.4 ms | **FAIL (expected)** | 80.7% rules-only fallbacks; `realy budget` predicted INFEASIBLE / 75% |
+| user-example-100ms | gateway-kafka, 100 ms feature build + 30–100 ms model | 1,000 | 170.8 ms | 592.6 ms | 162.4 ms | **FAIL (expected)** | 80.7% rules-only fallbacks; `pulsebench budget` predicted INFEASIBLE / 75% |
 | eos-cost | flink-inline, exactly-once sink | 500 | 5,319 ms | 10,187 ms | 61.1 ms | **FAIL (expected)** | decisions visible only at checkpoint commit (10 s) |
 | step-ramp | gateway-kafka, 2M customers | 1k → 10k | — | — | — | FAIL | knee at 2k TPS; ceiling ≈ 5–6k decisions/s; guardrail abort at 10k |
 
@@ -62,7 +62,7 @@ emitter's own schedule lag exceeded the 2 s guardrail. Run `step-ramp` / `baseli
    ~85% overall and 32–50% for short windows (`card_count_1m`, `card_count_5m`): a blob holds the
    window *as of the entity's last event* and is not re-windowed when read later, so expired events
    are still counted. Fix options: store bucketed partial aggregates and re-window at read time, or
-   re-emit decayed values on a timer; measure again with `realy verify`. Flink-inline features are exact.
+   re-emit decayed values on a timer; measure again with `pulsebench verify`. Flink-inline features are exact.
 3. **The synchronous audit write is affordable but visible**: Kafka acks=all adds p99 ≈ 40 ms locally
    (27% of the sync tail). On dedicated brokers this is typically 2–5 ms; ClickHouse visibility is
    asynchronous (p50 ≈ 0.6 s, p99 ≈ 1.2 s at 500 TPS) and complete (0 gaps).

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live acceptance test of a running Docker stack (`make up` first): `make live-test`.
 #
-#   1. the in-container suite (realy live-test), driven through the console API:
+#   1. the in-container suite (pulsebench live-test), driven through the console API:
 #      launch + live steering + report accuracy vs ClickHouse, abort in MEASURE and in BACKFILL,
 #      guardrail abort, a killed collector, select/clear/abort-all, stop all, cross-process
 #      lease + abort (console <-> CLI), SIGTERM, and a healthy pipeline afterwards;
@@ -32,20 +32,20 @@ wait_console() {
 echo "=== 1. in-container suite"
 cases=()
 for c in ${LIVE_CASES:-}; do cases+=(--case "$c"); done
-if "${EX[@]}" realy live-test "${cases[@]}"; then results+=("PASS suite"); else results+=("FAIL suite"); rc=1; fi
+if "${EX[@]}" pulsebench live-test "${cases[@]}"; then results+=("PASS suite"); else results+=("FAIL suite"); rc=1; fi
 
 fault() {  # $1 label, $2 expectation, $3.. the fault command
   local label=$1 expect=$2; shift 2
   echo; echo "=== fault: $label"
   local ids
-  if ! ids=$("${EX[@]}" realy live-test fault-start --duration 90 | tail -1); then
+  if ! ids=$("${EX[@]}" pulsebench live-test fault-start --duration 90 | tail -1); then
     results+=("FAIL $label (run did not start)"); rc=1; return
   fi
   echo "run: $ids; injecting: $*"
   "$@"
   wait_console || { results+=("FAIL $label (console down)"); rc=1; return; }
   # shellcheck disable=SC2086
-  if "${EX[@]}" realy live-test fault-check $ids --expect "$expect"; then
+  if "${EX[@]}" pulsebench live-test fault-check $ids --expect "$expect"; then
     results+=("PASS $label")
   else
     results+=("FAIL $label"); rc=1
@@ -63,7 +63,7 @@ if [ "${LIVE_FAULTS:-1}" != "0" ]; then
 fi
 
 echo; echo "=== 3. clean run afterwards"
-if "${EX[@]}" realy live-test --case final_health; then results+=("PASS final health"); else results+=("FAIL final health"); rc=1; fi
+if "${EX[@]}" pulsebench live-test --case final_health; then results+=("PASS final health"); else results+=("FAIL final health"); rc=1; fi
 
 echo; echo "=== live acceptance summary"
 printf '  %s\n' "${results[@]}"

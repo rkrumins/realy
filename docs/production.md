@@ -1,8 +1,8 @@
 # Productionisation and capacity sizing
 
-This guide turns what realy measured into recommendations for two things:
+This guide turns what PulseBench measured into recommendations for two things:
 - **The production fraud pipeline:** Kafka → Flink → Redis → model → decisions → ClickHouse.
-- **realy itself, as a shared benchmarking platform:** a sizing method and a starting plan for
+- **PulseBench itself, as a shared benchmarking platform:** a sizing method and a starting plan for
   **10,000 TPS steady / 20,000 TPS peak on GKE with L4 GPUs**.
 
 Every recommendation cites the measurement behind it. Re-measure on your own hardware before relying
@@ -22,7 +22,7 @@ matched an exact recomputation only **82.6%** of the time.
 and the gateway re-windows it at each event's own time. That is the same code and the same
 update-then-read semantics as the Flink-inline path (`contracts/storage/redis.md`).
 - **Residual error:** store lag, meaning events of the same entity not yet written when the gateway
-  reads. It is reported by `realy verify`.
+  reads. It is reported by `pulsebench verify`.
 - **Measured** (`mixed-realistic`, all nine fraud typologies, 1 simulated day of history): served
   features agree with the exact recomputation **99.73%** of the time, up from **82.6%**.
   - verify PASS, with rule, score and outcome parity at 100%;
@@ -34,7 +34,7 @@ update-then-read semantics as the Flink-inline path (`contracts/storage/redis.md
     time, `term_count_5m` 56.5% and `dev_count_5m` 76%.
   - If the model leans on them, add them to the state set (`--store-state
     customer,card,merchant,terminal`, or `FLINK_STORE_STATE`), measure the extra Redis bandwidth with
-    the report's `resources` section, and re-run `realy size`.
+    the report's `resources` section, and re-run `pulsebench size`.
   - Hot merchants have the largest states (about 2.5 KB) and the most writes, so this is a measured
     trade-off, not a default.
 
@@ -44,7 +44,7 @@ Use the **gateway with the online store** for synchronous and low-latency asynch
 - **Flink-inline** is exact by construction, but **61%** of its slowest 1% is the seven `keyBy`
   network shuffles.
 - Keep it for near-real-time paths where an extra 50–100 ms is acceptable, and as the reference that
-  `realy verify` compares against.
+  `pulsebench verify` compares against.
 
 ### 3. Kafka
 
@@ -137,19 +137,19 @@ Use the **gateway with the online store** for synchronous and low-latency asynch
 ### 10. Rollout
 
 1. **Shadow:** mirror production events to the new pipeline and compare its decisions with the
-   current one offline. The console's Compare page and `realy gate` work on any two runs.
+   current one offline. The console's Compare page and `pulsebench gate` work on any two runs.
 2. **Canary** by merchant or BIN range.
-3. **Full** cut-over, with `realy gate` on every release (below).
+3. **Full** cut-over, with `pulsebench gate` on every release (below).
 
-## realy as a platform
+## PulseBench as a platform
 
 | Practice | Why |
 |---|---|
 | A dedicated `realy-driver` node pool | the instrument must not compete with what it measures; one host shared by everything saturated at 4 vCPUs |
 | `echo-calibration` on every new cluster | records the instrument floor (Kafka round trip plus driver) next to the results |
 | Nightly `baseline-10k`, `soak-60m` and `step-ramp` on gke-l4, gated | regressions show up within a day, with the run that introduced them |
-| `realy gate` in CI and on release | fails on loss, verify, p99, knee, detection or CPU-per-event regressions against committed baselines (`baselines/`) |
-| Run history in ClickHouse (`realy.runs`) + Grafana `realy - run history` | trends of p99, knee, CPU per event, detection and feature exactness per scenario |
+| `pulsebench gate` in CI and on release | fails on loss, verify, p99, knee, detection or CPU-per-event regressions against committed baselines (`baselines/`) |
+| Run history in ClickHouse (`realy.runs`) + Grafana `PulseBench - run history` | trends of p99, knee, CPU per event, detection and feature exactness per scenario |
 | Console behind SSO, one per environment | it can start load against whatever it points at |
 | Known gap: operator-mode Flink | in the operators layout the console observes FlinkDeployments but cannot switch them; drive the CRs from the console through the Kubernetes API (follow-up) |
 
@@ -178,17 +178,17 @@ Use the **gateway with the online store** for synchronous and low-latency asynch
 spread over few events and overstate CPU per event.
 - On this 4-vCPU development host at 500 TPS, the Python emitter measured 0.5 ms/event, while its
   real capacity is 15–25k events/s per process.
-- Calibrate from a `step-ramp` that reaches the design rate. `realy size --from` then uses each
+- Calibrate from a `step-ramp` that reaches the design rate. `pulsebench size --from` then uses each
   component's cost at the highest load level before the knee, and warns when a cost was measured
   below 2,000 events/s.
 
-`realy size` implements steps 1–4:
+`pulsebench size` implements steps 1–4:
 
 ```bash
-realy size --tps 10000 --peak 2                          # documented assumptions (starting point)
-realy size --tps 10000 --peak 2 --from <step-ramp run>   # costs measured on your nodes
-realy size ... --set flink_cpu_ms=0.8                    # override a single cost
-realy size ... --write-overlay deploy/k8s/overlays/sized # kustomize patches on top of gke-l4
+pulsebench size --tps 10000 --peak 2                          # documented assumptions (starting point)
+pulsebench size --tps 10000 --peak 2 --from <step-ramp run>   # costs measured on your nodes
+pulsebench size ... --set flink_cpu_ms=0.8                    # override a single cost
+pulsebench size ... --write-overlay deploy/k8s/overlays/sized # kustomize patches on top of gke-l4
 ```
 
 Every cost in its output is tagged `measured`, `assumed` or `override`. Warnings appear when a
@@ -196,7 +196,7 @@ measured component ran above 80% CPU or was throttled, since contention inflates
 
 ### Starting plan: 10k steady / 20k peak, GKE + L4 (assumed costs)
 
-Generated by `realy size --tps 10000 --peak 2`. Replace with `--from` a run on your nodes.
+Generated by `pulsebench size --tps 10000 --peak 2`. Replace with `--from` a run on your nodes.
 
 | Tier | Node pool / machine | Nodes | Pods | Sizing |
 |---|---|---|---|---|
@@ -230,9 +230,9 @@ benchmarks. The predicted latency at 20k TPS is e2e p99 ~84 ms and hot path ~35 
 ## Regression gating
 
 ```bash
-realy gate <run> --save-baseline baselines/smoke.json         # adopt a known-good run
-realy gate <run> --baseline baselines/smoke.json               # exit 1 on regression
-realy gate <run> --baseline <other run> --json                 # machine-readable
+pulsebench gate <run> --save-baseline baselines/smoke.json         # adopt a known-good run
+pulsebench gate <run> --baseline baselines/smoke.json               # exit 1 on regression
+pulsebench gate <run> --baseline <other run> --json                 # machine-readable
 ```
 
 **Absolute checks:**

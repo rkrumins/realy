@@ -1,6 +1,6 @@
-"""realy operator console — FastAPI backend.
+"""PulseBench operator console — FastAPI backend.
 
-    uvicorn realy.control.app:app --port 8090        (or: realy console)
+    uvicorn realy.control.app:app --port 8090        (or: pulsebench console)
 
 API (JSON):
   scenarios   GET /api/scenarios · GET|PUT /api/scenarios/{name} · POST /api/scenarios/validate
@@ -160,7 +160,7 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         worker.shutdown()
         scheduler.shutdown()
 
-    app = FastAPI(title="realy console", lifespan=lifespan, openapi_url="/api/openapi.json",
+    app = FastAPI(title="PulseBench console", lifespan=lifespan, openapi_url="/api/openapi.json",
                   docs_url="/api/swagger", redoc_url=None,
                   description="Operator console API: launch and steer benchmark runs, live telemetry, reports, "
                               "explorer, environment and docs.")

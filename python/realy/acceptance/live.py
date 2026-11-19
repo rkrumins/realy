@@ -2,9 +2,9 @@
 and checks that runs are functional, reported accurately, abortable from anywhere, and that the
 pipeline is healthy again after every failure.
 
-    realy live-test                          # every in-process case (~15 min on a laptop)
-    realy live-test --case abort-measure     # one case (repeatable)
-    realy live-test fault-start / fault-check  # host-orchestrated faults (deploy/compose/live-test.sh)
+    pulsebench live-test                          # every in-process case (~15 min on a laptop)
+    pulsebench live-test --case abort-measure     # one case (repeatable)
+    pulsebench live-test fault-start / fault-check  # host-orchestrated faults (deploy/compose/live-test.sh)
 
 It runs inside the console container (`make live-test`) or anywhere with network access to the
 console, Redis, Kafka and ClickHouse. Cases that inspect or signal the driver's processes
@@ -73,7 +73,7 @@ class Suite:
     # ------------------------------------------------------------------ recording
     def check(self, name: str, ok: bool | None, detail: str = "", soft: bool = False) -> bool:
         """soft: a property of the hardware rather than of the system's correctness (e.g. a latency
-        budget on a CPU-starved laptop): WARN instead of FAIL. Budgets are gated by `realy gate`."""
+        budget on a CPU-starved laptop): WARN instead of FAIL. Budgets are gated by `pulsebench gate`."""
         st = "SKIP" if ok is None else ("PASS" if ok else ("WARN" if soft else "FAIL"))
         self.rows.append(Row(self._case, name, st, detail, round(time.time() - self._t0, 1)))
         self.log(f"  {st:4s} {self._case} / {name}  {detail}")

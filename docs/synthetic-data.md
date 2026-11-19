@@ -1,6 +1,6 @@
 # Synthetic payments world and fraud scenarios
 
-`realy world build` creates a deterministic world (same seed ⇒ byte-identical content hash):
+`pulsebench world build` creates a deterministic world (same seed ⇒ byte-identical content hash):
 customers (segment, home city/country/timezone, tenure, income-driven ticket size, activity rate,
 diurnal/weekly curves, channel preferences, travel propensity), 1–3 accounts and 1–4 cards each
 (debit/credit/virtual/wallet, credit limits, contactless CVM limits), 1–3 devices with usual IPs/ASNs,
@@ -37,7 +37,7 @@ with label noise:
 
 The event log (`events-*.parquet`) keeps the ground truth and the observed label side by side:
 `is_fraud` / `fraud_type` / `campaign_id`, and `label_delay_us` / `label_is_fraud` / `label_source`.
-This lets `realy train --labels observed` train on what a bank would know
+This lets `pulsebench train --labels observed` train on what a bank would know
 ([fraud-detection.md](fraud-detection.md#labels-late-partial-and-noisy)). Scenario timelines schedule campaigns at wall-clock
 offsets (`fraud.campaigns`), on top of Poisson background campaigns (`fraud.background_per_1k`).
 

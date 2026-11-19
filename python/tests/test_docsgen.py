@@ -23,7 +23,7 @@ def test_pages_cover_their_sources():
     for field in ("budget_ms", "feature_deadline_ms", "service_time", "max_batch", "error_rate", "timeout_rate"):
         assert f"`{field}`" in cfg, field
     cli = docsgen.cli()
-    for cmd in ("realy run", "realy verify", "realy budget", "realy console"):
+    for cmd in ("pulsebench run", "pulsebench verify", "pulsebench budget", "pulsebench console"):
         assert f"## `{cmd}`" in cli, cmd
     api = docsgen.http_api()
     for path in ("/api/runs", "/api/env", "/api/topology", "/api/auth/login"):

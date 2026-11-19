@@ -2,7 +2,7 @@
 
 # Scenario catalog
 
-The bundled scenario packs. Run one from the console's **Launch** page, or `realy run <name>`. Edit them in the **Scenarios** builder or as YAML ([scenario-schema.md](scenario-schema.md)).
+The bundled scenario packs. Run one from the console's **Launch** page, or `pulsebench run <name>`. Edit them in the **Scenarios** builder or as YAML ([scenario-schema.md](scenario-schema.md)).
 
 | Scenario | Topology | Load | Duration | Fraud campaigns | p99 budget (e2e / hot) | Description |
 |---|---|---|---|---|---|---|

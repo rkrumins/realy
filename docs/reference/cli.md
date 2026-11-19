@@ -2,14 +2,14 @@
 
 # CLI reference
 
-`realy` drives everything the console does, from a shell or CI. In the Docker stack it is on the console container's PATH (`make console-shell`, or `docker compose exec console realy ...`).
+`pulsebench` drives everything the console does, from a shell or CI. In the Docker stack it is on the console container's PATH (`make console-shell`, or `docker compose exec console pulsebench ...`). `realy` is a legacy alias of the same command.
 
-## `realy abort`
+## `pulsebench abort`
 
 Abort runs wherever they execute. Two channels: a Redis flag (seen within ~1 s by the run's lease heartbeat) and a bench.control message; either alone is enough.
 
 ```
-realy abort RUN_IDS [OPTIONS]
+pulsebench abort RUN_IDS [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -19,12 +19,12 @@ realy abort RUN_IDS [OPTIONS]
 | `--console` | str |  | console URL: also cancel its queue and pause its schedules (with --all) |
 | `--reason` | str | `aborted by operator (cli)` |  |
 
-## `realy budget`
+## `pulsebench budget`
 
 Monte Carlo feasibility of the scenario's latency budget (before running anything).
 
 ```
-realy budget SCENARIO [OPTIONS]
+pulsebench budget SCENARIO [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -34,12 +34,12 @@ realy budget SCENARIO [OPTIONS]
 | `--samples` | int | `200000` |  |
 | `--json` | flag |  |  |
 
-## `realy console`
+## `pulsebench console`
 
 Operator console (FastAPI + React UI) for configuring and running sustained tests.
 
 ```
-realy console [OPTIONS]
+pulsebench console [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -47,12 +47,12 @@ realy console [OPTIONS]
 | `--host` | str | `0.0.0.0` | bind address |
 | `--port` | int | `8090` | HTTP port |
 
-## `realy control`
+## `pulsebench control`
 
 Publish a live control message on bench.control.
 
 ```
-realy control TARGET [OPTIONS]
+pulsebench control TARGET [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -65,24 +65,24 @@ realy control TARGET [OPTIONS]
 | `--kafka-ingress, --no-kafka-ingress` | flag |  | gateway: enable/disable Kafka ingress |
 | `--abort, --no-abort` | flag |  | abort the run |
 
-## `realy deploy-model`
+## `pulsebench deploy-model`
 
 Hot-swap the mock model server's weights (no restart): retrain -> redeploy -> measure.
 
 ```
-realy deploy-model WEIGHTS
+pulsebench deploy-model WEIGHTS
 ```
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `WEIGHTS` | argument |  | proxy weights JSON (e.g. /models/proxy/versions/<version>.weights.json) |
 
-## `realy gate`
+## `pulsebench gate`
 
 Fail a run that regressed: verdict, loss, verify, and p99 / knee / detection / CPU-per-event vs a baseline.
 
 ```
-realy gate RUN [OPTIONS]
+pulsebench gate RUN [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -102,12 +102,12 @@ realy gate RUN [OPTIONS]
 | `--require-verify, --no-require-verify` | flag |  |  |
 | `--json` | flag |  |  |
 
-## `realy live-test`
+## `pulsebench live-test`
 
 Live acceptance suite against a running stack, through the console API: launch, steer, report accuracy (vs the ClickHouse audit), abort in every phase and from every process, bulk control, guardrails, dead instrument processes, signals and recovery. Exit 0 only if every check passes.
 
 ```
-realy live-test ACTION ARGS [OPTIONS]
+pulsebench live-test ACTION ARGS [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -120,24 +120,24 @@ realy live-test ACTION ARGS [OPTIONS]
 | `--duration` | float | `90` | fault-start: run duration (s) |
 | `--out` | path |  | write results JSON here |
 
-## `realy report`
+## `pulsebench report`
 
 (Re)build the report for a finished run directory.
 
 ```
-realy report RUN_DIR
+pulsebench report RUN_DIR
 ```
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `RUN_DIR` | argument |  |  |
 
-## `realy rules-whatif`
+## `pulsebench rules-whatif`
 
 Replay rule sets / thresholds over a finished run offline: precision, recall, FPR, $ approved per variant and per rule, against the run's own policy. Tune on a training run, confirm on the evaluation run.
 
 ```
-realy rules-whatif RUN_DIR [OPTIONS]
+pulsebench rules-whatif RUN_DIR [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -149,12 +149,12 @@ realy rules-whatif RUN_DIR [OPTIONS]
 | `--sample-mod` | int | `1` | evaluate events with id % N == 0 only (speed) |
 | `--json` | flag |  |  |
 
-## `realy run`
+## `pulsebench run`
 
 Run a scenario end to end and write runs/<run_id>/report.{json,md,html}.
 
 ```
-realy run SCENARIO [OPTIONS]
+pulsebench run SCENARIO [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -165,20 +165,20 @@ realy run SCENARIO [OPTIONS]
 | `--run-id` | str |  |  |
 | `--wait-lease` | float |  | seconds to wait when another run holds the pipeline lease |
 
-## `realy scenarios`
+## `pulsebench scenarios`
 
 List available scenarios.
 
 ```
-realy scenarios
+pulsebench scenarios
 ```
 
-## `realy seed`
+## `pulsebench seed`
 
 Seed online-store profile blobs for the scenario's world.
 
 ```
-realy seed [OPTIONS]
+pulsebench seed [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -186,12 +186,12 @@ realy seed [OPTIONS]
 | `--scenario` | str | `smoke` |  |
 | `--force, --no-force` | flag |  |  |
 
-## `realy size`
+## `pulsebench size`
 
 Capacity plan on GKE (+L4) for a target load, from measured per-event costs or documented assumptions.
 
 ```
-realy size [OPTIONS]
+pulsebench size [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -207,12 +207,12 @@ realy size [OPTIONS]
 | `--json` | flag |  |  |
 | `--write-overlay` | path |  | write a kustomize overlay (on top of overlays/gke-l4) here |
 
-## `realy status`
+## `pulsebench status`
 
 Who holds the pipeline right now (lease), and the console's current run and queue.
 
 ```
-realy status [OPTIONS]
+pulsebench status [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -220,12 +220,12 @@ realy status [OPTIONS]
 | `--console` | str |  | console URL, to include its queue |
 | `--json` | flag |  |  |
 
-## `realy store get`
+## `pulsebench store get`
 
 Decode fs:<entity>:<id> (written by Flink) and pf:<entity>:<id> (profile) into named features.
 
 ```
-realy store get ENTITY ENTITY_ID [OPTIONS]
+pulsebench store get ENTITY ENTITY_ID [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -234,24 +234,24 @@ realy store get ENTITY ENTITY_ID [OPTIONS]
 | `ENTITY_ID` | argument |  |  |
 | `--json` | flag |  |  |
 
-## `realy topics`
+## `pulsebench topics`
 
 Create the contract topics (contracts/kafka/topics.yaml).
 
 ```
-realy topics [OPTIONS]
+pulsebench topics [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `--replication` | int | `1` |  |
 
-## `realy train`
+## `pulsebench train`
 
 Train structural proxy models (MLP->ONNX/Triton + weights JSON, XGBoost->Triton FIL) on served features.
 
 ```
-realy train [OPTIONS]
+pulsebench train [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -265,12 +265,12 @@ realy train [OPTIONS]
 | `--label-maturity-days` | float | `30.0` | observed labels: train this many days after the last event |
 | `--deploy, --no-deploy` | flag |  | hot-deploy the new MLP to the mock model server afterwards |
 
-## `realy verify`
+## `pulsebench verify`
 
 Independent correctness checks: features, CEL rule parity, score/outcome parity, ClickHouse audit.
 
 ```
-realy verify RUN_DIR [OPTIONS]
+pulsebench verify RUN_DIR [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -279,12 +279,12 @@ realy verify RUN_DIR [OPTIONS]
 | `--clickhouse` | str |  | ClickHouse HTTP URL |
 | `--max-events` | int | `1000000` | above this, verify a customer sample |
 
-## `realy world build`
+## `pulsebench world build`
 
 Build (or rebuild) a deterministic world and print its content hash.
 
 ```
-realy world build [OPTIONS]
+pulsebench world build [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -295,12 +295,12 @@ realy world build [OPTIONS]
 | `--seed` | int |  |  |
 | `--out` | path |  | output directory (default: scenario world_dir) |
 
-## `realy world compile`
+## `pulsebench world compile`
 
 Pre-generate a dataset (length-delimited TransactionEvents + parquet sidecars).
 
 ```
-realy world compile [OPTIONS]
+pulsebench world compile [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |
@@ -310,12 +310,12 @@ realy world compile [OPTIONS]
 | `--events` | int | `100000` |  |
 | `--batch-wall-ms` | float | `100.0` |  |
 
-## `realy world profile`
+## `pulsebench world profile`
 
 Generate a sample stream at the natural rate and print realism statistics.
 
 ```
-realy world profile [OPTIONS]
+pulsebench world profile [OPTIONS]
 ```
 
 | Parameter | Type | Default | Description |

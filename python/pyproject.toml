@@ -29,7 +29,8 @@ fast = ["numba>=0.60"]
 dev = ["pytest>=8", "grpcio-tools>=1.66", "pytest-timeout>=2.3"]
 
 [project.scripts]
-realy = "realy.cli:app"
+pulsebench = "realy.cli:app"
+realy = "realy.cli:app"            # legacy alias
 
 [tool.setuptools.packages.find]
 include = ["realy*", "kserve*"]
