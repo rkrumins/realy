@@ -9,7 +9,7 @@ VENV := .venv
 PY := $(VENV)/bin/python
 REALY := $(VENV)/bin/realy
 
-.PHONY: help up up-proxy up-obs down logs ps images console-shell smoke live-test k8s-local k8s-test k8s-down k8s-validate codegen docs \
+.PHONY: help up up-proxy up-obs down logs ps images console-shell smoke live-test migrate eval k8s-local k8s-test k8s-down k8s-validate codegen docs \
         dev-venv dev-proto dev-build dev-test test test-java test-python dev-ui dev-console dev-up flink-reload \
         verify budget train clean
 
@@ -41,6 +41,12 @@ images: ## Build all images (gateway, mock-model, flink, console) without starti
 
 console-shell: ## Shell into the console container (realy CLI available)
 	$(COMPOSE) exec console bash
+
+migrate: ## Re-apply the ClickHouse DDL to a running stack (idempotent: upgrades tables created by an older release)
+	$(COMPOSE) exec -T clickhouse bash /docker-entrypoint-initdb.d/init.sh
+
+eval: ## Honest detection evaluation: train on fraud-train (seed 7), score fraud-eval (seed 1337), hedging A/B
+	deploy/compose/eval.sh
 
 live-test: ## Live acceptance: launch/steer/abort/bulk/lease/signals + restart faults, against the running stack
 	deploy/compose/live-test.sh

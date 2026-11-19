@@ -42,11 +42,25 @@ public final class KafkaIngress implements AutoCloseable {
     private volatile boolean enabled = Env.bool("INGRESS_KAFKA", false);
     private final java.util.concurrent.atomic.AtomicLong enableEpoch = new java.util.concurrent.atomic.AtomicLong();
 
-    /** Runtime switch (bench.control IngressCommand). Enabling seeks to the end of the topic. */
-    public void setEnabled(boolean on) {
-        if (on && !enabled) enableEpoch.incrementAndGet();
+    /**
+     * Runtime switch (bench.control IngressCommand).
+     *
+     * @param skipBacklog true for a LIVE topology switch: seek to the end so events of earlier runs
+     *     (decided by another topology) are not re-scored. false when the state is being RESTORED
+     *     (a restarted gateway replaying its control history): resume from the committed offsets, so
+     *     every event that had no durable decision before the restart is scored now. Skipping there
+     *     would silently drop fraud checks (measured before this fix: 3,052 of 27,006 events lost
+     *     across a gateway restart).
+     */
+    public void setEnabled(boolean on, boolean skipBacklog) {
+        if (on && !enabled && skipBacklog) enableEpoch.incrementAndGet();
         enabled = on;
-        LOG.info("kafka ingress {}", on ? "enabled" : "disabled");
+        LOG.info("kafka ingress {}{}", on ? "enabled" : "disabled",
+                on ? (skipBacklog ? " (live switch: skipping backlog)" : " (restored: resuming from committed offsets)") : "");
+    }
+
+    public void setEnabled(boolean on) {
+        setEnabled(on, true);
     }
 
     public boolean enabled() {
@@ -93,13 +107,26 @@ public final class KafkaIngress implements AutoCloseable {
                         paused = true;
                     }
                 } else if (paused || seenEpoch != enableEpoch.get()) {
+                    if (seenEpoch != enableEpoch.get()) consumer.seekToEnd(consumer.assignment());
                     seenEpoch = enableEpoch.get();
-                    consumer.seekToEnd(consumer.assignment());
                     consumer.resume(consumer.assignment());
                     paused = false;
                 }
                 var records = consumer.poll(Duration.ofMillis(50));
-                if (!enabled) continue;
+                if (!enabled) {
+                    // Never drop a polled record: the poll already advanced the position, so a record
+                    // ignored here would never be scored and a later commit would skip past it. This
+                    // happens on the first poll after a restart (ingress starts disabled until the
+                    // control replay enables it) and on any disable. Rewind, then pause.
+                    for (TopicPartition tp : records.partitions()) {
+                        consumer.seek(tp, records.records(tp).get(0).offset());
+                    }
+                    if (!consumer.assignment().isEmpty()) {
+                        consumer.pause(consumer.assignment());
+                        paused = true;
+                    }
+                    continue;
+                }
                 long pollUs = BenchClock.nowUs();
                 for (ConsumerRecord<byte[], byte[]> r : records) {
                     if (header(r, "x-mirrored") != null) continue; // sync-path mirror, already decided

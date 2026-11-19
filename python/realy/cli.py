@@ -310,6 +310,19 @@ def control(target: str = typer.Argument(..., help="gateway | model | emitter | 
     typer.echo(f"published {len(msgs)} control message(s)")
 
 
+store_app = typer.Typer(help="Inspect the online feature store (Redis).")
+app.add_typer(store_app, name="store")
+
+
+@store_app.command("get")
+def store_get(entity: str = typer.Argument(..., help="customer | card | device | ip | merchant | terminal | payee"),
+              entity_id: int = typer.Argument(...), as_json: bool = typer.Option(False, "--json")):
+    """Decode fs:<entity>:<id> (written by Flink) and pf:<entity>:<id> (profile) into named features."""
+    from .runner.store_inspect import get, render
+    res = get(entity, entity_id)
+    typer.echo(json.dumps(res, indent=1) if as_json else render(res))
+
+
 @app.command("rules-whatif")
 def rules_whatif(run_dir: Path = typer.Argument(..., help="finished run (served features + scores + ground truth)"),
                  rules: list[Path] = typer.Option([], "--rules", help="candidate rule set YAML (repeatable)"),

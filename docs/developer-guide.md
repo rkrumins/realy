@@ -90,7 +90,9 @@ A topology decides which component consumes `payments.events.raw` and produces d
 
 1. Add the name to `Topology` in `python/realy/scenario.py`.
 2. **Wiring:** `python/realy/runner/run.py` switches gateway Kafka ingress via `bench.control`, and
-   `python/realy/runner/flink.py` chooses the Flink job mode (`features`, `inline`, `both`, `echo`).
+   `python/realy/runner/flink.py` chooses the Flink job mode (`features` for the gateway topologies,
+   `inline` / `both` for flink-inline; `echo-kafka` leaves Flink alone because the *gateway* echoes).
+   The job's own `--mode echo` is an instrument-calibration mode no bundled topology uses.
 3. **Live map:** add nodes and edges to `python/realy/control/topology.py` (each with a metric
    reference to a `bench.metrics` source and counter or stage), and a diagram to the UI's topology
    picker (`ui/src/lib/topology.ts`).

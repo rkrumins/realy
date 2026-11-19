@@ -30,6 +30,7 @@ public final class GatewayMain {
     private static final Logger LOG = LoggerFactory.getLogger(GatewayMain.class);
 
     public static void main(String[] args) throws Exception {
+        final long startedUs = io.realy.common.BenchClock.nowUs();
         String instance = Env.str("HOSTNAME", "gateway");
         FeatureSchema schema = FeatureSchema.load();
         ScoringConfig cfg = ScoringConfigHolder.defaults();
@@ -78,7 +79,8 @@ public final class GatewayMain {
         KafkaIngress ingress = new KafkaIngress(pipeline, metrics).start();
         new ControlSubscriber("gateway", (msg, raw) -> {
             if (msg.hasScoring()) holder.update(raw.get("scoring").toString());
-            if (msg.hasIngress()) ingress.setEnabled(msg.getIngress().getKafkaEnabled());
+            // messages issued before this process started are its restored state, not a live switch
+            if (msg.hasIngress()) ingress.setEnabled(msg.getIngress().getKafkaEnabled(), msg.getIssuedAtUs() >= startedUs);
             if (!msg.getRunId().isEmpty()) metrics.setRunId(msg.getRunId());
         });
         LOG.info("gateway {} up on :{} (kafka ingress: {}, store: {}, model: {})", instance, server.activeLocalPort(),

@@ -15,6 +15,95 @@ the cause, and what the code or config now does about it.
   others are healthy.
 * **Kubernetes:** `kubectl -n realy get pods`. Readiness probes gate the Services.
 
+## Controlling live runs
+
+One run at a time per pipeline is enforced, whoever starts it:
+- **Where runs come from:** the console's queue, `realy run` from a shell, or the Kubernetes bench Job.
+- **The pipeline lease:** a Redis key with a 1 s heartbeat.
+  - **Who holds it:** shown on the Live and Runs pages and by `realy status`.
+  - **What waits:** console jobs wait for it, and `realy run --wait-lease 600` waits up to 10 min.
+  - **Crashes:** a crashed owner's lease expires after 15 s.
+  - **Separate pipelines:** set different `REALY_PIPELINE` names, one per namespace.
+
+| To | Console | API | CLI |
+|---|---|---|---|
+| abort the running run | Live → Controls → Abort, or Runs → Queue → Abort | `POST /api/runs/{id}/abort` | `realy abort RUN_ID` (any process), Ctrl-C / SIGTERM on a CLI run |
+| abort / cancel several | Runs → Queue: select → Abort / cancel selected | `POST /api/runs/abort {"ids": [...]}` | `realy abort A B C` |
+| cancel everything queued | Runs → Queue → Cancel all queued | `POST /api/queue/clear` | n/a |
+| stop everything | Stop all (Runs, Live, ⌘K) | `POST /api/stop-all` (aborts the lease holder too, pauses schedules, wildcard abort on bench.control) | `realy abort --all [--console URL]` |
+| pause / resume schedules | Runs → Schedules → ⏸ / ▶ | `POST /api/schedules/{id}/pause\|resume`, `/pause-all`, `/resume-all` | n/a |
+| see what is running anywhere | Live / Runs banner | `GET /api/active` | `realy status [--console URL]` |
+
+**How aborts arrive:**
+- **Two channels:** a Redis flag polled by the run's heartbeat every second, and a `bench.control`
+  message. Either one is enough, so an abort lands even when Kafka or Redis is the component that broke.
+- **Every phase:** prepare, backfill, priming, warm-up, measure, drain, and the sync rail's Java
+  emitter.
+
+**What an abort does:**
+1. The run stops emitting.
+2. It drains the decisions still in flight, for at most `REALY_ABORT_DRAIN_S` (20 s).
+3. It writes a partial report and releases the lease.
+4. It records who and where in the report: the kind (operator, guardrail, instrument, watchdog,
+   signal, lease, interrupted, error), the phase, and the time since start.
+
+**Verdicts:**
+- **`ABORTED`:** no verdict on the system under test.
+- **Guardrail aborts:** stay `FAIL`, because the pipeline failed under that load.
+
+**Measured (`make live-test`, 4 vCPU host):**
+- Time from the abort request to the run finished with its report:
+  - abort in MEASURE: 6 s;
+  - abort in BACKFILL: 1 s;
+  - abort all: 1 s;
+  - stop all: 1.5 s;
+  - a killed collector → instrument abort: 6 s;
+  - SIGTERM to a CLI run → graceful abort with a partial report: 5.4 s.
+- Cross-process aborts:
+  - CLI → console run: 1 s;
+  - console → CLI run: 5.8 s.
+
+**The live acceptance suite** checks all of this against the running stack (`make live-test`).
+1. **Launch and steer:** a run is launched, steered live (rate change), and its report checked
+   against the independent ClickHouse audit.
+2. **Aborts:**
+   - in MEASURE and in BACKFILL;
+   - by a guardrail;
+   - by a killed collector;
+   - selected, queue-cleared, abort-all and stop-all;
+   - across processes, plus the lease conflicts;
+   - by SIGTERM.
+3. **Host-injected faults:** gateway, Flink TaskManager, Redis and Kafka restarts, and the console
+   stopped gracefully and SIGKILLed.
+
+Results go to `/runs/live-test-*.json`. Latency budgets are reported as warnings there, because they
+depend on the host; `realy gate` owns them.
+
+## Resilience (measured)
+
+Each fault is injected into a live 300 TPS run (`deploy/compose/live-test.sh`); the run then finishes
+and is checked against the ClickHouse audit.
+
+| Fault | Result | What the pipeline did |
+|---|---|---|
+| gateway restart | zero loss (27,006 / 27,006), 12 duplicates, after the fixes below (before: 3,052 of 27,006 events never scored) | the new instance restores its config from `bench.control` and resumes from the committed (lowest pending) offsets |
+| Flink TaskManager restart | zero loss (27,006 / 27,006) | job restored from the last checkpoint; the gateway kept scoring from Redis meanwhile |
+| Redis restart | zero loss (27,006 / 27,006) | blobs reappear as entities transact; profiles re-seed next run; the run's lease heartbeat re-acquires its lease |
+| Kafka broker restart (single broker) | zero loss (27,006 / 27,006), 81 duplicates (at-least-once redelivery, deduplicated) | idempotent producers retry until the broker is back; consumers resume from committed offsets |
+| console stop (graceful) | run aborted with a partial report | shutdown aborts the run and waits up to `REALY_SHUTDOWN_GRACE_S` (60 s; compose `stop_grace_period` 75 s, k8s `terminationGracePeriodSeconds` 75) |
+| console crash (SIGKILL) | job `interrupted`, run finished with an ABORTED report on restart | children exit when their parent dies; recovery aborts survivors and builds the partial report |
+
+**Found by this suite and fixed** (an at-least-once violation: after a restart, events with no
+decision were silently never scored; in production, skipped fraud checks):
+1. **Re-enabling ingress skipped the backlog.** A restarted gateway seeked to the end of `events.raw`
+   when its restored config re-enabled Kafka ingress. Now only a *live* topology switch skips the
+   backlog; a restored state resumes from the committed offsets.
+2. **Records polled while disabled were dropped.** Ingress starts disabled until the control replay
+   enables it, and the first `poll()` after a restart already fetched the backlog. Those records were
+   ignored, but the consumer position had moved past them, so a later commit skipped them. Records
+   polled while disabled are now rewound (`seek` to the first one fetched per partition) before
+   pausing.
+
 ## The stack does not come up
 
 | Symptom | Cause | Fix |

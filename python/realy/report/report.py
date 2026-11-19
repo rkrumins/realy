@@ -521,6 +521,17 @@ def _evaluation(run_dir: Path, d: pa.Table) -> dict[str, Any]:
                 "reason": ("trained elsewhere: no training metadata on this install" if trained
                            else "hand-set default weights: not fitted to any data")}
     prov = meta.get("provenance") or []
+    if not prov:
+        # trained before provenance was recorded: resolve the training runs it names, if still on disk
+        for name in meta.get("runs") or []:
+            try:
+                m = json.loads((run_dir.parent / name / "manifest.json").read_text())
+                prov.append({"run_id": name, "scenario": m.get("scenario"), "world_hash": m.get("world_hash")})
+            except (OSError, ValueError):
+                pass
+        if not prov or not any(p.get("world_hash") for p in prov):
+            return {"sample": "unknown", "model_version": version,
+                    "reason": "no provenance for this model's training data: cannot rule out in-sample"}
     same = [p for p in prov if p.get("world_hash") and p.get("world_hash") == man.get("world_hash")]
     out = {"model_version": version, "labels": (meta.get("label_stats") or {}).get("labels", "ground-truth"),
            "trained_on": [{k: p.get(k) for k in ("run_id", "scenario", "seed")} for p in prov]}

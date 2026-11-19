@@ -452,7 +452,7 @@ class _Run:
         tps = sc.traffic.profile.tps
         n_coll = self.n_coll_req or max(1, int(tps // 15000) + (1 if tps % 15000 else 0))
         self.n_coll = n_coll = min(n_coll, 6)
-        ready = [ctx.Event() for _ in range(n_coll)]
+        self.ready = ready = [ctx.Event() for _ in range(n_coll)]   # referenced for the run (see start_emitters)
         self.drain = ctx.Event()
         self.expected = ctx.Value("q", -1)
         self.drain_limit = ctx.Value("d", 0.0)
@@ -505,7 +505,10 @@ class _Run:
             return
         self.start_v = ctx.Value("q", 0)
         self.go = ctx.Event()
-        queues = [ctx.Queue(maxsize=200) for _ in self.plans]
+        # kept on self for the whole run: with the spawn start method children unpickle their arguments
+        # after start() returns, and a Queue the parent no longer references is garbage-collected and
+        # its semaphores unlinked (children then fail with SemLock FileNotFoundError)
+        self.queues = queues = [ctx.Queue(maxsize=200) for _ in self.plans]
         for p_, q in zip(self.plans, queues):
             g = ctx.Process(target=generator_main, args=(p_, q, h.rate_mult, h.stop, self.start_v, self.go), daemon=True)
             e = ctx.Process(target=emitter_main, args=(p_, q, h.stop, self.results, "bench.metrics", self.start_v, self.go),
