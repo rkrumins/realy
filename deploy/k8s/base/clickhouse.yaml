@@ -33,12 +33,15 @@ spec:
             - { name: native, containerPort: 9000 }
           volumeMounts:
             - { name: data, mountPath: /var/lib/clickhouse }
+            # same override as the compose stack (Kafka engine offset reset / fetch wait, schema path)
+            - { name: config, mountPath: /etc/clickhouse-server/config.d/realy.xml, subPath: realy.xml, readOnly: true }
           resources:
             requests: { cpu: "8", memory: 32Gi }
             limits: { cpu: "8", memory: 32Gi }
           readinessProbe: { httpGet: { path: /ping, port: 8123 }, periodSeconds: 5 }
       volumes:
         - { name: protos, configMap: { name: contract-protos } }
+        - { name: config, configMap: { name: clickhouse-config } }
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:

@@ -2,8 +2,9 @@
 
 Kustomize may not read files outside its root, and these must never drift from contracts/, so they
 are generated:
-  base/generated                   ClickHouse DDL ConfigMap (contracts/storage/clickhouse) and the .proto
-                                   format-schema ConfigMap + volume patch ClickHouse's Kafka engine needs
+  base/generated                   ClickHouse DDL ConfigMap (contracts/storage/clickhouse), the .proto
+                                   format-schema ConfigMap + volume patch ClickHouse's Kafka engine needs,
+                                   and the server config override (deploy/compose/clickhouse/realy.xml)
   components/operators/generated   Strimzi KafkaTopic CRs (contracts/kafka/topics.yaml)
   components/standalone/generated  the topic-creation script ConfigMap (deploy/compose/kafka/create-topics.sh)
 """
@@ -61,6 +62,14 @@ def protos_volume_patch() -> str:
                        {"name": "protos", "configMap": {"name": "contract-protos", "items": items}}]}}}}])
 
 
+def clickhouse_config() -> str:
+    """The same config.d override the compose stack mounts (Kafka engine offset reset + fetch wait,
+    format schema path, log level), so Kubernetes and compose ClickHouse behave identically."""
+    xml = (REPO_ROOT / "deploy" / "compose" / "clickhouse" / "realy.xml").read_text()
+    return _dump([{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "clickhouse-config"},
+                   "data": {"realy.xml": xml}}])
+
+
 def topics_script() -> str:
     script = (REPO_ROOT / "deploy" / "compose" / "kafka" / "create-topics.sh").read_text()
     return _dump([{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "kafka-topics-script"},
@@ -70,6 +79,7 @@ def topics_script() -> str:
 def write() -> list[Path]:
     files = {OUT / "clickhouse-ddl.yaml": clickhouse_ddl(), OUT / "contract-protos.yaml": protos(),
              OUT / "clickhouse-protos-volume.patch.yaml": protos_volume_patch(),
+             OUT / "clickhouse-config.yaml": clickhouse_config(),
              K8S / "components" / "operators" / "generated" / "kafka-topics.yaml": topics(),
              K8S / "components" / "standalone" / "generated" / "kafka-topics-script.yaml": topics_script()}
     for p, text in files.items():

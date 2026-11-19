@@ -72,3 +72,31 @@ def test_auto_prime_only_for_cold_async_warm_state(monkeypatch):
     monkeypatch.setattr(run_mod, "_gateway_decisions", lambda admin: 1_000_000)
     monkeypatch.setattr(run_mod, "_flink_job_uptime_s", lambda rest: 3_600.0)
     assert run_mod.auto_prime_days(load_scenario("smoke"), ep, W(), 500, lambda _: None) == 0             # warm
+
+
+def test_prime_wait_uses_group_lag_then_falls_back(monkeypatch):
+    from realy.common import kafka as kafka_mod
+    from realy.runner import run as run_mod
+    ep = run_mod.Endpoints(gateway_admin="http://gw", flink_rest=None)
+    calls = []
+    # multi-replica case: the group lag answers, the per-replica counter is never consulted
+    monkeypatch.setattr(kafka_mod, "wait_group_caught_up", lambda *a, **k: calls.append(k) or 12)
+    monkeypatch.setattr(run_mod, "_wait_gateway_scored", lambda *a: (_ for _ in ()).throw(AssertionError("unused")))
+    assert run_mod.wait_gateway_primed(ep, 0, 15_000, 900, lambda _: None)
+    assert calls[0]["no_offsets_grace_s"] == 20.0 and calls[0]["timeout_s"] == 300.0
+    # group never committed offsets: fall back to the decision counter
+    monkeypatch.setattr(kafka_mod, "wait_group_caught_up", lambda *a, **k: -1)
+    seen = {}
+    monkeypatch.setattr(run_mod, "_wait_gateway_scored", lambda admin, target, t: seen.setdefault("target", target) > 0)
+    assert run_mod.wait_gateway_primed(ep, 1_000, 15_000, 900, lambda _: None)
+    assert seen["target"] == 1_000 + int(15_000 * 0.99)
+    assert not run_mod.wait_gateway_primed(ep, None, 15_000, 900, lambda _: None)
+
+
+def test_wait_group_grace_returns_when_group_has_no_offsets(monkeypatch):
+    from realy.common import kafka as kafka_mod
+    monkeypatch.setattr(kafka_mod, "group_lag", lambda g, t: None)
+    lines = []
+    assert kafka_mod.wait_group_caught_up("g", "t", 10, timeout_s=30, log=lines.append,
+                                          no_offsets_grace_s=0.0, poll_s=0.01) == -1
+    assert any("no committed offsets" in ln for ln in lines)

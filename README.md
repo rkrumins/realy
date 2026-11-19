@@ -12,8 +12,8 @@ make up                      # builds everything from source in Docker and start
 open http://localhost:8090   # launch "smoke", watch it live, read the report
 ```
 
-Docker is the only requirement. To run on Kubernetes locally: `make k8s-local`
-([guide](docs/deployment-kubernetes.md)).
+Docker is the only requirement. On Kubernetes, with Kafka (3-broker KRaft) and Flink inside the same
+local cluster: `make k8s-local && make k8s-test` ([guide](docs/deployment-kubernetes.md)).
 
 ## What you get
 

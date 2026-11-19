@@ -207,6 +207,26 @@ def _wait_gateway_scored(admin: str | None, target: int, timeout_s: float) -> bo
     return False
 
 
+def wait_gateway_primed(ep: Endpoints, decisions_before: int | None, primed: int, timeout_s: float,
+                        log: Callable[[str], None]) -> bool:
+    """Wait until the gateway has scored the priming events. Priming events (unlike regular `x-backfill`
+    history, which the gateway skips) are scored, and the gateway's consumer group commits offsets as it
+    goes: group lag is correct for any number of replicas. Fallback when the group has no offsets: the
+    decision counter of the replica the Service routes to (exact only for a single replica)."""
+    from ..common.kafka import wait_group_caught_up
+    grp = os.environ.get("GATEWAY_GROUP", "realy-gateway")
+    lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max(500, primed // 200),
+                               timeout_s=min(timeout_s, 300.0), log=log, no_offsets_grace_s=20.0)
+    if lag >= 0:
+        log(f"prime: gateway caught up (lag {lag:,})")
+        return True
+    if decisions_before is None:
+        return False
+    done = _wait_gateway_scored(ep.gateway_admin, decisions_before + int(primed * 0.99), timeout_s)
+    log(f"prime: gateway {'caught up' if done else 'still catching up (continuing)'}")
+    return done
+
+
 def cold_pipeline(sc: Scenario, ep: Endpoints) -> list[str]:
     """Why the pipeline under test is cold (empty list = warm). A cold JVM / freshly started Flink job
     adds seconds of latency for the first ~15 s, which would land inside a short scenario's measured
@@ -365,11 +385,8 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
                 grp = f"realy-flink-{run_id}" if sc.flink_state == "fresh" else "realy-flink"
                 lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max(500, bf // 200), timeout_s=timeout, log=log)
                 log(f"backfill: feature job caught up (lag {lag:,})")
-            if prime_days and sc.topology in ("gateway-kafka", "echo-kafka") and gw_before is not None:
-                # priming events are scored by the gateway (regular `x-backfill` history is features-only and
-                # skipped by it); follow its decision count rather than group offsets
-                done = _wait_gateway_scored(ep.gateway_admin, gw_before + int(bf * 0.99), timeout)
-                log(f"backfill: gateway {'caught up' if done else 'still catching up (continuing)'}")
+            if prime_days and sc.topology in ("gateway-kafka", "echo-kafka"):
+                wait_gateway_primed(ep, gw_before, bf, timeout, log)
         t_start = now_us() + 3_000_000
         start_v.value = t_start
         manifest["t_start_us"] = t_start

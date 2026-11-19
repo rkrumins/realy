@@ -27,6 +27,17 @@ the cause, and what the code or config now does about it.
 | Console stuck in "waiting" on Kubernetes | `clickhouse-init` or `kafka-topics` Job still retrying | `kubectl -n realy logs job/clickhouse-init`; both retry until their dependency is up |
 | Flink `Permission denied` on `/checkpoints` | named volume owned by root, Flink runs as uid 9999 | compose chowns before dropping privileges; Kubernetes uses `fsGroup: 9999` |
 
+## Kubernetes (local overlays)
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Pods stay `Pending` after `make k8s-local` | the node (Docker Desktop / kind VM / minikube) is smaller than the overlay's requests; `local-up.sh` prints a preflight warning | give it 6+ vCPU / 12+ GiB, or `REALY_KAFKA_BROKERS=1` (~9 GiB) |
+| `k8s-test`: every *zero loss* / *verify* row PASS, *latency budget* rows FAIL | CPU-starved node: 3 replicating brokers plus the whole pipeline on 4 vCPUs (measured: 4-14 % idle, p99 200-300 ms) | more vCPUs, or 1 broker for latency work; correctness results stand regardless |
+| A Kafka pod CrashLoops / no quorum | `kubectl -n realy logs realy-kafka-0` shows the `realy-kafka: node N/3, advertised ..., voters ...` line it derived; the voters must resolve via the headless Service | check `kubectl -n realy get endpoints realy-kafka-headless` (published before readiness) and that all 3 pods are scheduled |
+| `local-up.sh` refuses: "the cluster runs N Kafka broker(s)" | switching between 1 and 3 brokers would reuse volumes formatted for another quorum | `make k8s-down`, then `make k8s-local` with the new `REALY_KAFKA_BROKERS` |
+| Flink TaskManager `Pending` with a volume node-affinity / Multi-Attach event | the checkpoint volume is ReadWriteOnce; the TaskManager must share the JobManager's node (required pod affinity keeps it there) | single-node clusters are fine; on multi-node use object storage for `execution.checkpointing.dir` |
+| Latency jumps for a few seconds mid-run, then recovers | a Kafka broker restarted (leader election, ISR shrink/expand) or the gateway rescaled | expected; the local overlays pin the gateway HPA to one replica so autoscaling never lands in a measurement |
+
 ## Runs that fail or look wrong
 
 | Symptom | Cause | What realy does |

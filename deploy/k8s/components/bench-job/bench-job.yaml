@@ -14,6 +14,12 @@ spec:
     spec:
       restartPolicy: Never
       enableServiceLinks: false
+      # shares the console's ReadWriteOnce PVC: must run on the console's node
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: { matchLabels: { app: console } }
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: driver
           image: realy/console:dev

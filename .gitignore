@@ -7,6 +7,7 @@ java/**/build/
 java/.gradle/
 .gradle/
 runs/
+runs-k8s/
 data/
 node_modules/
 ui/dist/

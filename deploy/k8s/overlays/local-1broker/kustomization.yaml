@@ -1,0 +1,11 @@
+# overlays/local with a single Kafka broker (replication factor 1): ~9 GiB requested instead of ~11.
+# Same functional and latency coverage; no broker-failover / durability check.
+#   REALY_KAFKA_BROKERS=1 make k8s-local
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: realy
+resources:
+  - ../../base
+components:
+  - ../../components/standalone
+  - ../../components/local-sizing

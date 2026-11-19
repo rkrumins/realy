@@ -64,5 +64,6 @@ until `docker compose -f deploy/compose/docker-compose.yml down -v`.
 * [Scenarios](scenarios.md): write your own load and fraud scenarios, visually or as YAML.
 * [Running benchmarks](running-benchmarks.md): what a run does and how to read a report.
 * [Deployment with Docker](deployment-docker.md): building behind proxies, mirrors, tuning.
-* [Kubernetes](deployment-kubernetes.md): a local cluster in one command, then GKE with L4 GPUs.
+* [Kubernetes](deployment-kubernetes.md): Kafka (3 brokers) + Flink + realy in a local cluster with
+  `make k8s-local && make k8s-test`, then GKE with L4 GPUs.
 * [Architecture](architecture.md): how the measurement works and why you can trust it.

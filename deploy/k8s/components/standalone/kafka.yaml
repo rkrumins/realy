@@ -1,7 +1,8 @@
-# Single-node Kafka (KRaft, broker + controller in one pod) from the stock apache/kafka image - no
-# operator needed. The client Service is named `realy-kafka-bootstrap`, exactly like Strimzi's, so the
-# rest of the stack is identical across components/standalone and components/operators.
-# One broker means replication factor 1: fine for functional and latency work, not a durability test.
+# KRaft Kafka (each pod is broker + controller) from the stock apache/kafka image - no operator needed.
+# The client Service is named `realy-kafka-bootstrap`, exactly like Strimzi's, so the rest of the stack is
+# identical across components/standalone and components/operators.
+# 1 broker here (replication factor 1: functional and latency work); components/kafka-3-brokers turns it
+# into a 3-broker quorum with RF 3 / min ISR 2 so acks=all behaves like production.
 apiVersion: v1
 kind: Service
 metadata:
@@ -11,8 +12,8 @@ spec:
   selector: { app: kafka }
   ports: [{ name: client, port: 9092, targetPort: 9092 }]
 ---
-# Headless: gives the broker a stable DNS name (realy-kafka-0.realy-kafka-headless) to advertise, so
-# clients talk to the pod directly after bootstrap instead of hair-pinning through the Service.
+# Headless: gives every broker a stable DNS name (realy-kafka-N.realy-kafka-headless.<ns>.svc...) to
+# advertise and to reach the other controllers on; published before readiness so the quorum can form.
 apiVersion: v1
 kind: Service
 metadata:
@@ -31,32 +32,44 @@ metadata:
   labels: { app: kafka }
 spec:
   serviceName: realy-kafka-headless
-  replicas: 1
+  replicas: 1                          # components/kafka-3-brokers sets 3 (and the replication settings)
+  # Parallel, not OrderedReady: a KRaft quorum needs a majority of voters up before any broker is
+  # ready, so starting pods one at a time would deadlock with more than one broker. (Immutable, so it
+  # is the same for 1 and N brokers - switching between them never requires recreating the StatefulSet.)
+  podManagementPolicy: Parallel
   selector: { matchLabels: { app: kafka } }
   template:
     metadata: { labels: { app: kafka } }
     spec:
       # the image turns every KAFKA_* variable into a broker property; service links would inject some
       enableServiceLinks: false
-      securityContext: { fsGroup: 1000 }
+      securityContext: { fsGroup: 1000 }   # appuser
+      terminationGracePeriodSeconds: 60    # controlled shutdown moves partition leadership first
       containers:
         - name: kafka
           image: apache/kafka:4.4.0
+          # node id, advertised listener and quorum voters are derived from the pod ordinal
+          command: ["bash", "/realy/kafka-start.sh"]
           ports:
             - { name: client, containerPort: 9092 }
             - { name: controller, containerPort: 9093 }
           env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - { name: REALY_KAFKA_REPLICAS, value: "1" }
+            - { name: REALY_KAFKA_HEADLESS, value: realy-kafka-headless }
             - { name: CLUSTER_ID, value: cmVhbHktc3RhbmRhbG9uZQ }
-            - { name: KAFKA_NODE_ID, value: "1" }
             - { name: KAFKA_PROCESS_ROLES, value: "broker,controller" }
             - { name: KAFKA_LISTENERS, value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093" }
-            - { name: KAFKA_ADVERTISED_LISTENERS, value: "PLAINTEXT://realy-kafka-0.realy-kafka-headless:9092" }
             - { name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT" }
             - { name: KAFKA_INTER_BROKER_LISTENER_NAME, value: PLAINTEXT }
             - { name: KAFKA_CONTROLLER_LISTENER_NAMES, value: CONTROLLER }
-            - { name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "1@localhost:9093" }
             - { name: KAFKA_LOG_DIRS, value: /var/lib/kafka/data/logs }
             - { name: KAFKA_AUTO_CREATE_TOPICS_ENABLE, value: "false" }
+            - { name: KAFKA_DEFAULT_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_MIN_INSYNC_REPLICAS, value: "1" }
             - { name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1" }
             - { name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1" }
             - { name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1" }
@@ -64,11 +77,15 @@ spec:
             - { name: KAFKA_NUM_NETWORK_THREADS, value: "4" }
             - { name: KAFKA_NUM_IO_THREADS, value: "8" }
             - { name: KAFKA_HEAP_OPTS, value: "-Xms1g -Xmx1g" }
-          volumeMounts: [{ name: data, mountPath: /var/lib/kafka/data }]
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/kafka/data }
+            - { name: start, mountPath: /realy, readOnly: true }
           readinessProbe: { tcpSocket: { port: 9092 }, periodSeconds: 5 }
           resources:
             requests: { cpu: "2", memory: 3Gi }
             limits: { cpu: "4", memory: 3Gi }
+      volumes:
+        - { name: start, configMap: { name: kafka-start } }
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:
@@ -93,5 +110,7 @@ spec:
           env:
             - { name: BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
             - { name: PARTITIONS, value: "12" }
+            - { name: REPLICATION_FACTOR, value: "1" }   # kafka-3-brokers: 3
+            - { name: MIN_ISR, value: "1" }              # kafka-3-brokers: 2
           volumeMounts: [{ name: scripts, mountPath: /scripts }]
       volumes: [{ name: scripts, configMap: { name: kafka-topics-script } }]

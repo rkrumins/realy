@@ -10,6 +10,7 @@ resources:
   - redis.yaml
   - generated/contract-protos.yaml
   - generated/clickhouse-ddl.yaml
+  - generated/clickhouse-config.yaml
   - clickhouse.yaml
   - mock-model.yaml
   - gateway.yaml

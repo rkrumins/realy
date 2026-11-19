@@ -9,7 +9,7 @@ VENV := .venv
 PY := $(VENV)/bin/python
 REALY := $(VENV)/bin/realy
 
-.PHONY: help up up-proxy up-obs down logs ps images console-shell smoke k8s-local k8s-validate codegen docs \
+.PHONY: help up up-proxy up-obs down logs ps images console-shell smoke k8s-local k8s-test k8s-down k8s-validate codegen docs \
         dev-venv dev-proto dev-build dev-test test test-java test-python dev-ui dev-console dev-up flink-reload \
         verify budget train clean
 
@@ -45,11 +45,17 @@ console-shell: ## Shell into the console container (realy CLI available)
 smoke: ## Run the smoke scenario inside the console container
 	$(COMPOSE) exec console realy run smoke
 
-k8s-local: ## Build images and deploy the self-contained overlay to a local k3d/kind cluster
+k8s-local: ## Build images, create a local kind/k3d/minikube cluster, deploy Kafka (3 brokers) + Flink + realy
 	deploy/k8s/local-up.sh
 
+k8s-test: ## In-cluster acceptance test: smoke, flink-inline + verify, Kafka broker failover (zero loss)
+	deploy/k8s/test.sh
+
+k8s-down: ## Delete the local cluster created by k8s-local
+	deploy/k8s/local-up.sh down
+
 k8s-validate: ## Render and schema-validate all Kubernetes overlays (needs kustomize + kubeconform)
-	@for o in deploy/k8s/overlays/local deploy/k8s/overlays/dev deploy/k8s/overlays/gke-l4; do \
+	@for o in deploy/k8s/overlays/local deploy/k8s/overlays/local-1broker deploy/k8s/overlays/dev deploy/k8s/overlays/gke-l4; do \
 	  echo "== $$o"; kustomize build $$o | kubeconform -summary -strict -kubernetes-version 1.33.0 -schema-location default \
 	    -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' - || exit 1; done
 

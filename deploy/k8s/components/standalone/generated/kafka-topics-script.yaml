@@ -4,14 +4,17 @@ kind: ConfigMap
 metadata:
   name: kafka-topics-script
 data:
-  create-topics.sh: "#!/bin/bash\n# Create the contract topics (contracts/kafka/topics.yaml)\
-    \ on the single-broker dev stack.\nset -euo pipefail\nK=/opt/kafka/bin/kafka-topics.sh\n\
-    B=\"${BOOTSTRAP:-kafka:29092}\"\nP=\"${PARTITIONS:-12}\"\n\nmk() {\n  local topic=\"\
-    $1\" parts=\"$2\"\n  shift 2\n  local cfg=()\n  for c in \"$@\"; do cfg+=(--config\
-    \ \"$c\"); done\n  \"$K\" --bootstrap-server \"$B\" --create --if-not-exists --topic\
-    \ \"$topic\" --partitions \"$parts\" \\\n    --replication-factor 1 \"${cfg[@]}\"\
-    \n}\n\nmk payments.events.raw \"$P\" compression.type=lz4 retention.ms=21600000\n\
-    mk payments.decisions \"$P\" message.timestamp.type=LogAppendTime retention.ms=86400000\n\
-    mk payments.labels 4 retention.ms=604800000\nmk payments.features \"$P\" retention.ms=3600000\n\
-    mk bench.control 1 cleanup.policy=compact\nmk bench.metrics 3 retention.ms=86400000\n\
-    \"$K\" --bootstrap-server \"$B\" --list\n"
+  create-topics.sh: "#!/bin/bash\n# Create the contract topics (contracts/kafka/topics.yaml).\
+    \ Idempotent (--if-not-exists).\n# Compose: one broker, RF 1. Kubernetes 3-broker\
+    \ quorum: REPLICATION_FACTOR=3 MIN_ISR=2, so acks=all\n# writes survive the loss\
+    \ of one broker.\nset -euo pipefail\nK=/opt/kafka/bin/kafka-topics.sh\nB=\"${BOOTSTRAP:-kafka:29092}\"\
+    \nP=\"${PARTITIONS:-12}\"\nRF=\"${REPLICATION_FACTOR:-1}\"\nISR=\"${MIN_ISR:-1}\"\
+    \n\nmk() {\n  local topic=\"$1\" parts=\"$2\"\n  shift 2\n  local cfg=()\n  for\
+    \ c in \"$@\"; do cfg+=(--config \"$c\"); done\n  if [ \"$RF\" -gt 1 ]; then cfg+=(--config\
+    \ \"min.insync.replicas=$ISR\"); fi\n  \"$K\" --bootstrap-server \"$B\" --create\
+    \ --if-not-exists --topic \"$topic\" --partitions \"$parts\" \\\n    --replication-factor\
+    \ \"$RF\" \"${cfg[@]}\"\n}\n\nmk payments.events.raw \"$P\" compression.type=lz4\
+    \ retention.ms=21600000\nmk payments.decisions \"$P\" message.timestamp.type=LogAppendTime\
+    \ retention.ms=86400000\nmk payments.labels 4 retention.ms=604800000\nmk payments.features\
+    \ \"$P\" retention.ms=3600000\nmk bench.control 1 cleanup.policy=compact\nmk bench.metrics\
+    \ 3 retention.ms=86400000\n\"$K\" --bootstrap-server \"$B\" --list\n"

@@ -118,16 +118,24 @@ def group_lag(group: str, topic: str) -> int | None:
     return lag
 
 
-def wait_group_caught_up(group: str, topic: str, max_lag: int, timeout_s: float, log=print) -> int:
+def wait_group_caught_up(group: str, topic: str, max_lag: int, timeout_s: float, log=print,
+                         no_offsets_grace_s: float | None = None, poll_s: float = 5.0) -> int:
+    """Wait until `group`'s lag on `topic` is <= max_lag. Returns the lag, or -1 when it never got a
+    numeric lag: on timeout, or after `no_offsets_grace_s` with the group still having no committed
+    offsets (lets callers fall back to another signal instead of waiting out the whole timeout)."""
     import time
-    end = time.time() + timeout_s
+    t0 = time.time()
+    end = t0 + timeout_s
     last: object = object()   # sentinel: always log the first poll, even when the group has no offsets yet
     while time.time() < end:
         lag = group_lag(group, topic)
         if lag is not None and lag <= max_lag:
             return lag
+        if lag is None and no_offsets_grace_s is not None and time.time() - t0 >= no_offsets_grace_s:
+            log(f"  {group}: no committed offsets after {no_offsets_grace_s:.0f} s")
+            return -1
         if lag != last:
             log(f"  waiting for {group}: lag {lag if lag is not None else 'n/a (no committed offsets)'}")
             last = lag
-        time.sleep(5)
+        time.sleep(poll_s)
     return last if isinstance(last, int) else -1

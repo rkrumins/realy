@@ -84,6 +84,12 @@ spec:
     spec:
       enableServiceLinks: false
       securityContext: { fsGroup: 9999 }
+      # the checkpoint volume is ReadWriteOnce and shared with the JobManager: same node, or it can't mount
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: { matchLabels: { app: flink, component: jobmanager } }
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: taskmanager
           image: realy/flink:dev
