@@ -226,8 +226,9 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         "per_feature": per_feature,
         "worst": sorted(((k, v["agreement"]) for k, v in per_feature.items()), key=lambda x: x[1])[:8],
         "note": ("Flink-inline: customer/card features must match exactly" if sc.topology == "flink-inline" else
-                 "gateway topology: served stream features come from the online store (as of the last Flink "
-                 "update + self-inclusion); disagreement = staleness effect"),
+                 "gateway topology: customer/card features are re-windowed from online-store state blobs at each "
+                 "event's time (target >= 99%); the remainder is store lag - events of the same entity not yet "
+                 "written to Redis when the gateway read it"),
     }
 
     # ------------------------------------------------------------------ 2-4. rules / score / outcome parity

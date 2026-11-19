@@ -119,6 +119,8 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
     sec_count = 0
     sec_degraded = 0
     next_metrics = (now_us() // 1_000_000 + 1) * 1_000_000
+    sec_bytes = 0
+    cpu_prev = time.process_time() * 1000.0
     last_msg = time.time()
     drain_started = None
 
@@ -174,6 +176,7 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
                 foreign += 1
                 continue
             received += 1
+            sec_bytes += len(m.value())
             eid = d.event_id
             g = eid >> 48
             s = eid & 0xFFFFFFFFFFFF
@@ -261,10 +264,14 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
         if now >= next_metrics:
             stages = dict(sec)
             stages.update(sec_stage)
+            own_cpu = time.process_time() * 1000.0
             mprod.produce(METRICS, snapshot_json(run_id, "collector", f"c{index}", now, 1000, counters={
                 "decided": sec_count, "decided_total": unique, "duplicates_total": dups,
                 "approve": sec_outcomes.get(1, 0), "review": sec_outcomes.get(2, 0), "decline": sec_outcomes.get(3, 0),
-                "degraded": sec_degraded, "foreign_total": foreign}, stages=stages))
+                "degraded": sec_degraded, "foreign_total": foreign,
+                # decision record size (audit topic + ClickHouse sizing) and the collector's own CPU
+                "decision_bytes": sec_bytes, "cpu_ms": own_cpu - cpu_prev, "cpus": 1}, stages=stages))
+            cpu_prev, sec_bytes = own_cpu, 0
             mprod.poll(0)
             sec = {k: [] for k in sec}
             sec_stage = {}

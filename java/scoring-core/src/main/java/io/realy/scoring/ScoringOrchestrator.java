@@ -60,6 +60,7 @@ public final class ScoringOrchestrator {
     private final ScoringConfigHolder config;
     private final String instanceId;
     private final long seed;
+    private volatile io.realy.common.StageMetrics metrics;
 
     public ScoringOrchestrator(FeatureSchema schema, OnlineStore store, ModelClient model, ScoringConfigHolder config,
                                String instanceId, long seed) {
@@ -71,6 +72,12 @@ public final class ScoringOrchestrator {
         this.config = config;
         this.instanceId = instanceId;
         this.seed = seed;
+    }
+
+    /** Optional: count online-store bytes read and exact state-blob reads per event (sizing inputs). */
+    public ScoringOrchestrator metrics(io.realy.common.StageMetrics m) {
+        this.metrics = m;
+        return this;
     }
 
     public FeatureSchema schema() {
@@ -129,6 +136,11 @@ public final class ScoringOrchestrator {
                 blobs = null;
             }
             c.features = assembler.assemble(r.event(), c.mask, r.precomputed(), lk, blobs, c.a.cfg().getSelfInclusion());
+            var m = metrics;
+            if (m != null) {
+                m.add("store_read_bytes", c.features.storeBytes());
+                m.add("state_reads", c.features.stateReads());
+            }
             Spans.add(r.trace(), Stage.FEATURE_ASSEMBLE, 0, fEnd, BenchClock.nowUs() - fEnd);
             return c;
         }).thenCompose(this::modelStage);

@@ -211,7 +211,11 @@ services:
     profiles: [obs]
     image: grafana/grafana:12.2.0
     ports: ["3000:3000"]
-    environment: { GF_AUTH_ANONYMOUS_ENABLED: "true", GF_AUTH_ANONYMOUS_ORG_ROLE: Admin }
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      # run history (realy.runs) dashboards read ClickHouse directly
+      GF_PLUGINS_PREINSTALL: grafana-clickhouse-datasource
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

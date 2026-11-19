@@ -52,7 +52,11 @@ emitter's own schedule lag exceeded the 2 s guardrail. Run `step-ramp` / `baseli
 
 1. **Flink-inline puts shuffles on the hot path**: 61% of the slowest 1% is time spent in the 7 keyBy
    network hops (buffer flushes, serialisation), although keyed-state work itself is ~0.5 ms p50.
-2. **Topology B (gateway + online store) is faster but its windowed features are approximate.** The
+2. **Topology B (gateway + online store) is faster; its windowed features were approximate and now
+   are exact for customer/card.** *Update:* with state blobs (`contracts/storage/redis.md`) the gateway
+   re-windows the stored aggregator state at each event's time: customer/card agreement **99.73%**
+   (was ~85% / 82.6%), the remainder being store lag; shared values-only entities stay approximate
+   (`merch_count_1m` 32.8%) - see docs/production.md. Original finding: The
    verifier finds customer/card features served from Redis agree with exact recomputation only
    ~85% overall and 32–50% for short windows (`card_count_1m`, `card_count_5m`): a blob holds the
    window *as of the entity's last event* and is not re-windowed when read later, so expired events

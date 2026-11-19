@@ -1,5 +1,10 @@
 # Capacity planning for 10,000+ TPS under a 100 ms hot-path / 150 ms end-to-end budget
 
+> **Use `realy size`** ([production.md](production.md#capacity-sizing)): it applies the rules below to
+> per-event costs *measured* on your nodes (`--from <run>`), maps them onto GKE node pools, adds N+1 /
+> zone redundancy, checks the latency budget with queueing, and can write the kustomize overlay. The
+> table here is the reasoning behind its defaults.
+
 Sizing is Little's law (`in-flight = arrival rate × time in system`) plus utilisation headroom: tail
 latency stays flat only well below saturation (aim for ≤ 50–60% CPU on the hot path). Every number
 below should be confirmed with `step-ramp` / `capacity-saturation` / `soak-60m` on the target cluster —

@@ -141,7 +141,9 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
         b = gen.generate(n, sim0, sim1)
         if len(b):
             offs = ((b.event_time_us - plan.sim_start_us) / ts).astype(np.int64)
-            q.put(("batch", offs, b.payloads, b.keys, b.event_ids, b.labels))
+            # cumulative CPU of this generator process rides along, so the emitter can report the
+            # driver's whole CPU cost per event (sizing the driver pool)
+            q.put(("batch", offs, b.payloads, b.keys, b.event_ids, b.labels, time.process_time() * 1000.0))
             if plan.write_events:
                 cols = dict(b.columns)
                 cols["t_intended_us"] = offs + t_start
@@ -261,6 +263,10 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     next_metrics = (now_us() // 1_000_000 + 1) * 1_000_000
     sec_lags: list[int] = []
     sec_sent = 0
+    sec_bytes = 0
+    gen_cpu_ms = 0.0          # generator process, cumulative (reported with each batch)
+    gen_cpu_prev = 0.0
+    own_cpu_prev = time.process_time() * 1000.0
     topic = plan.events_topic
 
     while not stop.is_set():
@@ -274,6 +280,8 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                 if kind == "batch":
                     cur = item
                     i = 0
+                    if len(item) > 6:
+                        gen_cpu_ms = item[6]
                     for lt in item[5]:
                         heapq.heappush(labels_heap, lt)
                 elif kind == "done":
@@ -312,6 +320,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                 tm.n += 1
                 sec_lags.append(sent - intended)
                 sec_sent += 1
+                sec_bytes += len(payload)
                 i += 1
             sim_now = sim0 + int((now - t0) * ts)
             while labels_heap and labels_heap[0][0] <= sim_now:
@@ -320,12 +329,16 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                 labels_sent += 1
         producer.poll(0)
         if now >= next_metrics:
+            own_cpu = time.process_time() * 1000.0
+            cpu_ms = (own_cpu - own_cpu_prev) + max(0.0, gen_cpu_ms - gen_cpu_prev)
+            own_cpu_prev, gen_cpu_prev = own_cpu, gen_cpu_ms
             producer.produce(metrics_topic, snapshot_json(
                 run_id, "emitter", f"shard-{plan.shard}", now, 1000,
                 counters={"emitted": sec_sent, "emitted_total": tm.n, "acked": len(acks_this_sec),
-                          "errors_total": errors[0], "labels_total": labels_sent},
+                          "errors_total": errors[0], "labels_total": labels_sent,
+                          "bytes": sec_bytes, "cpu_ms": cpu_ms, "cpus": 2},   # emitter + generator process
                 stages={"schedule_lag": sec_lags, "produce_ack": acks_this_sec}))
-            sec_lags, sec_sent = [], 0
+            sec_lags, sec_sent, sec_bytes = [], 0, 0
             acks_this_sec = []
             next_metrics += 1_000_000
         # sleep until the next event is due (sub-ms granularity), never past it

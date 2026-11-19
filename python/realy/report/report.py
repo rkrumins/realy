@@ -289,6 +289,11 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
 
     # ---------------------------------------------------------------- service-side live stats
     service = _service_stats(run_dir, scenario.traffic.warmup_s)
+    from .resources import resources as _resources
+    try:
+        res = _resources(run_dir, man, levels, scenario.traffic.duration_s, scenario.traffic.warmup_s)
+    except Exception as e:  # noqa: BLE001 - resource accounting must never break a report
+        res = {"error": f"{type(e).__name__}: {e}"}
 
     # ---------------------------------------------------------------- verdict
     reasons = []
@@ -332,7 +337,7 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     }
     rep.update({"summary": summary, "stages": overall, "levels": levels, "funnel": funnel, "backlog": backlog,
                 "e2e_p99_by_second": series_p99, "e2e_p50_by_second": series_p50, "tail_attribution": tail,
-                "sustainability": sust, "detection": detection, "service": service})
+                "sustainability": sust, "detection": detection, "service": service, "resources": res})
     expect = scenario.expect.get("verdict")
     if expect:
         rep["summary"]["expected_verdict"] = expect
@@ -477,6 +482,8 @@ def render_text(rep: dict[str, Any]) -> str:
     if t:
         lines.append(f"tail (>= p99 {t['threshold_ms']:.1f} ms) dominated by {t['dominant']}: "
                      + ", ".join(f"{k} {v:.0%}" for k, v in sorted(t['share'].items(), key=lambda x: -x[1])[:5]))
+    from .resources import render as _render_resources
+    lines.extend(_render_resources(rep.get("resources") or {}))
     det = rep.get("detection")
     if det and det.get("fraud_events"):
         lines.append(f"detection: recall(flagged) {_f(det['recall_flagged'])}  precision {_f(det['precision_flagged'])}  "

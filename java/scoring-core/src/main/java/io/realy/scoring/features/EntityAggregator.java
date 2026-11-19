@@ -73,6 +73,22 @@ public final class EntityAggregator {
         return st.encode(specs);
     }
 
+    /**
+     * Read-only variant of {@link #process}: the feature values {@code e} would get if it were applied
+     * to {@code stateBytes} now (update-then-read, exactly the inline semantics), without producing a
+     * new state. {@code stateBytes} is never modified. Used by the gateway to re-window an online-store
+     * state blob at the event's own time; {@code null} state = an entity never seen before.
+     */
+    public void evaluate(byte[] stateBytes, TransactionEvent e, long filterMask, float[] out) {
+        State st = State.decode(stateBytes, specs);
+        long t = e.getEventTimeUs();
+        for (int i = 0; i < specs.size(); i++) {
+            FeatureSpec s = specs.get(i);
+            boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
+            out[indices[i]] = (float) apply(s, st.feats[i], e, t, match);
+        }
+    }
+
     private static double apply(FeatureSpec s, Feat f, TransactionEvent e, long t, boolean match) {
         long g = s.granularityUs();
         long k = Math.floorDiv(t, g);

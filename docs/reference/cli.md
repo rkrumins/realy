@@ -50,6 +50,31 @@ realy control TARGET [OPTIONS]
 | `--kafka-ingress, --no-kafka-ingress` | flag |  | gateway: enable/disable Kafka ingress |
 | `--abort, --no-abort` | flag |  | abort the run |
 
+## `realy gate`
+
+Fail a run that regressed: verdict, loss, verify, and p99 / knee / detection / CPU-per-event vs a baseline.
+
+```
+realy gate RUN [OPTIONS]
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `RUN` | argument |  | candidate run dir / id |
+| `--baseline` | str |  | baseline run dir / id, or a baseline JSON (baselines/<scenario>.json) |
+| `--save-baseline` | path |  | write RUN as a baseline file here and exit |
+| `--p99-regress` | float | `0.1` | max relative p99 increase |
+| `--min-delta-ms` | float | `5.0` | ...and only beyond this many ms (noise floor) |
+| `--within-drop` | float | `0.01` | max drop of the share of events within budget |
+| `--knee-drop` | float | `0.1` | max relative drop of the knee TPS |
+| `--recall-drop` | float | `0.02` |  |
+| `--precision-drop` | float | `0.05` |  |
+| `--fpr-rise` | float | `0.01` |  |
+| `--cpu-regress` | float | `0.15` | max CPU/event increase |
+| `--max-duplicates` | int |  |  |
+| `--require-verify, --no-require-verify` | flag |  |  |
+| `--json` | flag |  |  |
+
 ## `realy report`
 
 (Re)build the report for a finished run directory.
@@ -97,6 +122,27 @@ realy seed [OPTIONS]
 |---|---|---|---|
 | `--scenario` | str | `smoke` |  |
 | `--force, --no-force` | flag |  |  |
+
+## `realy size`
+
+Capacity plan on GKE (+L4) for a target load, from measured per-event costs or documented assumptions.
+
+```
+realy size [OPTIONS]
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `--tps` | float | `10000` | steady-state events/s |
+| `--peak` | float | `2.0` | peak factor: the plan is sized for tps x peak |
+| `--headroom` | float | `0.55` | target utilisation of CPU-bound components |
+| `--from` | str |  | run dir / id whose measured costs replace the assumptions |
+| `--zones` | int | `3` | zones (N+1 and rack-aware Kafka placement) |
+| `--customers` | int | `10000000` | active customers (state + online-store memory) |
+| `--retention-days` | int | `30` | ClickHouse audit retention |
+| `--set` | list[str] |  | override a cost, e.g. --set flink_cpu_ms=0.8 |
+| `--json` | flag |  |  |
+| `--write-overlay` | path |  | write a kustomize overlay (on top of overlays/gke-l4) here |
 
 ## `realy topics`
 

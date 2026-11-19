@@ -118,6 +118,9 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 "--group", f"realy-flink-{run_id}" if fresh and run_id else "realy-flink", "--scoring-config", scoring,
                 "--checkpoint-ms", str(int(os.environ.get("FLINK_CHECKPOINT_MS", "10000"))),
                 "--exactly-once", "true" if sc.exactly_once else "false"]
+        # online-store blobs carrying aggregator state (exact gateway features); "none" = values only
+        if os.environ.get("FLINK_STORE_STATE"):
+            args += ["--store-state", os.environ["FLINK_STORE_STATE"]]
         body = {"entryClass": ENTRY, "programArgsList": args, "parallelism": par}
         if savepoint:
             body.update({"savepointPath": savepoint, "allowNonRestoredState": True})

@@ -17,8 +17,13 @@ import java.util.List;
 public final class FeatureAssembler {
     public record Lookup(List<String> keys, List<String> entities, List<Boolean> profile) {}
 
+    /**
+     * @param storeBytes  bytes of online-store blobs used (sizing: Redis egress per event)
+     * @param stateReads  stream entities served by re-windowing a state blob (exact) rather than by
+     *                    stored values
+     */
     public record Assembled(float[] values, byte[] missing, List<EntityFreshness> freshness,
-                            DerivedFeatures.CustomerAttrs attrs) {}
+                            DerivedFeatures.CustomerAttrs attrs, int storeBytes, int stateReads) {}
 
     private final FeatureSchema schema;
     private final List<EntityAggregator> aggregators = new ArrayList<>();
@@ -82,13 +87,18 @@ public final class FeatureAssembler {
         byte[] missing = new byte[(n + 7) / 8];
         List<EntityFreshness> fresh = new ArrayList<>(10);
         long t = e.getEventTimeUs();
+        int storeBytes = 0;
+        int stateReads = 0;
 
         if (precomputed == null) {
             for (EntityAggregator a : aggregators) {
                 StoreBlob blob = null;
                 long id = EventView.entityKey(e, a.entity());
                 int bi = id == 0 ? -1 : find(lk, a.entity(), false);
-                if (bi >= 0 && blobs != null && blobs[bi] != null) blob = StoreBlob.decode(blobs[bi]);
+                if (bi >= 0 && blobs != null && blobs[bi] != null) {
+                    blob = StoreBlob.decode(blobs[bi]);
+                    storeBytes += blobs[bi].length;
+                }
                 if (id == 0) {
                     for (int idx : a.featureIndices()) {
                         v[idx] = (float) schema.features.get(idx).defaultValue();
@@ -96,7 +106,9 @@ public final class FeatureAssembler {
                     }
                     continue;
                 }
-                fillStream(a, blob, e, filterMask, selfInclusion, t, v, missing);
+                // the lookup itself succeeded (an absent key means the store has never seen the entity)
+                boolean lookedUp = blobs != null && bi >= 0;
+                if (fillStream(a, blob, lookedUp, e, filterMask, selfInclusion, t, v, missing)) stateReads++;
                 fresh.add(freshness(a.entity(), FeatureSource.STREAM, blob));
             }
         }
@@ -105,6 +117,7 @@ public final class FeatureAssembler {
             String ent = en.getKey();
             int bi = find(lk, ent, true);
             StoreBlob blob = bi >= 0 && blobs != null && blobs[bi] != null ? StoreBlob.decode(blobs[bi]) : null;
+            if (blob != null) storeBytes += blobs[bi].length;
             List<FeatureSpec> specs = en.getValue();
             for (int i = 0; i < specs.size(); i++) {
                 FeatureSpec s = specs.get(i);
@@ -123,11 +136,37 @@ public final class FeatureAssembler {
             if (EventView.entityKey(e, ent) != 0) fresh.add(freshness(ent, FeatureSource.PROFILE, blob));
         }
         DerivedFeatures.compute(schema, e, attrs, v);
-        return new Assembled(v, missing, fresh, attrs);
+        return new Assembled(v, missing, fresh, attrs, storeBytes, stateReads);
     }
 
-    private void fillStream(EntityAggregator a, StoreBlob blob, TransactionEvent e, long mask, boolean selfInclusion,
-                            long t, float[] v, byte[] missing) {
+    /**
+     * Stream features of one entity from its online-store blob. Returns true when they were computed
+     * exactly from a state blob.
+     * <ul>
+     *   <li>state blob that already includes this event (Flink got there first): its stored values are
+     *       exactly what the inline path computed for this event;</li>
+     *   <li>state blob without it: re-window the stored aggregator state at the event's time and apply
+     *       the event (update-then-read) - identical code and semantics to the Flink-inline path;</li>
+     *   <li>no blob although the lookup succeeded: the store has never seen the entity, so the exact
+     *       values are those of a first event (with self-inclusion on);</li>
+     *   <li>values blob (v1): the stored values, approximated with the current event's contribution.</li>
+     * </ul>
+     */
+    private boolean fillStream(EntityAggregator a, StoreBlob blob, boolean lookedUp, TransactionEvent e, long mask,
+                               boolean selfInclusion, long t, float[] v, byte[] missing) {
+        if (blob != null && blob.hasState()) {
+            if (blob.lastEventId() == e.getEventId() && blob.values().length == a.featureIndices().length) {
+                int[] idx = a.featureIndices();
+                for (int i = 0; i < idx.length; i++) v[idx[i]] = blob.values()[i];
+            } else {
+                a.evaluate(blob.state(), e, mask, v);
+            }
+            return true;
+        }
+        if (blob == null && lookedUp && selfInclusion) {
+            a.evaluate(null, e, mask, v);
+            return false;
+        }
         int[] idx = a.featureIndices();
         List<FeatureSpec> specs = a.specs();
         boolean includesCurrent = blob != null && blob.asOfUs() >= t;
@@ -155,6 +194,7 @@ public final class FeatureAssembler {
             v[idx[i]] = (float) val;
             if (!have) setBit(missing, idx[i]);
         }
+        return false;
     }
 
     private static int find(Lookup lk, String entity, boolean profile) {

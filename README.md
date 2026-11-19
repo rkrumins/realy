@@ -95,7 +95,7 @@ The docs are rendered in the console (**Docs**) and on GitHub.
 | [Getting started](docs/getting-started.md) | [Architecture](docs/architecture.md) | [Running benchmarks](docs/running-benchmarks.md) | [Scenario schema](docs/reference/scenario-schema.md) |
 | [Console guide](docs/console-guide.md) | [Contracts](docs/contracts.md) | [Docker](docs/deployment-docker.md) | [Runtime config](docs/reference/config.md) |
 | [Scenarios](docs/scenarios.md) | [Synthetic data](docs/synthetic-data.md) | [Kubernetes](docs/deployment-kubernetes.md) · [GKE / L4](docs/k8s-l4.md) | [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/http-api.md) |
-| [Developer guide](docs/developer-guide.md) | [Latency budget](docs/latency-budget.md) | [Capacity planning](docs/capacity-planning.md) | [Features](docs/reference/features.md) · [Rules](docs/reference/rules.md) |
+| [Developer guide](docs/developer-guide.md) | [Latency budget](docs/latency-budget.md) | [Production & sizing](docs/production.md) · [Capacity planning](docs/capacity-planning.md) | [Features](docs/reference/features.md) · [Rules](docs/reference/rules.md) |
 | | | [Operations](docs/operations.md) · [Security](docs/security.md) | [Topics](docs/reference/topics.md) · [Scenarios](docs/reference/scenarios.md) |
 
 ## Repository

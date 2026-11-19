@@ -102,7 +102,11 @@ public final class FraudJob {
         if ("inline".equals(mode) || "both".equals(mode)) {
             s = s.filter(e -> !e.mirrored).name("skip-mirrored");
         }
-        s = features(s, entities, writeStore);
+        // entities whose online-store blob carries the aggregator state (exact re-windowing at read time);
+        // the rest store values only. Customer/card: low per-entity rates -> small blobs, must be exact.
+        List<String> stateEntities = Arrays.stream(p.get("store-state", Env.str("STORE_STATE", "customer,card")).split(","))
+                .map(String::trim).filter(x -> !x.isEmpty()).toList();
+        s = features(s, entities, writeStore, stateEntities);
         if (!"features".equals(mode)) s = s.filter(e -> !e.backfill).name("skip-backfill");
         if ("features".equals(mode)) {
             s.addSink(new org.apache.flink.streaming.api.functions.sink.legacy.DiscardingSink<>()).name("discard");
@@ -115,10 +119,15 @@ public final class FraudJob {
 
     /** Sequential keyed stages, one per entity (each keyBy = one network shuffle, measured). */
     public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore) {
+        return features(in, entities, writeStore, List.of());
+    }
+
+    public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore,
+                                                List<String> stateEntities) {
         DataStream<Envelope> s = in;
         for (String entity : entities) {
             s = s.keyBy(new EntityKey(entity))
-                    .process(new EntityFeatureFunction(entity, writeStore))
+                    .process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity)))
                     .uid("features-" + entity).name("features:" + entity);
         }
         return s;

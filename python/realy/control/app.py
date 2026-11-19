@@ -208,6 +208,7 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
 
     # ================================================================== runs
     def _summary(run_dir: Path) -> dict[str, Any]:
+        from ..report.compare import run_summary
         rep_p = run_dir / "report.json"
         key = str(run_dir)
         mt = max((p.stat().st_mtime for p in (rep_p, run_dir / "verify.json", run_dir / "run.json",
@@ -215,22 +216,7 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         hit = summary_cache.get(key)
         if hit and hit[0] == mt:
             return hit[1]
-        man = _json(run_dir / "manifest.json") or {}
-        rep = _json(rep_p) or {}
-        ver = _json(run_dir / "verify.json")
-        run = _json(run_dir / "run.json") or {}
-        s = rep.get("summary") or {}
-        out = {"run_id": run_dir.name, "scenario": man.get("scenario") or rep.get("scenario"),
-               "topology": man.get("topology") or rep.get("topology"),
-               "started_at": (man.get("t_start_us") or 0) / 1e6 or run_dir.stat().st_mtime,
-               "duration_s": man.get("duration_s"), "status": "done" if rep else ("running" if man else "incomplete"),
-               "verdict": s.get("verdict"), "reasons": s.get("reasons", []),
-               "achieved_tps": s.get("achieved_emit_tps"), "e2e_p50_ms": s.get("e2e_p50_ms"),
-               "e2e_p99_ms": s.get("e2e_p99_ms"), "hot_path_p99_ms": s.get("hot_path_p99_ms"),
-               "within_budget": s.get("within_budget"), "emitted": s.get("emitted"), "decided": s.get("decided"),
-               "missing": s.get("missing"), "duplicates": s.get("duplicates"),
-               "abort_reason": run.get("aborted"), "verify_passed": None if ver is None else ver.get("passed"),
-               "has_html": (run_dir / "report.html").exists()}
+        out = run_summary(run_dir)
         summary_cache[key] = (mt, out)
         return out
 
@@ -322,17 +308,9 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
 
     @app.get("/api/compare")
     def compare(a: str, b: str) -> dict[str, Any]:
+        from ..report.compare import compare_reports
         ra, rb = _json(_run_dir(a) / "report.json") or {}, _json(_run_dir(b) / "report.json") or {}
-        stages: dict[str, dict[str, Any]] = {}
-        for name in sorted(set(ra.get("stages", {})) | set(rb.get("stages", {}))):
-            sa, sb = ra.get("stages", {}).get(name, {}), rb.get("stages", {}).get(name, {})
-            row: dict[str, Any] = {}
-            for q in ("p50", "p99", "p999"):
-                va, vb = sa.get(q), sb.get(q)
-                row[f"a_{q}"], row[f"b_{q}"] = va, vb
-                row[f"d_{q}"] = (vb - va) if va is not None and vb is not None else None
-            stages[name] = row
-        return {"a": _summary(_run_dir(a)), "b": _summary(_run_dir(b)), "stages": stages,
+        return {"a": _summary(_run_dir(a)), "b": _summary(_run_dir(b)), "stages": compare_reports(ra, rb),
                 "levels": {"a": ra.get("levels", []), "b": rb.get("levels", [])},
                 "detection": {"a": ra.get("detection", {}), "b": rb.get("detection", {})}}
 

@@ -28,6 +28,8 @@ spec:
         - --allow-metrics=true
       ports:
         - { name: h2c, containerPort: 9000, protocol: TCP }
+      # g2-standard-8 has 8 vCPU, but GKE reserves some and the GPU / system DaemonSets take more:
+      # an 8-CPU request would never schedule. 6 leaves room (see `realy size`).
       resources:
-        requests: { cpu: "8", memory: 24Gi, nvidia.com/gpu: "1" }
-        limits: { cpu: "8", memory: 24Gi, nvidia.com/gpu: "1" }
+        requests: { cpu: "6", memory: 24Gi, nvidia.com/gpu: "1" }
+        limits: { cpu: "6", memory: 24Gi, nvidia.com/gpu: "1" }

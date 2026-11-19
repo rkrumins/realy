@@ -94,6 +94,7 @@ public final class StageMetrics implements AutoCloseable {
         String topic = Env.str("METRICS_TOPIC", "bench.metrics");
         publisher = Thread.ofPlatform().daemon().name("metrics-publisher").start(() -> {
             Map<String, Long> last = new ConcurrentHashMap<>();
+            ProcessCpu cpu = new ProcessCpu();
             long next = System.currentTimeMillis() / 1000 * 1000 + 1000;
             while (running) {
                 long sleep = next - System.currentTimeMillis();
@@ -114,6 +115,7 @@ public final class StageMetrics implements AutoCloseable {
                     snap.putCounters(k, now - prev);
                     snap.putCounters(k + "_total", now);
                 });
+                cpu.sample(snap);
                 recorders.forEach((k, r) -> {
                     Histogram h = r.getIntervalHistogram();
                     if (h.getTotalCount() == 0) return;
@@ -139,5 +141,51 @@ public final class StageMetrics implements AutoCloseable {
     public void close() {
         running = false;
         if (producer != null) producer.close(Duration.ofSeconds(2));
+    }
+
+    /**
+     * Resource cost of this process per 1 s window, published with the stage counters so that every
+     * run records CPU per event per component (capacity sizing, `realy size`):
+     * {@code cpu_ms} process CPU time used in the window, {@code cpus} CPUs the JVM may use
+     * (container limit aware), {@code throttled_ms} CFS throttling in the window (cgroup v2 or v1), and
+     * {@code heap_used_mb}.
+     */
+    static final class ProcessCpu {
+        private final java.lang.management.OperatingSystemMXBean os =
+                java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+        private final java.lang.management.MemoryMXBean mem = java.lang.management.ManagementFactory.getMemoryMXBean();
+        private long lastCpuNs = cpuNs();
+        private long lastThrottledUs = throttledUs();
+
+        private long cpuNs() {
+            return os instanceof com.sun.management.OperatingSystemMXBean sun ? sun.getProcessCpuTime() : -1;
+        }
+
+        void sample(MetricsSnapshot.Builder snap) {
+            long c = cpuNs();
+            if (c >= 0 && lastCpuNs >= 0) snap.putCounters("cpu_ms", (c - lastCpuNs) / 1e6);
+            lastCpuNs = c;
+            snap.putCounters("cpus", Runtime.getRuntime().availableProcessors());
+            long th = throttledUs();
+            if (th >= 0 && lastThrottledUs >= 0) snap.putCounters("throttled_ms", (th - lastThrottledUs) / 1e3);
+            lastThrottledUs = th;
+            snap.putCounters("heap_used_mb", mem.getHeapMemoryUsage().getUsed() / 1048576.0);
+        }
+
+        /** Cumulative CFS throttled time in microseconds, or -1 when no cgroup cpu.stat is readable. */
+        static long throttledUs() {
+            for (String f : new String[] {"/sys/fs/cgroup/cpu.stat", "/sys/fs/cgroup/cpu/cpu.stat",
+                    "/sys/fs/cgroup/cpu,cpuacct/cpu.stat"}) {
+                try {
+                    for (String line : java.nio.file.Files.readAllLines(java.nio.file.Path.of(f))) {
+                        if (line.startsWith("throttled_usec ")) return Long.parseLong(line.substring(15).trim());
+                        if (line.startsWith("throttled_time ")) return Long.parseLong(line.substring(15).trim()) / 1000;
+                    }
+                } catch (Exception ignored) {
+                    // not this cgroup layout
+                }
+            }
+            return -1;
+        }
     }
 }

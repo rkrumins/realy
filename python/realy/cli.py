@@ -62,6 +62,8 @@ def verify(run_dir: Path, clickhouse: Optional[str] = typer.Option(None, help="C
     from .verify.verify import render, verify_run
     v = verify_run(run_dir, clickhouse=clickhouse, max_events=max_events)
     typer.echo(render(v))
+    from .report.history import store
+    store(run_dir, clickhouse, log=lambda m: typer.echo(m, err=True))
     raise typer.Exit(0 if v.get("passed") else 1)
 
 
@@ -74,6 +76,69 @@ def budget(scenario: str, set_: list[str] = typer.Option([], "--set"), samples: 
     r = check(load_scenario(scenario, _overrides(set_)), n=samples)
     typer.echo(json.dumps(r, indent=1) if as_json else render(r))
     raise typer.Exit(0 if r["verdict"] != "INFEASIBLE" else 2)
+
+
+def _run_dir(ident: str) -> Path:
+    p = Path(ident)
+    if p.is_dir():
+        return p
+    from .runner.run import RUNS_DIR
+    if (RUNS_DIR / ident).is_dir():
+        return RUNS_DIR / ident
+    raise typer.BadParameter(f"no run directory {ident!r} (path or run id under {RUNS_DIR})")
+
+
+@app.command()
+def size(tps: float = typer.Option(10_000, help="steady-state events/s"),
+         peak: float = typer.Option(2.0, help="peak factor: the plan is sized for tps x peak"),
+         headroom: float = typer.Option(0.55, help="target utilisation of CPU-bound components"),
+         from_run: str = typer.Option("", "--from", help="run dir / id whose measured costs replace the assumptions"),
+         zones: int = typer.Option(3, help="zones (N+1 and rack-aware Kafka placement)"),
+         customers: int = typer.Option(10_000_000, help="active customers (state + online-store memory)"),
+         retention_days: int = typer.Option(30, help="ClickHouse audit retention"),
+         set_: list[str] = typer.Option([], "--set", help="override a cost, e.g. --set flink_cpu_ms=0.8"),
+         as_json: bool = typer.Option(False, "--json"),
+         write_overlay: Path = typer.Option(None, help="write a kustomize overlay (on top of overlays/gke-l4) here")):
+    """Capacity plan on GKE (+L4) for a target load, from measured per-event costs or documented assumptions."""
+    from .sizing import Inputs, plan, render
+    from .sizing import write_overlay as write
+    overrides = {k: float(v) for k, v in (kv.split("=", 1) for kv in set_)}
+    p = plan(Inputs(tps=tps, peak=peak, headroom=headroom, zones=zones, customers=customers,
+                    retention_days=retention_days, run=_run_dir(from_run) if from_run else None, overrides=overrides))
+    typer.echo(json.dumps(p, indent=1) if as_json else render(p))
+    if write_overlay:
+        typer.echo(f"overlay: {write(p, write_overlay)}", err=as_json)
+    raise typer.Exit(0 if p["latency"].get("verdict") != "INFEASIBLE" else 2)
+
+
+@app.command()
+def gate(run: str = typer.Argument(..., help="candidate run dir / id"),
+         baseline: str = typer.Option("", help="baseline run dir / id, or a baseline JSON (baselines/<scenario>.json)"),
+         save_baseline: Path = typer.Option(None, help="write RUN as a baseline file here and exit"),
+         p99_regress: float = typer.Option(0.10, help="max relative p99 increase"),
+         min_delta_ms: float = typer.Option(5.0, help="...and only beyond this many ms (noise floor)"),
+         within_drop: float = typer.Option(0.01, help="max drop of the share of events within budget"),
+         knee_drop: float = typer.Option(0.10, help="max relative drop of the knee TPS"),
+         recall_drop: float = typer.Option(0.02), precision_drop: float = typer.Option(0.05),
+         fpr_rise: float = typer.Option(0.01), cpu_regress: float = typer.Option(0.15, help="max CPU/event increase"),
+         max_duplicates: int = typer.Option(0), require_verify: bool = typer.Option(False),
+         as_json: bool = typer.Option(False, "--json")):
+    """Fail a run that regressed: verdict, loss, verify, and p99 / knee / detection / CPU-per-event vs a baseline."""
+    from .report.gate import Thresholds, gate as do_gate, load_baseline, render, save_baseline as save
+    run_dir = _run_dir(run)
+    if save_baseline:
+        typer.echo(f"baseline written: {save(run_dir, save_baseline)}")
+        raise typer.Exit(0)
+    base = None
+    if baseline:
+        bp = Path(baseline)
+        base = load_baseline(bp if bp.exists() else _run_dir(baseline))
+    g = do_gate(run_dir, base, Thresholds(p99_regress=p99_regress, min_delta_ms=min_delta_ms, within_drop=within_drop,
+                                         knee_drop=knee_drop, recall_drop=recall_drop, precision_drop=precision_drop,
+                                         fpr_rise=fpr_rise, cpu_regress=cpu_regress, max_duplicates=max_duplicates,
+                                         require_verify=require_verify))
+    typer.echo(json.dumps(g, indent=1) if as_json else render(g))
+    raise typer.Exit(0 if g["passed"] else 1)
 
 
 @app.command()

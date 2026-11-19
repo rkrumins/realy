@@ -147,6 +147,8 @@ class RunWorker:
                     fields["verify_passed"] = int(bool(v.get("passed")))
                     from ..verify.verify import render
                     self._log(run_id, render(v))
+                    from ..report.history import store
+                    store(self.runs_dir / run_id, log=lambda m: self._log(run_id, m))   # refresh with verify results
                 except Exception as e:  # noqa: BLE001
                     self._log(run_id, f"[console] verify failed: {e}")
             self.store.update(job["id"], **fields)

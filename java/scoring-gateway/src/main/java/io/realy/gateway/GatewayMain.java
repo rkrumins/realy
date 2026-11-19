@@ -46,7 +46,8 @@ public final class GatewayMain {
         holder.onChange(a -> model.configureBatching(a.cfg().getMicrobatchWindowUs(), a.cfg().getMicrobatchMax()));
 
         StageMetrics metrics = new StageMetrics("gateway", instance).startPublishing();
-        var orchestrator = new ScoringOrchestrator(schema, store, model, holder, instance, Env.lng("RUN_SEED", 42));
+        var orchestrator = new ScoringOrchestrator(schema, store, model, holder, instance, Env.lng("RUN_SEED", 42))
+                .metrics(metrics);
         var sink = new DecisionSink("gateway-" + instance);
         var pipeline = new Pipeline(orchestrator, sink, metrics);
 

@@ -252,6 +252,8 @@ SELECT run_id, toStartOfSecond(decided_at) AS second, count() AS decisions,
        countIf(degraded = 1) AS degraded, countIf(outcome = 'DECLINE') AS declines
 FROM realy.decisions GROUP BY run_id, second;
 """
+    from .report.history import ddl as runs_ddl
+    files["06_runs.sql"] = runs_ddl(HEADER)
     return files
 
 

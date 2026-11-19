@@ -1,0 +1,366 @@
+{
+ "uid": "realy-runs",
+ "title": "realy - run history",
+ "tags": [
+  "realy"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "time": {
+  "from": "now-30d",
+  "to": "now"
+ },
+ "refresh": "1m",
+ "templating": {
+  "list": [
+   {
+    "name": "scenario",
+    "type": "query",
+    "datasource": {
+     "type": "grafana-clickhouse-datasource",
+     "uid": "realy-clickhouse"
+    },
+    "multi": true,
+    "includeAll": true,
+    "current": {
+     "selected": true,
+     "text": "All",
+     "value": "$__all"
+    },
+    "query": "SELECT DISTINCT scenario FROM realy.runs ORDER BY scenario",
+    "refresh": 2
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "e2e p99 by scenario",
+   "description": "One point per run. A step up after a deploy is a regression; `realy gate` fails CI on it.",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "realy-clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "drawStyle": "line",
+      "showPoints": "always",
+      "pointSize": 6
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "realy-clickhouse"
+     },
+     "editorType": "sql",
+     "format": 0,
+     "queryType": "timeseries",
+     "rawSql": "SELECT started_at AS time, scenario, e2e_p99_ms FROM realy.runs FINAL WHERE $__timeFilter(started_at) AND scenario IN (${scenario:singlequote}) ORDER BY time"
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "hot-path p99 by scenario",
+   "description": "",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "realy-clickhouse"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "drawStyle": "line",
+      "showPoints": "always",
+      "pointSize": 6
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "realy-clickhouse"
+     },
+     "editorType": "sql",
+     "format": 0,
+     "queryType": "timeseries",
+     "rawSql": "SELECT started_at AS time, scenario, hot_path_p99_ms FROM realy.runs FINAL WHERE $__timeFilter(started_at) AND scenario IN (${scenario:singlequote}) ORDER BY time"
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "knee (TPS where p99 breaks)",
+   "description": "step-ramp / ramp runs: the load at which latency breaks the budget or a backlog builds",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "realy-clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "showPoints": "always",
+      "pointSize": 6
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "realy-clickhouse"
+     },
+     "editorType": "sql",
+     "format": 0,
+     "queryType": "timeseries",
+     "rawSql": "SELECT started_at AS time, scenario, knee_tps FROM realy.runs FINAL WHERE $__timeFilter(started_at) AND scenario IN (${scenario:singlequote}) AND knee_tps IS NOT NULL ORDER BY time"
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "CPU per event",
+   "description": "Input to `realy size`: a cost regression shows here before it shows up as latency",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "realy-clickhouse"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "drawStyle": "line",
+      "showPoints": "always",
+      "pointSize": 6
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "realy-clickhouse"
+     },
+     "editorType": "sql",
+     "format": 0,
+     "queryType": "timeseries",
+     "rawSql": "SELECT started_at AS time, concat(scenario, ' gateway') AS series, gateway_cpu_ms_per_event FROM realy.runs FINAL WHERE $__timeFilter(started_at) AND scenario IN (${scenario:singlequote}) AND gateway_cpu_ms_per_event IS NOT NULL UNION ALL SELECT started_at AS time, concat(scenario, ' flink') AS series, flink_cpu_ms_per_event FROM realy.runs FINAL WHERE $__timeFilter(started_at) AND scenario IN (${scenario:singlequote}) AND flink_cpu_ms_per_event IS NOT NULL ORDER BY time"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "detection quality",
+   "description": "",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "realy-clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "drawStyle": "line",
+      "showPoints": "always",
+      "pointSize": 6
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "realy-clickhouse"
+     },
+     "editorType": "sql",
+     "format": 0,
+     "queryType": "timeseries",
+     "rawSql": "SELECT started_at AS time, concat(scenario, ' recall') AS series, recall_flagged FROM realy.runs FINAL WHERE $__timeFilter(started_at) AND scenario IN (${scenario:singlequote}) AND recall_flagged IS NOT NULL UNION ALL SELECT started_at AS time, concat(scenario, ' FPR') AS series, false_positive_rate FROM realy.runs FINAL WHERE $__timeFilter(started_at) AND scenario IN (${scenario:singlequote}) AND false_positive_rate IS NOT NULL ORDER BY time"
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "feature exactness (verify)",
+   "description": "Served features vs independent recomputation: 1.0 on flink-inline; gateway topology with state blobs targets >= 0.99",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "realy-clickhouse"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "drawStyle": "line",
+      "showPoints": "always",
+      "pointSize": 6
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "realy-clickhouse"
+     },
+     "editorType": "sql",
+     "format": 0,
+     "queryType": "timeseries",
+     "rawSql": "SELECT started_at AS time, scenario, exact_set_agreement FROM realy.runs FINAL WHERE $__timeFilter(started_at) AND scenario IN (${scenario:singlequote}) AND exact_set_agreement IS NOT NULL ORDER BY time"
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "type": "table",
+   "title": "latest runs",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "realy-clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 24,
+    "w": 24,
+    "h": 10
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "realy-clickhouse"
+     },
+     "editorType": "sql",
+     "format": 1,
+     "queryType": "table",
+     "rawSql": "SELECT started_at, run_id, scenario, topology, verdict, achieved_tps, e2e_p99_ms, hot_path_p99_ms, within_budget, missing, duplicates, knee_tps, verify_passed, exact_set_agreement, git_sha FROM realy.runs FINAL WHERE $__timeFilter(started_at) AND scenario IN (${scenario:singlequote}) ORDER BY started_at DESC LIMIT 100"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true
+   }
+  }
+ ]
+}

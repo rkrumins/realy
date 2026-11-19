@@ -312,6 +312,9 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
     stop_mon = threading.Event()
     mon = threading.Thread(target=_metrics_monitor, args=(handle, sc, stop_mon, log), daemon=True)
     mon.start()
+    from .infra import InfraSampler
+    infra = InfraSampler(run_dir, ep.flink_rest if sc.topology != "echo-kafka" else None, log,
+                         max_s=sc.traffic.duration_s + sc.traffic.warmup_s + 3600).start()
     n_coll = collectors or max(1, int(sc.traffic.profile.tps // 15000) + (1 if sc.traffic.profile.tps % 15000 else 0))
     n_coll = min(n_coll, 6)
     ready = [ctx.Event() for _ in range(n_coll)]
@@ -428,6 +431,7 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
         except Exception:  # noqa: BLE001
             pass
     stop_mon.set()
+    infra.stop()
     handle.stop.set()
     for p in gens + ems + coll_procs:
         p.join(timeout=5)
@@ -440,6 +444,8 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
         rep = build_report(run_dir)
         summary["report"] = rep["summary"]
         log(rep["text"])
+        from ..report.history import store
+        store(run_dir, log=log)
     return summary
 
 

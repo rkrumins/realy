@@ -24,11 +24,15 @@ import org.apache.flink.util.Collector;
  * Keyed stage for one entity (customer, card, device, ...). Holds the entity's sparse window state
  * as one RocksDB value (real state I/O + serialization on every event), computes its features into
  * the envelope and, in `features` mode, writes the entity blob to the online store for the gateway.
+ * With {@code storeState} the blob also carries the aggregator state itself (StoreBlob v2), so the
+ * gateway re-windows it at each event's time and serves exact values instead of "as of the entity's
+ * last event" ones.
  * Events without the entity are keyed by event id (no hot "0" key) and get defaults.
  */
 public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Envelope, Envelope> {
     private final String entity;
     private final boolean writeStore;
+    private final boolean storeState;
     private transient EntityAggregator agg;
     private transient ValueState<byte[]> state;
     private transient RedisOnlineStore store;
@@ -38,8 +42,13 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
     private transient long ttlSeconds;
 
     public EntityFeatureFunction(String entity, boolean writeStore) {
+        this(entity, writeStore, false);
+    }
+
+    public EntityFeatureFunction(String entity, boolean writeStore, boolean storeState) {
         this.entity = entity;
         this.writeStore = writeStore;
+        this.storeState = storeState;
     }
 
     @Override
@@ -80,8 +89,12 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
                 long asOf = EntityAggregator.lastEventUs(next);
                 long w0 = BenchClock.nowUs();
                 long ingested = env.ingestUs;
-                store.setAll(List.of(StoreBlob.streamKey(entity, key)),
-                                List.of(new StoreBlob(schemaVersion, asOf, w0, vals).encode()), ttlSeconds)
+                StoreBlob blob = storeState
+                        ? new StoreBlob(schemaVersion, asOf, w0, vals, e.getEventId(), next)
+                        : new StoreBlob(schemaVersion, asOf, w0, vals);
+                byte[] bytes = blob.encode();
+                metrics.add("store_write_bytes", bytes.length);
+                store.setAll(List.of(StoreBlob.streamKey(entity, key)), List.of(bytes), ttlSeconds)
                         .whenComplete((v, err) -> {
                             long done = BenchClock.nowUs();
                             metrics.recordUs("feature_store_write", done - w0);

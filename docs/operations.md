@@ -65,6 +65,15 @@ the cause, and what the code or config now does about it.
 | Stop-with-savepoint fails and the old job keeps running | the savepoint failed mid-switch | the driver cancels the job, logs "state starts cold" and submits fresh ([runner/flink.py](../python/realy/runner/flink.py)) |
 | p99 climbs with load past the knee | queueing in the model server (workers, batching) | step-ramp finds the knee; see [capacity-planning.md](capacity-planning.md) and the `capacity-saturation` scenario |
 
+## Run history and gating
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `run history: not stored in ClickHouse` in a run log | ClickHouse unreachable, or the `realy.runs` table missing (a stack created before it existed) | `docker compose ... exec clickhouse clickhouse-client --multiquery < contracts/storage/clickhouse/06_runs.sql`; history is best-effort and never fails a run (`REALY_RUN_HISTORY=0` disables it) |
+| Grafana's `realy - run history` dashboard has no datasource | the ClickHouse plugin is downloaded from grafana.com at start (`GF_PLUGINS_PREINSTALL`); blocked egress prevents it | allow grafana.com, or bake the plugin into a Grafana image / mount it under `/var/lib/grafana/plugins` |
+| `realy gate` fails `same scenario` | the baseline is from another scenario | gate against `baselines/<scenario>.json` (`realy gate RUN --save-baseline baselines/<scenario>.json` to adopt a run) |
+| `realy size` warns "measured at only N events/s" | the calibration run was too light: fixed per-process costs dominate | calibrate from a step-ramp that reaches the design rate on the target nodes |
+
 ## Day-2 tasks
 
 ```bash
