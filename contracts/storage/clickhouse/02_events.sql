@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS realy.events_queue (
   `credit_limit_usd` UInt32
 ) ENGINE = Kafka
 SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = 'payments.events.raw', kafka_group_name = 'clickhouse-events',
-         kafka_format = 'ProtobufSingle', kafka_schema = 'realy/payments/v1/transaction.proto:TransactionEvent', kafka_num_consumers = 4,
+         kafka_format = 'ProtobufSingle', kafka_schema = 'realy/payments/v1/transaction.proto:TransactionEvent', kafka_num_consumers = 2,
          kafka_flush_interval_ms = 1000, kafka_max_block_size = 65536, kafka_thread_per_consumer = 1,
          kafka_handle_error_mode = 'stream';
 

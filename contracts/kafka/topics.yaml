@@ -44,4 +44,6 @@ topics:
 client_latency_settings:
   producer: { linger.ms: 1, batch.size: 131072, compression.type: lz4, acks: all, enable.idempotence: true,
               partitioner: murmur2_random (librdkafka) / default (Java) -> identical partitioning }
-  consumer: { fetch.min.bytes: 1, fetch.max.wait.ms: 5, max.poll.records: 2000, enable.auto.commit: false }
+  # fetch.min.bytes=1 is what matters: the broker completes a pending fetch as soon as a record is
+  # appended, so fetch.max.wait.ms only bounds empty-fetch churn (100 ms) and adds no latency.
+  consumer: { fetch.min.bytes: 1, fetch.max.wait.ms: 100, max.poll.records: 2000, enable.auto.commit: false }

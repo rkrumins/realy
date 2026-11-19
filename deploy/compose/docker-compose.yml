@@ -35,7 +35,8 @@ services:
       KAFKA_NUM_IO_THREADS: 8
       KAFKA_HEAP_OPTS: "-Xms1g -Xmx1g"
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      # plain TCP probe: the kafka-*.sh tools start a full JVM per check (~20% of a core at 5 s intervals)
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9092' || exit 1"]
       interval: 5s
       retries: 30
 
@@ -52,8 +53,9 @@ services:
     profiles: [core]
     image: redis:8.8-alpine
     ports: ["6379:6379"]
+    # io-threads busy-poll; only worth it above ~100k ops/s on dedicated cores
     command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "3gb",
-              "--maxmemory-policy", "allkeys-lru", "--io-threads", "2"]
+              "--maxmemory-policy", "allkeys-lru"]
 
   mock-model:
     profiles: [pipeline]
@@ -90,7 +92,9 @@ services:
     image: flink:2.2.1-java21
     hostname: flink-jobmanager
     ports: ["8081:8081"]
-    command: jobmanager
+    # named volume is root-owned: hand it to the flink user before the stock entrypoint drops privileges
+    user: "0:0"
+    entrypoint: ["bash", "-c", "mkdir -p /checkpoints/savepoints && chown -R flink:flink /checkpoints && exec /docker-entrypoint.sh jobmanager"]
     environment:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
@@ -106,9 +110,14 @@ services:
   flink-taskmanager:
     profiles: [pipeline]
     image: flink:2.2.1-java21
-    command: taskmanager
+    user: "0:0"
+    entrypoint: ["bash", "-c", "chown -R flink:flink /checkpoints && exec /docker-entrypoint.sh taskmanager"]
     depends_on: [flink-jobmanager]
     environment:
+      KAFKA_BOOTSTRAP: kafka:29092
+      REDIS_URI: redis://redis:6379
+      MODEL_TARGET: mock-model:8001
+      RUN_SEED: "42"
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: 4

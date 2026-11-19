@@ -5,7 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -23,7 +23,11 @@ public final class ControlSubscriber implements AutoCloseable {
     private final Thread thread;
     private volatile boolean running = true;
 
-    public ControlSubscriber(String role, Consumer<ControlMessage> listener) {
+    /**
+     * @param listener receives the parsed message and its raw JSON tree (so config commands can be
+     *                 applied with {@link ProtoJson#overlay} presence semantics)
+     */
+    public ControlSubscriber(String role, BiConsumer<ControlMessage, com.fasterxml.jackson.databind.JsonNode> listener) {
         String topic = Env.str("CONTROL_TOPIC", "bench.control");
         var props = KafkaProps.consumer("control-" + role + "-" + UUID.randomUUID(), role + "-control");
         props.put("auto.offset.reset", "earliest");
@@ -49,10 +53,11 @@ public final class ControlSubscriber implements AutoCloseable {
                     for (ConsumerRecord<byte[], byte[]> r : consumer.poll(Duration.ofMillis(250))) {
                         if (r.value() == null) continue;
                         try {
-                            var msg = ProtoJson.mergeJson(new String(r.value(), StandardCharsets.UTF_8), ControlMessage.newBuilder()).build();
+                            String json = new String(r.value(), StandardCharsets.UTF_8);
+                            var msg = ProtoJson.mergeJson(json, ControlMessage.newBuilder()).build();
                             String t = msg.getTarget();
                             if (t.isEmpty() || t.equals("*") || t.equals(role)) {
-                                listener.accept(msg);
+                                listener.accept(msg, ProtoJson.jsonMapper().readTree(json));
                             }
                         } catch (Exception e) {
                             LOG.warn("bad control message at offset {}: {}", r.offset(), e.toString());

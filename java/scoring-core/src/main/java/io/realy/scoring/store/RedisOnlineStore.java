@@ -21,9 +21,30 @@ public final class RedisOnlineStore implements OnlineStore {
     private final StatefulRedisConnection<byte[], byte[]>[] conns;
     private final AtomicInteger rr = new AtomicInteger();
 
-    @SuppressWarnings("unchecked")
+    private static final java.util.Map<String, RedisOnlineStore> SHARED = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicInteger refs = new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * One client per JVM and URI (Flink runs many operator instances per TaskManager: a client each
+     * would mean dozens of Netty event loops competing for the same cores). Reference counted.
+     */
+    public static RedisOnlineStore shared(String uri, int connections) {
+        RedisOnlineStore s = SHARED.computeIfAbsent(uri, u -> new RedisOnlineStore(u, connections,
+                Math.max(2, Runtime.getRuntime().availableProcessors() / 2)));
+        s.refs.incrementAndGet();
+        return s;
+    }
+
     public RedisOnlineStore(String uri, int connections) {
-        client = RedisClient.create(uri);
+        this(uri, connections, 0);
+    }
+
+    @SuppressWarnings("unchecked")
+    public RedisOnlineStore(String uri, int connections, int ioThreads) {
+        client = ioThreads > 0
+                ? RedisClient.create(io.lettuce.core.resource.DefaultClientResources.builder()
+                        .ioThreadPoolSize(ioThreads).computationThreadPoolSize(ioThreads).build(), uri)
+                : RedisClient.create(uri);
         conns = new StatefulRedisConnection[Math.max(1, connections)];
         for (int i = 0; i < conns.length; i++) conns[i] = client.connect(ByteArrayCodec.INSTANCE);
     }
@@ -61,6 +82,8 @@ public final class RedisOnlineStore implements OnlineStore {
 
     @Override
     public void close() {
+        if (SHARED.containsValue(this) && refs.decrementAndGet() > 0) return;
+        SHARED.values().remove(this);
         for (var c : conns) c.close();
         client.shutdown();
     }

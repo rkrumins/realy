@@ -42,9 +42,7 @@ public final class ScoringConfigHolder {
 
     /** Merge a (partial) proto3-JSON ScoringConfig onto the current one. */
     public synchronized String update(String json) {
-        ScoringConfig.Builder b = active.cfg().toBuilder();
-        ProtoJson.mergeJson(json, b);
-        set(b.build());
+        set(ProtoJson.overlay(active.cfg(), json));
         return ProtoJson.print(active.cfg());
     }
 

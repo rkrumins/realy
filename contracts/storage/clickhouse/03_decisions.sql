@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS realy.decisions_queue (
   `trace.spans.dur_us` Array(Int32)
 ) ENGINE = Kafka
 SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = 'payments.decisions', kafka_group_name = 'clickhouse-decisions',
-         kafka_format = 'ProtobufSingle', kafka_schema = 'realy/scoring/v1/decision.proto:DecisionRecord', kafka_num_consumers = 4,
+         kafka_format = 'ProtobufSingle', kafka_schema = 'realy/scoring/v1/decision.proto:DecisionRecord', kafka_num_consumers = 2,
          kafka_flush_interval_ms = 1000, kafka_max_block_size = 65536, kafka_thread_per_consumer = 1,
          kafka_handle_error_mode = 'stream';
 

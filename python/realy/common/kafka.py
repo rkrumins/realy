@@ -48,7 +48,7 @@ def consumer_conf(group: str, **over: Any) -> dict[str, Any]:
         "group.id": group,
         "enable.auto.commit": False,
         "auto.offset.reset": "latest",
-        "fetch.wait.max.ms": 5,
+        "fetch.wait.max.ms": 100,  # min.bytes=1 => broker answers on append; no latency cost
         "fetch.min.bytes": 1,
         "queued.min.messages": 20000,
         "enable.partition.eof": False,
@@ -68,9 +68,11 @@ def make_consumer(group: str, **over: Any) -> Consumer:
 def ensure_topics(replication: int | None = None, partitions_override: int | None = None) -> list[str]:
     """Create contract topics if missing. Single-broker stacks pass replication=1."""
     spec = yaml.safe_load(TOPICS_PATH.read_text())
-    rf = replication or int(os.environ.get("KAFKA_REPLICATION", spec["defaults"]["replication_factor"]))
     admin = AdminClient({"bootstrap.servers": bootstrap()})
-    existing = set(admin.list_topics(timeout=10).topics)
+    md = admin.list_topics(timeout=10)
+    existing = set(md.topics)
+    rf = replication or int(os.environ.get("KAFKA_REPLICATION", spec["defaults"]["replication_factor"]))
+    rf = max(1, min(rf, len(md.brokers)))  # dev stacks run a single broker
     new = []
     for name, t in spec["topics"].items():
         if name in existing:
@@ -83,6 +85,8 @@ def ensure_topics(replication: int | None = None, partitions_override: int | Non
         parts = int(t["partitions"])
         if partitions_override and parts > 6:
             parts = partitions_override
+        elif len(md.brokers) == 1 and parts > 12:
+            parts = 12  # single-broker dev stack (matches deploy/compose/kafka/create-topics.sh)
         new.append(NewTopic(name, num_partitions=parts, replication_factor=rf, config=cfg))
     if new:
         for name, fut in admin.create_topics(new).items():

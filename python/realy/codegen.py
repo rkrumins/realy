@@ -50,7 +50,7 @@ def _enum(name: str, col: str) -> str:
     return f"arrayElement([{arr}], toInt32({col}) + 1)"
 
 
-def generate(consumers: int = 4) -> dict[str, str]:
+def generate(consumers: int = 2) -> dict[str, str]:
     schema = load_schema()
     files: dict[str, str] = {}
     files["01_database.sql"] = HEADER + "CREATE DATABASE IF NOT EXISTS realy;\n"
@@ -250,7 +250,7 @@ FROM realy.decisions GROUP BY run_id, second;
     return files
 
 
-def write(consumers: int = 4) -> list[Path]:
+def write(consumers: int = 2) -> list[Path]:
     OUT.mkdir(parents=True, exist_ok=True)
     out = []
     for name, sql in generate(consumers).items():

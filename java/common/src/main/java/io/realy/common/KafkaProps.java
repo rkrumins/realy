@@ -45,7 +45,9 @@ public final class KafkaProps {
         p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
         p.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, Env.str("KAFKA_OFFSET_RESET", "latest"));
         p.put(ConsumerConfig.FETCH_MIN_BYTES_CONFIG, "1");
-        p.put(ConsumerConfig.FETCH_MAX_WAIT_MS_CONFIG, Env.str("KAFKA_FETCH_MAX_WAIT_MS", "5"));
+        // fetch.min.bytes=1: the broker completes a waiting fetch as soon as a record is appended, so a
+        // long max wait costs no latency (only fetch.min.bytes > 1 would) while avoiding empty-fetch churn.
+        p.put(ConsumerConfig.FETCH_MAX_WAIT_MS_CONFIG, Env.str("KAFKA_FETCH_MAX_WAIT_MS", "100"));
         p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, Env.str("KAFKA_MAX_POLL_RECORDS", "2000"));
         p.put(ConsumerConfig.MAX_PARTITION_FETCH_BYTES_CONFIG, Integer.toString(4 << 20));
         return p;

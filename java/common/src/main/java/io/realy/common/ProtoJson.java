@@ -42,6 +42,30 @@ public final class ProtoJson {
         return path.toString().endsWith(".json") ? mergeJson(text, builder) : mergeYaml(text, builder);
     }
 
+    /**
+     * Overlay semantics for config updates: every field PRESENT in {@code json} replaces the current
+     * value (including zero/false, which proto3 mergeFrom cannot express); absent fields are kept.
+     * Message-typed fields are replaced as a whole.
+     */
+    @SuppressWarnings("unchecked")
+    public static <M extends Message> M overlay(M base, String json) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = JSON.readTree(json);
+            Message.Builder fresh = base.newBuilderForType();
+            PARSER.merge(json, fresh);
+            Message parsed = fresh.build();
+            Message.Builder out = base.toBuilder();
+            for (var fd : base.getDescriptorForType().getFields()) {
+                if (node.has(fd.getName()) || node.has(fd.getJsonName())) {
+                    out.setField(fd, parsed.getField(fd));
+                }
+            }
+            return (M) out.build();
+        } catch (IOException e) {
+            throw new IllegalArgumentException("invalid " + base.getDescriptorForType().getFullName() + ": " + e.getMessage(), e);
+        }
+    }
+
     public static String print(com.google.protobuf.MessageOrBuilder m) {
         try {
             return PRINTER.print(m);

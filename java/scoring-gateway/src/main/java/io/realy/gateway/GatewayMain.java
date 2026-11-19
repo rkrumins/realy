@@ -74,10 +74,8 @@ public final class GatewayMain {
         server.start().join();
 
         KafkaIngress ingress = new KafkaIngress(pipeline, metrics).start();
-        new ControlSubscriber("gateway", msg -> {
-            if (msg.hasScoring()) {
-                holder.set(holder.get().cfg().toBuilder().mergeFrom(msg.getScoring()).build());
-            }
+        new ControlSubscriber("gateway", (msg, raw) -> {
+            if (msg.hasScoring()) holder.update(raw.get("scoring").toString());
             if (msg.hasIngress()) ingress.setEnabled(msg.getIngress().getKafkaEnabled());
             if (!msg.getRunId().isEmpty()) metrics.setRunId(msg.getRunId());
         });

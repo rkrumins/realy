@@ -125,10 +125,12 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             feats_ids.clear(); feats_vals.clear(); feats_missing.clear()
 
     while True:
-        # Never block for a full batch: librdkafka prefetches in the background, so a near-zero
-        # timeout returns whatever has arrived. A blocking batch wait would add up to `timeout`
-        # of artificial egress latency at low rates (an instrument artefact, not pipeline latency).
-        msgs = consumer.consume(num_messages=500, timeout=0.0005)
+        # Block only until the FIRST message (poll returns as soon as one is available), then drain
+        # whatever else librdkafka has prefetched without waiting. A batch consume(n, timeout) would
+        # wait for n messages or the full timeout -> artificial egress latency at low rates; a
+        # near-zero timeout loop would burn a core. Neither is acceptable in a measuring instrument.
+        first = consumer.poll(0.05)
+        msgs = [first] + consumer.consume(num_messages=1000, timeout=0) if first is not None else []
         t_recv = now_us()
         if msgs:
             last_msg = time.time()

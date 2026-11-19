@@ -39,16 +39,14 @@ public final class MockModelServerMain {
         new AdminHttp(Env.integer("ADMIN_PORT", 8002), metrics.registry(),
                 () -> ProtoJson.print(svc.config()),
                 body -> {
-                    ModelServerConfig.Builder b = svc.config().toBuilder();
-                    ProtoJson.mergeJson(body, b);
-                    svc.configure(b.build());
-                    LOG.info("model server config updated: {}", ProtoJson.print(b));
-                    return ProtoJson.print(b);
+                    svc.configure(ProtoJson.overlay(svc.config(), body));
+                    LOG.info("model server config updated: {}", ProtoJson.print(svc.config()));
+                    return ProtoJson.print(svc.config());
                 }).start();
-        new ControlSubscriber("model", msg -> {
+        new ControlSubscriber("model", (msg, raw) -> {
             if (msg.hasModelServer()) {
-                svc.configure(svc.config().toBuilder().mergeFrom(msg.getModelServer()).build());
-                LOG.info("model server config from control topic v{}", msg.getVersion());
+                svc.configure(ProtoJson.overlay(svc.config(), raw.get("model_server").toString()));
+                LOG.info("model server config from control topic v{}: {}", msg.getVersion(), ProtoJson.print(svc.config()));
             }
             if (!msg.getRunId().isEmpty()) metrics.setRunId(msg.getRunId());
         });
