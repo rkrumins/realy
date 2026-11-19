@@ -75,10 +75,16 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
                 log(f"{name} config applied ({len(body)} keys)")
             except Exception as e:  # noqa: BLE001
                 log(f"warn: could not push {name} config via admin HTTP ({e}); relying on bench.control")
+    if sc.flink_state == "fresh":
+        try:
+            from .seed import clear_stream_blobs
+            log(f"fresh state: removed {clear_stream_blobs():,} online-store stream blobs")
+        except Exception as e:  # noqa: BLE001
+            log(f"warn: could not clear online-store stream blobs ({e})")
     if sc.topology == "flink-inline" or sc.topology.startswith("gateway"):
         try:
             from .flink import ensure_jobs
-            ensure_jobs(sc, ep.flink_rest, log)
+            ensure_jobs(sc, ep.flink_rest, log, run_id=run_id)
         except Exception as e:  # noqa: BLE001
             log(f"warn: flink job management skipped: {e}")
 

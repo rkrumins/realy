@@ -10,12 +10,13 @@ SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = 'payments.l
          kafka_handle_error_mode = 'stream';
 
 CREATE TABLE IF NOT EXISTS realy.labels (
-  event_id UInt64, label_time DateTime64(6), event_time DateTime64(6), is_fraud UInt8,
+  run_id LowCardinality(String), event_id UInt64, label_time DateTime64(6), event_time DateTime64(6), is_fraud UInt8,
   fraud_type LowCardinality(String), campaign_id UInt64, source Int8, customer_id UInt64, card_id UInt64,
   amount_usd_minor Int64, ingested_at DateTime64(6) DEFAULT now64(6)
-) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY event_id;
+) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (run_id, event_id);
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS realy.labels_mv TO realy.labels AS
-SELECT event_id, fromUnixTimestamp64Micro(label_time_us) AS label_time, fromUnixTimestamp64Micro(event_time_us) AS event_time,
+SELECT arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
+       event_id, fromUnixTimestamp64Micro(label_time_us) AS label_time, fromUnixTimestamp64Micro(event_time_us) AS event_time,
        is_fraud, arrayElement(['NONE', 'CARD_TESTING', 'ACCOUNT_TAKEOVER', 'LOST_STOLEN', 'COUNTERFEIT', 'MERCHANT_BREACH', 'ATM_CASHOUT', 'APP_SCAM_MULE', 'BUST_OUT', 'BOT_ECOM', 'FRIENDLY_FRAUD'], toInt32(fraud_type) + 1) AS fraud_type, campaign_id, source, customer_id, card_id, amount_usd_minor
 FROM realy.labels_queue WHERE length(_error) = 0;

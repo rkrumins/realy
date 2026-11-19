@@ -18,3 +18,4 @@ model_server:
   workers: 64
   max_batch: 1
 budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }
+flink_state: fresh

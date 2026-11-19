@@ -89,7 +89,7 @@ def desired_mode(sc: Scenario) -> str | None:
 
 
 def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = print, parallelism: int | None = None,
-                force: bool = False) -> str | None:
+                force: bool = False, run_id: str | None = None) -> str | None:
     mode = desired_mode(sc)
     if not rest or mode is None:
         return None
@@ -101,15 +101,20 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
         running = _running(c)
         want = f"realy-{mode}"
         jar, new_code = _jar_id(c)
-        if any(j["name"] == want for j in running) and mode == "features" and not new_code and not force:
+        fresh = sc.flink_state == "fresh"
+        if any(j["name"] == want for j in running) and mode == "features" and not new_code and not force and not fresh:
             log(f"flink: {want} already running")
             return [j["jid"] for j in running if j["name"] == want][0]
         savepoint = None
         for j in running:
+            if fresh:
+                log(f"flink: cancelling {j['name']} (fresh state requested)")
+                _cancel(c, j["jid"])
+                continue
             log(f"flink: stopping {j['name']} with savepoint{' (new job jar)' if new_code else ''}")
             savepoint = _stop_with_savepoint(c, j["jid"], log) or savepoint
         args = ["--mode", mode, "--parallelism", str(par), "--bootstrap", os.environ.get("FLINK_KAFKA_BOOTSTRAP", "kafka:29092"),
-                "--group", "realy-flink", "--scoring-config", scoring,
+                "--group", f"realy-flink-{run_id}" if fresh and run_id else "realy-flink", "--scoring-config", scoring,
                 "--checkpoint-ms", str(int(os.environ.get("FLINK_CHECKPOINT_MS", "10000")))]
         body = {"entryClass": ENTRY, "programArgsList": args, "parallelism": par}
         if savepoint:

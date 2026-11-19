@@ -150,6 +150,9 @@ class Scenario(_Model):
     guardrails: GuardrailSpec = Field(default_factory=GuardrailSpec)
     feature_sample_permille: int = 1000
     sync: SyncSpec = Field(default_factory=SyncSpec)
+    # warm: keep Flink keyed state + online-store blobs from earlier runs (realistic state size)
+    # fresh: start from empty state so `realy verify` can demand exact feature equality
+    flink_state: Literal["warm", "fresh"] = "warm"
     expect: dict[str, Any] = Field(default_factory=dict)  # e.g. {verdict: FAIL}
 
     @model_validator(mode="after")

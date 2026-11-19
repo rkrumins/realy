@@ -36,6 +36,7 @@ SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = 'payments.e
          kafka_handle_error_mode = 'stream';
 
 CREATE TABLE IF NOT EXISTS realy.events_raw (
+  run_id LowCardinality(String),
   `event_id` UInt64,
   `event_time_us` Int64,
   `payment_type` LowCardinality(String),
@@ -68,11 +69,12 @@ CREATE TABLE IF NOT EXISTS realy.events_raw (
   ingested_at DateTime64(6) DEFAULT now64(6)
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMMDD(fromUnixTimestamp64Micro(event_time_us))
-ORDER BY (customer_id, event_id)
+ORDER BY (customer_id, run_id, event_id)
 TTL toDateTime(ingested_at) + INTERVAL 30 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS realy.events_mv TO realy.events_raw AS
 SELECT
+  arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
   `event_id`,
   `event_time_us`,
   arrayElement(['UNSPECIFIED', 'CARD_PURCHASE', 'ATM_WITHDRAWAL', 'TRANSFER', 'CARD_REFUND'], toInt32(payment_type) + 1) AS `payment_type`,

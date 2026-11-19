@@ -176,6 +176,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str) -> dict[str, Any]:
 
     BT = trace_pb2.BenchTrace
     run_id = plan.run_id
+    run_b = run_id.encode()
     t0 = plan.t_start_us
     ts = plan.time_scale
     sim0 = plan.sim_start_us
@@ -228,7 +229,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str) -> dict[str, Any]:
                          payload_crc32=zlib.crc32(payload)).SerializeToString()
                 while True:
                     try:
-                        producer.produce(topic, payload, keys[i], headers=[("x-bench-trace", hdr)],
+                        producer.produce(topic, payload, keys[i], headers=[("x-bench-trace", hdr), ("x-run-id", run_b)],
                                          timestamp=intended // 1000, on_delivery=partial(on_delivery, pos))
                         break
                     except BufferError:
@@ -243,7 +244,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str) -> dict[str, Any]:
             sim_now = sim0 + int((now - t0) * ts)
             while labels_heap and labels_heap[0][0] <= sim_now:
                 _, lb = heapq.heappop(labels_heap)
-                producer.produce(LABELS, lb)
+                producer.produce(LABELS, lb, headers=[("x-run-id", run_b)])
                 labels_sent += 1
         producer.poll(0)
         if now >= next_metrics:
@@ -265,7 +266,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str) -> dict[str, Any]:
 
     # flush remaining labels (so the training view has ground truth) and all deliveries
     while labels_heap:
-        producer.produce(LABELS, heapq.heappop(labels_heap)[1])
+        producer.produce(LABELS, heapq.heappop(labels_heap)[1], headers=[("x-run-id", run_b)])
         labels_sent += 1
         if labels_sent % 10000 == 0:
             producer.poll(0)

@@ -2,17 +2,17 @@
 
 -- Point-in-time correct training set: features exactly as served at decision time + delayed labels.
 CREATE OR REPLACE VIEW realy.v_training_dataset AS
-SELECT d.event_id, d.event_time, d.customer_id, d.card_id, d.amount_usd_minor, d.payment_type, d.channel,
+SELECT d.run_id, d.event_id, d.event_time, d.customer_id, d.card_id, d.amount_usd_minor, d.payment_type, d.channel,
        d.outcome, d.score, d.model_version, d.feature_schema_version, d.f_cust_count_1h, d.f_cust_count_24h, d.f_cust_amount_sum_24h, d.f_cust_amount_avg_30d, d.f_cust_distinct_countries_24h, d.f_cust_device_novel, d.f_cust_payee_novel, d.f_cust_ip_country_novel, d.f_cust_transfer_count_1h, d.f_cust_transfer_sum_24h, d.f_card_count_1m, d.f_card_count_5m, d.f_card_count_1h, d.f_card_count_24h, d.f_card_amount_sum_1h, d.f_card_amount_sum_24h, d.f_card_amount_max_7d, d.f_card_small_cnp_count_10m, d.f_card_distinct_merchants_10m, d.f_card_distinct_merchants_24h, d.f_card_contactless_count_30m, d.f_card_contactless_sum_30m, d.f_card_atm_count_1h, d.f_card_atm_sum_24h, d.f_card_geo_speed_kmh, d.f_card_secs_since_last, d.f_dev_count_5m, d.f_dev_distinct_cards_1h, d.f_dev_distinct_customers_24h, d.f_ip_count_5m, d.f_ip_distinct_cards_1h, d.f_merch_count_1m, d.f_merch_small_cnp_count_5m, d.f_merch_amount_sum_1h, d.f_term_count_5m, d.f_term_atm_sum_1h, d.f_payee_inbound_count_1h, d.f_payee_inbound_sum_24h, d.f_payee_distinct_senders_24h, d.f_cust_tenure_days, d.f_cust_segment, d.f_cust_avg_ticket_usd, d.f_merch_risk_tier, d.f_merch_fraud_rate_30d, d.f_amount_usd, d.f_is_cnp, d.f_is_contactless, d.f_is_atm, d.f_is_transfer, d.f_is_foreign, d.f_dist_from_home_km, d.f_amount_to_avg_ratio, d.f_local_hour, d.f_credit_utilisation_24h,
        ifNull(l.is_fraud, 0) AS label_is_fraud, ifNull(l.fraud_type, 'NONE') AS label_fraud_type, l.label_time
 FROM (SELECT * FROM realy.decisions FINAL WHERE revision = 0) AS d
-LEFT JOIN (SELECT * FROM realy.labels FINAL) AS l ON l.event_id = d.event_id;
+LEFT JOIN (SELECT * FROM realy.labels FINAL) AS l ON l.run_id = d.run_id AND l.event_id = d.event_id;
 
 -- Audit completeness: transactions that never received a decision.
 CREATE OR REPLACE VIEW realy.v_audit_gaps AS
-SELECT e.event_id, e.customer_id, e.event_time_us, e.ingested_at
+SELECT e.run_id, e.event_id, e.customer_id, e.event_time_us, e.ingested_at
 FROM realy.events_raw AS e
-LEFT ANTI JOIN (SELECT DISTINCT event_id FROM realy.decisions) AS d ON d.event_id = e.event_id;
+LEFT ANTI JOIN (SELECT DISTINCT run_id, event_id FROM realy.decisions) AS d ON d.run_id = e.run_id AND d.event_id = e.event_id;
 
 -- Per-second latency/throughput from the audit log (independent second measurement).
 CREATE OR REPLACE VIEW realy.v_latency_by_second AS

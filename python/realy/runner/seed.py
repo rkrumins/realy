@@ -48,3 +48,18 @@ def seed_profiles(world: World, force: bool = False, r: redis.Redis | None = Non
         n += ids.shape[0]
     r.set(marker, now)
     return n
+
+
+def clear_stream_blobs(r: redis.Redis | None = None) -> int:
+    """Delete all Flink-written stream feature blobs (fs:*), keeping the seeded profiles (pf:*)."""
+    r = r or redis_client()
+    n = 0
+    batch = []
+    for k in r.scan_iter(match="fs:*", count=10000):
+        batch.append(k)
+        if len(batch) >= 5000:
+            n += r.unlink(*batch)
+            batch = []
+    if batch:
+        n += r.unlink(*batch)
+    return n

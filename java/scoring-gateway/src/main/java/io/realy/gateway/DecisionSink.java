@@ -55,7 +55,15 @@ public final class DecisionSink implements AutoCloseable {
         byte[] key = Long.toUnsignedString(e.getCustomerId()).getBytes(StandardCharsets.UTF_8);
         var rec = new ProducerRecord<byte[], byte[]>(eventsTopic, null, e.getEventTimeUs() / 1000, key, e.toByteArray());
         rec.headers().add(new RecordHeader("x-mirrored", new byte[] {1}));
-        if (traceHeader != null) rec.headers().add(new RecordHeader("x-bench-trace", traceHeader));
+        if (traceHeader != null) {
+            rec.headers().add(new RecordHeader("x-bench-trace", traceHeader));
+            try {
+                String run = io.realy.contracts.bench.v1.BenchTrace.parseFrom(traceHeader).getRunId();
+                rec.headers().add(new RecordHeader("x-run-id", run.getBytes(StandardCharsets.UTF_8)));
+            } catch (com.google.protobuf.InvalidProtocolBufferException ignored) {
+                // trace is optional
+            }
+        }
         producer.send(rec);
     }
 

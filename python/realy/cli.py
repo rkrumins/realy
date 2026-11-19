@@ -54,6 +54,16 @@ def report(run_dir: Path):
 
 
 @app.command()
+def verify(run_dir: Path, clickhouse: Optional[str] = typer.Option(None, help="ClickHouse HTTP URL"),
+           max_events: int = typer.Option(250_000, help="above this, verify a customer sample")):
+    """Independent correctness checks: features, CEL rule parity, score/outcome parity, ClickHouse audit."""
+    from .verify.verify import render, verify_run
+    v = verify_run(run_dir, clickhouse=clickhouse, max_events=max_events)
+    typer.echo(render(v))
+    raise typer.Exit(0 if v.get("passed") else 1)
+
+
+@app.command()
 def topics(replication: int = typer.Option(1)):
     """Create the contract topics (contracts/kafka/topics.yaml)."""
     from .common.kafka import ensure_topics

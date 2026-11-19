@@ -69,16 +69,18 @@ CREATE TABLE IF NOT EXISTS realy.events_queue (
 {KAFKA.format(topic='payments.events.raw', group='clickhouse-events', schema='realy/payments/v1/transaction.proto:TransactionEvent', consumers=consumers)};
 
 CREATE TABLE IF NOT EXISTS realy.events_raw (
+  run_id LowCardinality(String),
   {ev_t},
   event_time DateTime64(6) MATERIALIZED fromUnixTimestamp64Micro(event_time_us),
   ingested_at DateTime64(6) DEFAULT now64(6)
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMMDD(fromUnixTimestamp64Micro(event_time_us))
-ORDER BY (customer_id, event_id)
+ORDER BY (customer_id, run_id, event_id)
 TTL toDateTime(ingested_at) + INTERVAL 30 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS realy.events_mv TO realy.events_raw AS
 SELECT
+  arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
   {ev_sel}
 FROM realy.events_queue WHERE length(_error) = 0;
 """
@@ -92,6 +94,8 @@ FROM realy.events_queue WHERE length(_error) = 0;
         for k, n in STAGES.items())
     dq_event = ",\n  ".join(f"`event.{c}` {t}" for c, t in EVENT_COLS if c != "event_id")
     files["03_decisions.sql"] = HEADER + f"""
+-- Identity of a decision is (run_id, event_id): benchmark event ids are deterministic per world+seed and
+-- repeat across runs (production: run_id is empty and event_id is globally unique).
 -- Feature schema version {schema.version}: {len(schema.features)} features -> f_* columns (features_raw keeps the exact tensor).
 CREATE TABLE IF NOT EXISTS realy.decisions_queue (
   `event_id` UInt64,
@@ -172,7 +176,7 @@ CREATE TABLE IF NOT EXISTS realy.decisions (
   ingested_at DateTime64(6) DEFAULT now64(6)
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMMDD(event_time)
-ORDER BY (customer_id, event_id, revision)
+ORDER BY (customer_id, run_id, event_id, revision)
 TTL toDateTime(ingested_at) + INTERVAL 400 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS realy.decisions_mv TO realy.decisions AS
@@ -210,13 +214,14 @@ CREATE TABLE IF NOT EXISTS realy.labels_queue (
 {KAFKA.format(topic='payments.labels', group='clickhouse-labels', schema='realy/payments/v1/label.proto:FraudLabel', consumers=1)};
 
 CREATE TABLE IF NOT EXISTS realy.labels (
-  event_id UInt64, label_time DateTime64(6), event_time DateTime64(6), is_fraud UInt8,
+  run_id LowCardinality(String), event_id UInt64, label_time DateTime64(6), event_time DateTime64(6), is_fraud UInt8,
   fraud_type LowCardinality(String), campaign_id UInt64, source Int8, customer_id UInt64, card_id UInt64,
   amount_usd_minor Int64, ingested_at DateTime64(6) DEFAULT now64(6)
-) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY event_id;
+) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (run_id, event_id);
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS realy.labels_mv TO realy.labels AS
-SELECT event_id, fromUnixTimestamp64Micro(label_time_us) AS label_time, fromUnixTimestamp64Micro(event_time_us) AS event_time,
+SELECT arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
+       event_id, fromUnixTimestamp64Micro(label_time_us) AS label_time, fromUnixTimestamp64Micro(event_time_us) AS event_time,
        is_fraud, {_enum('fraud_type', 'fraud_type')} AS fraud_type, campaign_id, source, customer_id, card_id, amount_usd_minor
 FROM realy.labels_queue WHERE length(_error) = 0;
 """
@@ -226,17 +231,17 @@ FROM realy.labels_queue WHERE length(_error) = 0;
     files["05_views.sql"] = HEADER + f"""
 -- Point-in-time correct training set: features exactly as served at decision time + delayed labels.
 CREATE OR REPLACE VIEW realy.v_training_dataset AS
-SELECT d.event_id, d.event_time, d.customer_id, d.card_id, d.amount_usd_minor, d.payment_type, d.channel,
+SELECT d.run_id, d.event_id, d.event_time, d.customer_id, d.card_id, d.amount_usd_minor, d.payment_type, d.channel,
        d.outcome, d.score, d.model_version, d.feature_schema_version, {fnames},
        ifNull(l.is_fraud, 0) AS label_is_fraud, ifNull(l.fraud_type, 'NONE') AS label_fraud_type, l.label_time
 FROM (SELECT * FROM realy.decisions FINAL WHERE revision = 0) AS d
-LEFT JOIN (SELECT * FROM realy.labels FINAL) AS l ON l.event_id = d.event_id;
+LEFT JOIN (SELECT * FROM realy.labels FINAL) AS l ON l.run_id = d.run_id AND l.event_id = d.event_id;
 
 -- Audit completeness: transactions that never received a decision.
 CREATE OR REPLACE VIEW realy.v_audit_gaps AS
-SELECT e.event_id, e.customer_id, e.event_time_us, e.ingested_at
+SELECT e.run_id, e.event_id, e.customer_id, e.event_time_us, e.ingested_at
 FROM realy.events_raw AS e
-LEFT ANTI JOIN (SELECT DISTINCT event_id FROM realy.decisions) AS d ON d.event_id = e.event_id;
+LEFT ANTI JOIN (SELECT DISTINCT run_id, event_id FROM realy.decisions) AS d ON d.run_id = e.run_id AND d.event_id = e.event_id;
 
 -- Per-second latency/throughput from the audit log (independent second measurement).
 CREATE OR REPLACE VIEW realy.v_latency_by_second AS
