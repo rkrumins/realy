@@ -169,6 +169,80 @@ def _guardrails(handle: RunHandle, sc: Scenario, snap: dict, log) -> None:
         handle.stop.set()
 
 
+WARM_GATEWAY_DECISIONS = 20_000   # a gateway that has scored fewer events than this is still JIT-compiling
+WARM_FLINK_UPTIME_S = 90.0         # a Flink job younger than this is still restoring state / warming up
+
+
+def _gateway_decisions(admin: str | None) -> int | None:
+    if not admin:
+        return None
+    try:
+        text = httpx.get(f"{admin}/metrics", timeout=3).text
+    except Exception:  # noqa: BLE001
+        return None
+    for line in text.splitlines():
+        if line.startswith("realy_events_total") and 'counter="decisions"' in line:
+            return int(float(line.rsplit(" ", 1)[-1]))
+    return 0
+
+
+def _flink_job_uptime_s(rest: str | None) -> float | None:
+    if not rest:
+        return None
+    try:
+        jobs = httpx.get(f"{rest}/jobs/overview", timeout=3).json().get("jobs", [])
+    except Exception:  # noqa: BLE001
+        return None
+    up = [j.get("duration", 0) / 1000 for j in jobs if j.get("state") == "RUNNING" and str(j.get("name", "")).startswith("realy-")]
+    return min(up) if up else None
+
+
+def _wait_gateway_scored(admin: str | None, target: int, timeout_s: float) -> bool:
+    end = time.time() + min(timeout_s, 300.0)
+    while time.time() < end:
+        n = _gateway_decisions(admin)
+        if n is None or n >= target:
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def cold_pipeline(sc: Scenario, ep: Endpoints) -> list[str]:
+    """Why the pipeline under test is cold (empty list = warm). A cold JVM / freshly started Flink job
+    adds seconds of latency for the first ~15 s, which would land inside a short scenario's measured
+    window and fail it for reasons that have nothing to do with the pipeline's steady state."""
+    reasons = []
+    if sc.topology in ("gateway-kafka", "echo-kafka"):
+        n = _gateway_decisions(ep.gateway_admin)
+        if n is not None and n < WARM_GATEWAY_DECISIONS:
+            reasons.append(f"gateway has scored {n:,} events since it started")
+    if sc.topology in ("gateway-kafka", "gateway-grpc", "flink-inline"):
+        up = _flink_job_uptime_s(ep.flink_rest)
+        if up is not None and up < WARM_FLINK_UPTIME_S:
+            reasons.append(f"Flink job started {up:.0f} s ago")
+    return reasons
+
+
+def auto_prime_days(sc: Scenario, ep: Endpoints, world: Any, base_tps: float, log: Callable[[str], None]) -> float:
+    """Warm a cold pipeline with REALY_PRIME_S (default 30) seconds of history events paced at the
+    scenario's starting rate, scored by the pipeline and excluded from results like any backfill. Never for fresh-state runs (exact verification
+    replays only the run's own events) or when the scenario already backfills. REALY_AUTO_PRIME=0 disables."""
+    if (os.environ.get("REALY_AUTO_PRIME", "1") == "0" or sc.flink_state == "fresh" or sc.traffic.backfill_days
+            or sc.topology == "gateway-grpc"):  # the sync rail replays a compiled dataset; no backfill path
+        return 0.0
+    reasons = cold_pipeline(sc, ep)
+    if not reasons:
+        return 0.0
+    # paced at the scenario's starting rate: the broker, gateway, Flink and ClickHouse settle after
+    # ~25-30 s of steady traffic on a small host (an unpaced burst leaves catch-up work behind instead)
+    prime_s = float(os.environ.get("REALY_PRIME_S", "30"))
+    events = int(min(600_000, max(5_000, prime_s * base_tps)))
+    days = events / max(1e-9, natural_rate_total(world) * 86_400)
+    log(f"cold pipeline ({'; '.join(reasons)}): priming with ~{events:,} unmeasured history events "
+        f"paced at {base_tps:,.0f}/s (~{events / max(base_tps, 1):.0f} s)")
+    return days
+
+
 def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None = None,
                  log: Callable[[str], None] = print, handle: RunHandle | None = None,
                  collectors: int | None = None, report: bool = True) -> dict[str, Any]:
@@ -201,6 +275,10 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
     log(f"time scale {ts:.1f} sim-s per wall-s (natural rate {natural_rate_total(world):.1f} ev/sim-s)")
     apply_topology(sc, run_id, ep, log)
     time.sleep(float(os.environ.get("REALY_CONFIG_SETTLE_S", "2")))
+    prime_days = auto_prime_days(sc, ep, world, base_tps, log)
+    if prime_days:
+        sc.traffic.backfill_days = prime_days
+    gw_before = _gateway_decisions(ep.gateway_admin) if prime_days else None
 
     sync = sc.topology == "gateway-grpc"
     sim0 = sim_start_us(sc)
@@ -232,11 +310,14 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
     t_start = now_us() + 3_000_000
     plans = [ShardPlan(shard=s, n_shards=n_shards, run_id=run_id, run_dir=str(run_dir),
                        scenario=sc.model_dump(mode="json"), world_dir=str(sc.world_dir), t_start_us=t_start,
-                       time_scale=ts, sim_start_us=sim0, duration_s=sc.traffic.duration_s) for s in range(n_shards)]
+                       time_scale=ts, sim_start_us=sim0, duration_s=sc.traffic.duration_s,
+                       prime=bool(prime_days), extra={"prime_tps": base_tps / n_shards} if prime_days else {})
+             for s in range(n_shards)]
     manifest = {"run_id": run_id, "scenario": sc.name, "fingerprint": sc.fingerprint(), "topology": sc.topology,
                 "t_start_us": t_start, "warmup_s": sc.traffic.warmup_s, "duration_s": sc.traffic.duration_s,
                 "time_scale": ts, "sim_start_us": sim0, "shards": n_shards, "collectors": n_coll,
-                "world_hash": world.content_hash, "prepare_s": round(time.time() - t_prep, 2)}
+                "world_hash": world.content_hash, "prepare_s": round(time.time() - t_prep, 2),
+                "auto_prime": bool(prime_days)}
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=1))
     log(f"run {run_id}: {sc.topology}, {n_shards} emitter shard(s), {n_coll} collector(s), "
         f"{sc.traffic.duration_s:.0f}s ({sc.traffic.profile.kind} {sc.traffic.profile.tps:.0f} TPS)")
@@ -276,13 +357,19 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
             elif kind == "emitter" and isinstance(val, dict) and "error" in val:
                 raise RuntimeError(val["error"])
         if bf:
-            log(f"backfill: {bf:,} history events ({sc.traffic.backfill_days} sim days) emitted unpaced")
+            log(f"{'prime' if prime_days else 'backfill'}: {bf:,} history events ({sc.traffic.backfill_days:.3g} sim days) "
+                f"emitted {'paced' if prime_days else 'unpaced'}")
+            from ..common.kafka import wait_group_caught_up
+            timeout = float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900"))
             if sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc"):
-                from ..common.kafka import wait_group_caught_up
                 grp = f"realy-flink-{run_id}" if sc.flink_state == "fresh" else "realy-flink"
-                lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max(500, bf // 200),
-                                           timeout_s=float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900")), log=log)
+                lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max(500, bf // 200), timeout_s=timeout, log=log)
                 log(f"backfill: feature job caught up (lag {lag:,})")
+            if prime_days and sc.topology in ("gateway-kafka", "echo-kafka") and gw_before is not None:
+                # priming events are scored by the gateway (regular `x-backfill` history is features-only and
+                # skipped by it); follow its decision count rather than group offsets
+                done = _wait_gateway_scored(ep.gateway_admin, gw_before + int(bf * 0.99), timeout)
+                log(f"backfill: gateway {'caught up' if done else 'still catching up (continuing)'}")
         t_start = now_us() + 3_000_000
         start_v.value = t_start
         manifest["t_start_us"] = t_start

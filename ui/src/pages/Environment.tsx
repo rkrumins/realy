@@ -83,12 +83,12 @@ export default function Environment() {
           <Button variant="secondary" onClick={refresh}><RefreshCw className={cn(env.isFetching && "animate-spin")} />Refresh</Button>
         </>} />
       {env.error && <ErrorState error={env.error} />}
-      {env.isLoading ? <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 7 }, (_, i) => <Skeleton key={i} className="h-48 rounded-2xl" />)}</div>
+      {env.isLoading ? <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 7 }, (_, i) => <Skeleton key={i} className="h-48 rounded-2xl" />)}</div>
         : !env.data ? <Unavailable what="Environment status" /> : (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{env.data.components.map((c) => <ComponentCard key={c.id} c={c} />)}</div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">{env.data.components.map((c) => <ComponentCard key={c.id} c={c} />)}</div>
         )}
 
-      <div className="mt-6 grid gap-5 xl:grid-cols-2">
+      <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-2">
         <Card>
           <CardHeader title="Kafka" icon={<Workflow />} subtitle={kafka.data ? `${kafka.data.brokers.length} broker(s): ${kafka.data.brokers.map((b) => `${b.host}:${b.port}`).join(", ")}` : "topics and consumer lag"} />
           <CardBody className="space-y-5">
@@ -151,7 +151,7 @@ export default function Environment() {
 
         <Card>
           <CardHeader title="Redis" icon={<Database />} subtitle="online feature store" />
-          <CardBody className="grid gap-x-8 sm:grid-cols-2">
+          <CardBody className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
             {redis.isLoading ? <Skeleton className="h-28 sm:col-span-2" /> : redis.error ? <div className="sm:col-span-2"><ErrorState error={redis.error} title="Redis unreachable" /></div> : !redis.data ? <div className="sm:col-span-2"><Unavailable what="Redis detail" /></div> : <>
               <div><Stat label="Version" value={redis.data.version} /><Stat label="Keys" value={fmtNum(redis.data.keys)} /><Stat label="Memory" value={fmtBytes(redis.data.used_memory_bytes)} /></div>
               <div><Stat label="Ops / s" value={fmtNum(redis.data.ops_per_sec)} /><Stat label="Clients" value={fmtNum(redis.data.connected_clients)} /><Stat label="Uptime" value={fmtDuration(redis.data.uptime_s)} /></div>

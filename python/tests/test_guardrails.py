@@ -53,3 +53,22 @@ def test_guardrails_ignore_warm_down_phases():
     snap = {"source": "emitter", "stages": [{"name": "schedule_lag", "p99_ms": 5_000.0}]}
     _guardrails(h, load_scenario("smoke"), snap, lambda _: None)
     assert h.abort_reason is None
+
+
+def test_auto_prime_only_for_cold_async_warm_state(monkeypatch):
+    from realy.runner import run as run_mod
+    from realy.world import load_or_build  # noqa: F401  (world only needed for its natural rate)
+
+    class W:
+        n_customers = 1000
+    monkeypatch.setattr(run_mod, "natural_rate_total", lambda w: 6.7)
+    ep = run_mod.Endpoints(gateway_admin="http://gw", flink_rest="http://flink")
+    monkeypatch.setattr(run_mod, "_gateway_decisions", lambda admin: 0)
+    monkeypatch.setattr(run_mod, "_flink_job_uptime_s", lambda rest: 5.0)
+    days = run_mod.auto_prime_days(load_scenario("smoke"), ep, W(), 500, lambda _: None)
+    assert days > 0 and abs(days * 6.7 * 86_400 - 15_000) < 1   # 30 s at 500 TPS
+    assert run_mod.auto_prime_days(load_scenario("flink-inline-smoke"), ep, W(), 500, lambda _: None) == 0  # fresh state
+    assert run_mod.auto_prime_days(load_scenario("sync-smoke"), ep, W(), 500, lambda _: None) == 0         # sync rail
+    monkeypatch.setattr(run_mod, "_gateway_decisions", lambda admin: 1_000_000)
+    monkeypatch.setattr(run_mod, "_flink_job_uptime_s", lambda rest: 3_600.0)
+    assert run_mod.auto_prime_days(load_scenario("smoke"), ep, W(), 500, lambda _: None) == 0             # warm

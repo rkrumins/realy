@@ -203,7 +203,7 @@ export default function Scenarios() {
           </Button>
         </>} />
 
-      <div className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
         <Card className="self-start xl:sticky xl:top-20">
           <CardHeader title="Scenarios" subtitle={`${list.data?.length ?? "…"} files in scenarios/`} />
           <div className="max-h-[60vh] overflow-y-auto px-2 pb-3">
@@ -248,7 +248,7 @@ export default function Scenarios() {
                 <TabsTrigger value="yaml"><FileCode2 className="size-3.5" />YAML</TabsTrigger>
               </TabsList>
 
-              <TabsContent value="traffic" className="mt-4 grid gap-5 2xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+              <TabsContent value="traffic" className="mt-4 grid grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
                 <Section title="Rate profile" subtitle="open-loop target rate over the measured window (RateProfile.rate_at)">
                   <RateProfileEditor value={profile} duration={duration} onChange={(p) => upd(["traffic", "profile"], p)} />
                 </Section>
@@ -289,10 +289,10 @@ export default function Scenarios() {
               </TabsContent>
 
               <TabsContent value="topology" className="mt-4 space-y-5">
-                <div className="grid gap-3 lg:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                   {TOPOLOGIES.map((t) => <TopologyCard key={t} t={t} selected={topology === t} onClick={() => upd(["topology"], t)} />)}
                 </div>
-                <div className="grid gap-5 lg:grid-cols-2">
+                <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
                   <Section title="Pipeline options">
                     <div className="grid grid-cols-2 gap-3">
                       <Label>Rule set<Input value={String(doc.rules ?? "")} placeholder="baseline" onChange={(e) => upd(["rules"], e.target.value || undefined)} /></Label>
@@ -314,7 +314,7 @@ export default function Scenarios() {
                 </div>
               </TabsContent>
 
-              <TabsContent value="scoring" className="mt-4 grid gap-5 lg:grid-cols-2">
+              <TabsContent value="scoring" className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
                 <Section title="Deadlines" subtitle="deadline-aware orchestrator (ScoringConfig)">
                   <div className="grid grid-cols-2 gap-3">
                     <Num doc={doc} upd={upd} path={["scoring", "budget_ms"]} label="Hot-path budget" unit="ms" />
@@ -346,7 +346,7 @@ export default function Scenarios() {
                 </div>
               </TabsContent>
 
-              <TabsContent value="model" className="mt-4 grid gap-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+              <TabsContent value="model" className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
                 <Section title="Service time per batch" subtitle="mock KServe v2 server: a capacity model, not just a sleep">
                   <DistributionEditor value={svc} onChange={(d) => upd(["model_server", "service_time"], d ?? undefined)} allowNone />
                 </Section>
@@ -367,7 +367,7 @@ export default function Scenarios() {
                 </Section>
               </TabsContent>
 
-              <TabsContent value="fraud" className="mt-4 grid gap-5 lg:grid-cols-2">
+              <TabsContent value="fraud" className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
                 <Section title="Background fraud mix" subtitle="relative weights of campaign typologies (normalised)">
                   <Num doc={doc} upd={upd} path={["fraud", "background_per_1k"]} label="Campaigns per 1,000 legit events" step={0.1} placeholder="0.5" />
                   <div className="mt-4 space-y-3">
@@ -401,7 +401,7 @@ export default function Scenarios() {
                 </Section>
               </TabsContent>
 
-              <TabsContent value="budget" className="mt-4 grid gap-5 lg:grid-cols-2">
+              <TabsContent value="budget" className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
                 <Section title="Latency budget" subtitle="the verdict is PASS only if every budget holds">
                   <div className="grid grid-cols-2 gap-3">
                     <Num doc={doc} upd={upd} path={["budget", "e2e_p99_ms"]} label="e2e p99" unit="ms" placeholder="150" />

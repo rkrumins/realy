@@ -112,7 +112,7 @@ function Timeline({ r }: { r: Report }) {
   const secs = (v: number | string) => `${v}s`;
   const marks = warm ? [{ x: warm, label: "measure" }] : undefined;
   return (
-    <div className="grid gap-5 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
       <Card>
         <CardHeader title="Latency over the run" subtitle="e2e percentiles per second (incl. warm-up)" />
         <CardBody>
@@ -148,7 +148,7 @@ function Detection({ r }: { r: Report }) {
         <Kpi label="Fraud $ approved" value={fmtUsd(d.fraud_usd_approved)} sub={`of ${fmtUsd(d.fraud_usd_total)}`} />
       </div>
       {types.length > 0 && (
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {types.map(([name, t]) => (
             <Card key={name} className="p-4">
               <div className="flex items-center justify-between gap-2">
@@ -229,7 +229,7 @@ function Verify({ v }: { v: VerifyResult | null }) {
       <SectionTitle actions={v.passed !== undefined && (v.passed ? <Badge tone="pass"><ShieldCheck />passed</Badge> : <Badge tone="fail"><ShieldX />failed</Badge>)}>
         Correctness verification
       </SectionTitle>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Parity label="Rule parity (CEL Java vs Python)" checked={v.rules?.checked} parity={v.rules?.parity} />
         <Parity label="Score parity (proxy recompute)" checked={v.score?.checked} parity={v.score?.parity} />
         <Parity label="Outcome re-derivation" checked={v.outcome?.checked} parity={v.outcome?.parity} />
@@ -244,7 +244,7 @@ function Verify({ v }: { v: VerifyResult | null }) {
       {f && (
         <Card className="mt-4">
           <CardHeader title="Per-feature agreement" subtitle={f.note} />
-          <CardBody className="grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+          <CardBody className="grid grid-cols-1 gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
             {[...byEntity.entries()].map(([entity, feats]) => (
               <div key={entity}>
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-subtle">{entity}</div>
@@ -266,7 +266,7 @@ function Verify({ v }: { v: VerifyResult | null }) {
         <Card className="mt-4">
           <CardHeader title="ClickHouse audit" subtitle="Async audit via the Kafka engine: completeness, duplicate collapse, visibility lag, replay" icon={<Database />}
             actions={a.complete === true ? <Badge tone="pass">complete</Badge> : a.complete === false ? <Badge tone="fail">gaps</Badge> : undefined} />
-          <CardBody className="grid gap-x-8 md:grid-cols-3">
+          <CardBody className="grid grid-cols-1 gap-x-8 md:grid-cols-3">
             <div>
               <Stat label="Emitted" value={fmtNum(a.emitted)} />
               <Stat label="Audited (unique)" value={fmtNum(a.audited_unique)} />
@@ -312,7 +312,7 @@ export default function RunReport() {
       ) : (
         <>
           <Kpis r={r} />
-          <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+          <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <Card>
               <CardHeader title="Latency by step" subtitle="measured stage decomposition (collector, one clock domain): p50 bars chained along the hot path, p99 whiskers" />
               <CardBody><StepWaterfall stages={r.stages} budget={r.budget?.e2e_p99_ms} /></CardBody>

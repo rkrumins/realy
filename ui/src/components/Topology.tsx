@@ -21,7 +21,7 @@ const HEAT_COLOR: Record<Heat, string> = { idle: "var(--fg-subtle)", good: "var(
 
 const NW = 176; // node width
 const NH = 66;
-const CW = 214; // column pitch
+const CW = 244; // column pitch
 const RH = 96; // row pitch
 const PAD = 18;
 
@@ -122,12 +122,13 @@ export function TopologyMap({ graph, snapshots, budgetMs, active, className, onS
                 <path d={d} fill="none" stroke={color} strokeWidth={2.4} strokeLinecap="round" strokeDasharray="3 9"
                   style={{ animation: `flow ${dur}s linear infinite` }} />
               )}
+              <title>{`${e.from} → ${e.to}${e.label ? ` (${e.label})` : ""}${isNum(rate) ? ` · ${fmtCompact(rate)} events/s` : ""}${isNum(p99) ? ` · p99 ${fmtMs(p99)}` : ""}`}</title>
               {(e.label || isNum(rate)) && (
-                <g transform={`translate(${mx},${my - 9})`}>
-                  <text textAnchor="middle" className="fill-[var(--fg-subtle)] text-[10px]" style={{ fontFamily: "var(--font-sans)" }}>
-                    {e.label}
-                    {isNum(rate) && <tspan className="fill-[var(--fg-muted)] font-medium" dx={e.label ? 4 : 0}>{fmtCompact(rate)}/s</tspan>}
-                    {isNum(p99) && <tspan dx={4}>· {fmtMs(p99)}</tspan>}
+                <g transform={`translate(${mx},${my - 8})`}>
+                  {/* gaps between columns are narrow: show the live rate when there is one, else the verb */}
+                  <text textAnchor="middle" className={isNum(rate) ? "fill-[var(--fg-muted)] text-[10px] font-medium" : "fill-[var(--fg-subtle)] text-[10px]"}
+                    style={{ fontFamily: isNum(rate) ? "var(--font-mono)" : "var(--font-sans)" }}>
+                    {isNum(rate) ? `${fmtCompact(rate)}/s` : e.label}
                   </text>
                 </g>
               )}

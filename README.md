@@ -68,11 +68,15 @@ spike, tail stress, capacity saturation, a 60-minute soak, exactly-once cost, an
 
 ## What the local runs showed (4 vCPU container, all components on one host)
 
+Rows marked † ran on the stack built with Docker alone (`make up`), with the driver inside the
+console container. The others ran on the same services built on the host.
+
 | Run | TPS | e2e p50 / p99 | hot-path p99 | Verdict |
 |---|---|---|---|---|
+| † first `smoke` right after `make up` (cold stack, auto-primed) | 500 | 19.9 / 92.2 ms | 40.1 ms | PASS · zero loss |
 | echo calibration (instrument floor) | 2,000 | 4.5 / 30.6 ms | 0.6 ms | PASS |
-| async gateway, warm, trained proxy, 9 fraud typologies | 500 | 19.8 / 107.3 ms | 44.6 ms | PASS · recall 0.99 · FPR 3.8% · verify PASS |
-| Flink-inline (fresh state) | 500 | 23.1 / 99.4 ms | 70.6 ms | PASS · features **exact** · tail = 61% keyBy shuffles |
+| † async gateway, warm, trained proxy, 9 fraud typologies | 500 | 19.3 / 76.0 ms | 40.7 ms | PASS · recall 1.00 · FPR 3.5% · verify PASS |
+| † Flink-inline (fresh state) | 500 | 24.6 / 111.5 ms | 80.4 ms | PASS · features **exact** · verify PASS · tail = 42% keyBy shuffles |
 | sync gRPC unary / bidi stream | 500 | 18.9 / 96.4 ms · 14.7 / 43.5 ms | 45.7 / 32.7 ms | PASS |
 | brief's example (100 ms feature + 30–100 ms model vs 150 ms) | 1,000 | 171 / 593 ms | 162 ms | FAIL as predicted by `realy budget` |
 | exactly-once sink | 500 | 5.3 s / 10.2 s | 61 ms | FAIL (visible only at checkpoint) |

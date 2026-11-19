@@ -102,8 +102,6 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
     consumer.subscribe([DECISIONS], on_assign=on_assign)
     mprod = make_producer(acks=1, **{"enable.idempotence": False, "linger.ms": 20})
     out_dir = Path(run_dir)
-    writer = None
-    fwriter = None
     cols = _Cols()
     feats_ids: list[int] = []
     feats_vals: list[list[float]] = []
@@ -124,22 +122,36 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
     last_msg = time.time()
     drain_started = None
 
+    # Parquet writes happen on ONE background thread: building Arrow tables (list columns for spans and
+    # features) and zstd-compressing 10k+ rows takes ~100 ms-1 s, and doing it inline would stall the
+    # consume loop and inflate the measured egress latency of every decision queued meanwhile.
+    from concurrent.futures import ThreadPoolExecutor
+    writer_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"collector-{index}-parquet")
+    writes: list = []
+    files: dict[str, Any] = {}
+
+    def _write(c: "_Cols", f_ids: list, f_vals: list, f_missing: list) -> None:
+        if c.n:
+            t = c.table()
+            if "decisions" not in files:
+                files["decisions"] = pq.ParquetWriter(out_dir / f"decisions-{index}.parquet", t.schema, compression="zstd")
+            files["decisions"].write_table(t)
+        if f_ids:
+            ft = pa.table({"event_id": np.asarray(f_ids, np.uint64),
+                           "values": pa.array(f_vals, type=pa.list_(pa.float32())),
+                           "missing": pa.array(f_missing, type=pa.binary())})
+            if "features" not in files:
+                files["features"] = pq.ParquetWriter(out_dir / f"features-{index}.parquet", ft.schema, compression="zstd")
+            files["features"].write_table(ft)
+
     def flush() -> None:
-        nonlocal writer, cols, fwriter
-        if cols.n:
-            t = cols.table()
-            if writer is None:
-                writer = pq.ParquetWriter(out_dir / f"decisions-{index}.parquet", t.schema, compression="zstd")
-            writer.write_table(t)
-            cols = _Cols()
-        if feats_ids:
-            ft = pa.table({"event_id": np.asarray(feats_ids, np.uint64),
-                           "values": pa.array(feats_vals, type=pa.list_(pa.float32())),
-                           "missing": pa.array(feats_missing, type=pa.binary())})
-            if fwriter is None:
-                fwriter = pq.ParquetWriter(out_dir / f"features-{index}.parquet", ft.schema, compression="zstd")
-            fwriter.write_table(ft)
-            feats_ids.clear(); feats_vals.clear(); feats_missing.clear()
+        nonlocal cols, feats_ids, feats_vals, feats_missing
+        if cols.n or feats_ids:
+            writes.append(writer_pool.submit(_write, cols, feats_ids, feats_vals, feats_missing))
+            cols, feats_ids, feats_vals, feats_missing = _Cols(), [], [], []
+        # surface write errors promptly instead of at the end of a long run
+        while writes and writes[0].done():
+            writes.pop(0).result()
 
     while True:
         # Block only until the FIRST message (poll returns as soon as one is available), then drain
@@ -156,10 +168,9 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
                 continue
             d = DR.FromString(m.value())
             tr = d.trace
-            if tr.run_id and tr.run_id != run_id:
-                foreign += 1
-                continue
-            if not tr.run_id and not d.HasField("trace"):
+            # every measured event carries a BenchTrace with this run's id (Python and Java emitters);
+            # anything else - other runs, untraced priming / history events - is not ours
+            if tr.run_id != run_id:
                 foreign += 1
                 continue
             received += 1
@@ -244,7 +255,7 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
                     sec["egress"].append(t_recv - t_dec)
                 for stg, v in st.items():
                     sec_stage.setdefault(STAGE_COLS[stg], []).append(v)
-        if cols.n >= 50_000:
+        if cols.n >= 10_000:
             flush()
         now = now_us()
         if now >= next_metrics:
@@ -269,10 +280,11 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             if time.time() - drain_started > drain_timeout_s or time.time() - last_msg > idle_timeout_s:
                 break
     flush()
-    if writer is not None:
-        writer.close()
-    if fwriter is not None:
-        fwriter.close()
+    for w in writes:
+        w.result()
+    writer_pool.shutdown(wait=True)
+    for f in files.values():
+        f.close()
     consumer.close()
     mprod.flush(5)
     summary = {"index": index, "received": received, "unique": unique, "duplicates": dups, "foreign": foreign,

@@ -97,7 +97,7 @@ export default function Overview() {
         </>}
       </div>
 
-      <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+      <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
         <Card>
           <CardHeader title="Recent runs" subtitle="Newest first. Click a run for its full report."
             actions={<Button variant="ghost" size="sm" onClick={() => nav("/runs")}>All runs<ArrowRight /></Button>} />

@@ -32,7 +32,7 @@ FROM ${NODE_IMAGE} AS ui-build
 ARG HTTPS_PROXY
 COPY deploy/docker/build-trust.sh /usr/local/bin/realy-build-trust
 WORKDIR /ui
-COPY ui/package.json ui/package-lock.json ./
+COPY ui/package.json ui/package-lock.json ui/.npmrc ./
 RUN --mount=type=secret,id=ca,required=false --mount=type=cache,target=/root/.npm \
     sh /usr/local/bin/realy-build-trust \
  && if [ -s /run/secrets/ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/ca; fi \

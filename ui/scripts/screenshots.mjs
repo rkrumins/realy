@@ -67,6 +67,8 @@ if (!process.env.SHOTS_NO_RUN) {
 }
 
 // ---------------------------------------------------------------- everything else
+// the explorer shot uses the newest run (full spans with clock domains); report/compare the verified PASS run
+const latest = (await api("/api/runs?limit=5")).history.find((r) => r.status === "done")?.run_id || reportRun;
 const pages = [
   ["overview", "/"],
   ["launch", "/launch?scenario=mixed-realistic", async (p) => {
@@ -75,7 +77,7 @@ const pages = [
   }],
   ["runs", "/runs"],
   ["report", `/runs/${reportRun}`],
-  ["explorer", `/explorer?run=${reportRun}`, async (p) => {
+  ["explorer", `/explorer?run=${latest}`, async (p) => {
     await p.getByTestId("search-row").first().click({ timeout: 30_000 });
     await p.getByTestId("decision-detail").waitFor({ timeout: 30_000 });
     await p.waitForTimeout(900);

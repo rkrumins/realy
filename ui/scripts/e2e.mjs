@@ -65,7 +65,7 @@ try {
     await page.waitForFunction(() => {
       const tiles = [...document.querySelectorAll("div")].filter((d) => d.textContent?.trim().startsWith("Emitted"));
       return tiles.some((t) => /\d/.test(t.querySelector(".num")?.textContent || ""));
-    }, null, { timeout: 90_000 });
+    }, null, { timeout: 240_000 });
     // a topology edge or node shows a live rate ("…/s")
     await page.waitForFunction(() => [...document.querySelectorAll("svg[role=img] text")].some((t) => /\d.*\/s/.test(t.textContent || "")), null, { timeout: 60_000 });
     return "emitted TPS + topology rates live";

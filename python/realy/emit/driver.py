@@ -45,6 +45,10 @@ class ShardPlan:
     duration_s: float
     events_topic: str = "payments.events.raw"
     write_events: bool = True
+    # True: the history phase primes a cold pipeline. Events go out WITHOUT `x-backfill`, so the
+    # gateway / Flink-inline score them too (JIT, connections, caches warm up); they stay untraced,
+    # so the collector ignores their decisions and the report excludes them like any backfill.
+    prime: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -209,13 +213,23 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     BT = trace_pb2.BenchTrace
     run_id = plan.run_id
     run_b = run_id.encode()
-    # ------------------------------------------------------------ backfill phase: unpaced, untraced
-    bf_hdr = [("x-backfill", b"1"), ("x-run-id", run_b + b":backfill")]
+    # ------------------------------------------------------------ backfill phase: unpaced (prime: paced), untraced
+    bf_hdr = ([("x-run-id", run_b + b":prime")] if plan.prime
+              else [("x-backfill", b"1"), ("x-run-id", run_b + b":backfill")])
     backfilled = 0
+    # priming is paced at the scenario's starting rate so the pipeline reaches the same steady state
+    # (JIT tiers, broker/page cache, RocksDB compaction, ClickHouse ingest) it will be measured in
+    prime_rate = float(plan.extra.get("prime_tps") or 0.0) if plan.prime else 0.0
+    t_bf0 = time.monotonic()
     while not stop.is_set():
         item = q.get()
         if item[0] == "backfill":
             for p_, k_ in zip(item[2], item[3]):
+                if prime_rate and backfilled % 50 == 0:
+                    ahead = backfilled / prime_rate - (time.monotonic() - t_bf0)
+                    if ahead > 0.002:
+                        producer.poll(0)
+                        time.sleep(ahead)
                 while True:
                     try:
                         producer.produce(plan.events_topic, p_, k_, headers=bf_hdr)
@@ -224,7 +238,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                         producer.poll(0.01)
                 backfilled += 1
             for _, lb in item[5]:
-                producer.produce(LABELS, lb, headers=bf_hdr[1:])
+                producer.produce(LABELS, lb, headers=[h for h in bf_hdr if h[0] == "x-run-id"])
             producer.poll(0)
         elif item[0] == "backfill_done":
             break

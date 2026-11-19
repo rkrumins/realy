@@ -58,7 +58,8 @@ Everything about the run in progress, refreshed every second over a WebSocket:
 | Live control | change the target rate, model service time and capacity, injected feature delay and deadline policy *during* the run. Changes go out on `bench.control` and are recorded in the run log |
 | Run log | the driver's log: phases, Flink job switches, guardrail aborts |
 
-**Abort** stops the run cleanly. It drains, then writes a report marked aborted.
+**Abort** (in the control drawer) stops the run cleanly: the runner drains, writes a partial report
+and marks the run aborted.
 
 ## Runs
 
@@ -84,7 +85,7 @@ requested, its verification. Nothing is overwritten.
 | Verification | when run: Java↔Python feature agreement per entity, CEL rule parity, score/outcome recomputation |
 | ClickHouse audit | completeness, duplicate collapse, visibility lag, replay |
 
-Downloads: HTML, Markdown and JSON reports.
+**Downloads**: the HTML report, plus `report.json`, `verify.json` and `manifest.json` (the exact config the run used).
 
 ## Compare
 
@@ -111,8 +112,9 @@ A decision opens with:
 * **Span waterfall:** every span from emit to collect, tagged with its clock domain. Cross-domain
   gaps are Kafka transit.
 
-The **Campaigns** tab lists the run's fraud campaigns (typology, size, start), and a customer view
-shows the customer's profile and timeline.
+The **Campaigns** tab lists the run's fraud campaigns, and selecting one shows its events in order;
+the first decline is where the campaign was stopped. Selecting a customer shows their world profile
+(segment, home country, tenure, average ticket) and their events in the run.
 
 ## Scenarios
 
@@ -134,9 +136,9 @@ Health of every component the benchmark drives, plus the internals that explain 
   status, version and probe latency.
 * **Kafka:** topics with end offsets, and consumer-group lag for the gateway, Flink, ClickHouse and
   collectors.
-* **Flink:** jobs and their state, per-vertex backpressure, and checkpoints (count, last duration
-  and size).
-* **Redis:** memory, keys, ops/s and hit rate.
+* **Flink:** task managers and free slots, jobs and their state, per-vertex backpressure, and
+  checkpoints (completed, failed, last duration and size).
+* **Redis:** version, keys, memory, ops/s, clients and uptime.
 * **ClickHouse:** rows, parts and bytes per table.
 * **Links:** the Flink UI, Grafana and Prometheus (set `FLINK_UI_URL`, `GRAFANA_URL`,
   `PROMETHEUS_URL`).

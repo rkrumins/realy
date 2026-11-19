@@ -136,14 +136,14 @@ export default function Launch() {
     <>
       <PageHeader eyebrow="Launch" title="Launch a benchmark run"
         subtitle="Pick a scenario, adjust the load, check the latency budget is feasible, then run it now or on a schedule." />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="min-w-0">
           <div className="relative mb-4 max-w-md">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter scenarios…" className="pl-9" />
           </div>
           {scenarios.error && <ErrorState error={scenarios.error} />}
-          {scenarios.isLoading && <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">{Array.from({ length: 9 }, (_, i) => <Skeleton key={i} className="h-[108px] rounded-xl" />)}</div>}
+          {scenarios.isLoading && <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">{Array.from({ length: 9 }, (_, i) => <Skeleton key={i} className="h-[108px] rounded-xl" />)}</div>}
           {groups.map((g) => g.items.length > 0 && (
             <section key={g.title} className="mb-7">
               <div className="mb-3 flex items-baseline gap-2">
@@ -151,7 +151,7 @@ export default function Launch() {
                 <h2 className="text-[14px] font-semibold text-fg">{g.title}</h2>
                 <span className="text-[12.5px] text-subtle">{g.hint}</span>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
                 {g.items.map((s) => (
                   <ScenarioCard key={s.name} s={s} selected={s.name === selected?.name}
                     onClick={() => setParams((p) => { p.set("scenario", s.name); return p; }, { replace: true })} />

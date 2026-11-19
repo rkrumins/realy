@@ -20,7 +20,7 @@ export default function Settings() {
   return (
     <>
       <PageHeader eyebrow="Settings" title="Console settings" subtitle="Appearance, session and where this console sends its requests." />
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <Card>
           <CardHeader title="Appearance" subtitle="Stored in this browser only." />
           <CardBody>

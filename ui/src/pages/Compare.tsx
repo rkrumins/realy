@@ -63,7 +63,7 @@ export default function Compare() {
     <>
       <PageHeader eyebrow="Compare" title="Compare two runs" subtitle="Same inputs, different topology or configuration: see exactly which stage moved." />
       <Card className="mb-6">
-        <CardBody className="grid items-end gap-3 pt-5 md:grid-cols-[1fr_auto_1fr]">
+        <CardBody className="grid grid-cols-1 items-end gap-3 pt-5 md:grid-cols-[1fr_auto_1fr]">
           <label className="text-[12.5px] font-medium text-muted"><span className="mb-1.5 flex items-center gap-2"><span className="size-2 rounded-full" style={{ background: SERIES[0] }} />Run A (baseline)</span>
             <Select value={a} onChange={(v) => set("a", v)} options={opts} placeholder="Pick a run…" ariaLabel="Run A" />
           </label>
@@ -79,7 +79,7 @@ export default function Compare() {
         </EmptyState>
       ) : cmp.isLoading ? <Skeleton className="h-96 rounded-2xl" /> : cmp.error ? <ErrorState error={cmp.error} /> : c && (
         <>
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
             <Card className="overflow-hidden">
               <table className="w-full text-[13px]">
                 <thead className="border-b border-border bg-surface-2/40 text-left text-[11px] uppercase tracking-wider text-subtle">

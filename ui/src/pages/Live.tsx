@@ -200,7 +200,8 @@ export default function Live() {
   }, [cur?.run_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const budget = cur?.budget?.e2e_p99_ms ?? 150;
-  const recent = series.slice(-5);
+  // idle: summarise the last seconds that carried data (the run that just finished)
+  const recent = (cur ? series : series.filter((p) => p.emitted !== null || p.decided !== null)).slice(-5);
   const emitted = mean(recent.map((p) => p.emitted));
   const decided = mean(recent.map((p) => p.decided));
   const p99 = lastOf(series, "e2e_p99");
@@ -213,9 +214,15 @@ export default function Live() {
   const active = Boolean(cur) || series.some((p) => p.emitted);
   const snaps = latestSnapshots(runId);
   const graph = topo.data;
+  // charts: from the run start while running; when idle, the span that carried emitter/collector data
+  const shown = React.useMemo(() => {
+    if (cur?.started_at) return series.filter((p) => p.t >= (cur.started_at as number) - 5);
+    const idx = series.flatMap((p, i) => (p.emitted !== null || p.decided !== null ? [i] : []));
+    return idx.length ? series.slice(Math.max(0, idx[0] - 5), idx[idx.length - 1] + 6) : series;
+  }, [series, cur?.started_at]);
   const stageSeries = STAGE_SERIES.map((s) => ({ key: s.key, label: s.label, stack: "s" }))
-    .filter((s) => series.some((p) => isNum(p.stages[s.key])));
-  const flat = series.map((p) => ({ ...p, ...Object.fromEntries(STAGE_SERIES.map((s) => [s.key, p.stages[s.key] ?? null])) }));
+    .filter((s) => shown.some((p) => isNum(p.stages[s.key])));
+  const flat = shown.map((p) => ({ ...p, ...Object.fromEntries(STAGE_SERIES.map((s) => [s.key, p.stages[s.key] ?? null])) }));
   const logs = logsFor(runId);
   const warmupMark = cur?.started_at && cur.warmup_s ? [{ x: Math.round(cur.started_at + cur.warmup_s), label: "measure" }] : undefined;
 
@@ -277,11 +284,11 @@ export default function Live() {
         </EmptyState>
       ) : (
         <>
-          <div className="mt-5 grid gap-5 lg:grid-cols-2">
+          <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
             <Card>
               <CardHeader title="Throughput funnel" subtitle="events/s per second" />
               <CardBody>
-                <TimeChart data={series} syncId="live" markers={warmupMark} series={[
+                <TimeChart data={shown} syncId="live" markers={warmupMark} series={[
                   { key: "emitted", label: "emitted" }, { key: "acked", label: "acked" }, { key: "decided", label: "decided" },
                 ]} yFormat={(v) => fmtCompact(v)} />
               </CardBody>
@@ -289,7 +296,7 @@ export default function Live() {
             <Card>
               <CardHeader title="End-to-end latency" subtitle="per-second percentiles, intended send → decision collected" />
               <CardBody>
-                <TimeChart data={series} syncId="live" budget={budget} band={{ from: 0, to: budget }} markers={warmupMark} series={[
+                <TimeChart data={shown} syncId="live" budget={budget} band={{ from: 0, to: budget }} markers={warmupMark} series={[
                   { key: "e2e_p50", label: "p50" }, { key: "e2e_p99", label: "p99" }, { key: "e2e_p999", label: "p99.9", dashed: true },
                 ]} yFormat={(v) => fmtMs(v)} />
               </CardBody>
@@ -303,16 +310,16 @@ export default function Live() {
             <div className="grid gap-5">
               <Card>
                 <CardHeader title="Schedule lag" subtitle="p99 of actual vs intended send time (emitter health)" />
-                <CardBody><TimeChart data={series} syncId="live" height={110} series={[{ key: "sched_p99", label: "schedule lag p99" }]} yFormat={(v) => fmtMs(v)} legend={false} /></CardBody>
+                <CardBody><TimeChart data={shown} syncId="live" height={110} series={[{ key: "sched_p99", label: "schedule lag p99" }]} yFormat={(v) => fmtMs(v)} legend={false} /></CardBody>
               </Card>
               <Card>
                 <CardHeader title="Backlog" subtitle="events emitted but not yet decided" />
-                <CardBody><TimeChart data={series} syncId="live" height={110} series={[{ key: "backlog", label: "backlog", kind: "area", color: "var(--chart-4)" }]} legend={false} /></CardBody>
+                <CardBody><TimeChart data={shown} syncId="live" height={110} series={[{ key: "backlog", label: "backlog", kind: "area", color: "var(--chart-4)" }]} legend={false} /></CardBody>
               </Card>
             </div>
           </div>
 
-          <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+          <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
             <Card className="flex flex-col">
               <CardHeader title="Decision feed" subtitle="sampled live decisions · click one to inspect it" />
               <CardBody className="flex min-h-0 flex-1 flex-col">

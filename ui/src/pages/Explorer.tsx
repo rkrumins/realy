@@ -108,7 +108,7 @@ function DecisionPanel({ run, eventId, onClose, onCustomer }: { run: string; eve
           </div>
           <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose}><X /></Button>
         </div>
-        <div className="grid border-t border-border md:grid-cols-2">
+        <div className="grid grid-cols-1 border-t border-border md:grid-cols-2">
           <div className="border-border p-5 md:border-r">
             <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-subtle"><CreditCard className="size-3.5" />Transaction</div>
             {fields.filter(([, v]) => v !== undefined && v !== null && v !== "" && v !== "0").map(([k, v]) => <Stat key={k} label={k} value={String(v)} mono={/card|account|merchant|terminal|device|payee|IP/.test(k)} />)}
@@ -139,7 +139,7 @@ function DecisionPanel({ run, eventId, onClose, onCustomer }: { run: string; eve
       <Card>
         <CardHeader title={`Features (${d.features?.length ?? 0})`} subtitle={d.features ? `${missing} missing (defaulted) · grouped by entity` : "this decision did not carry its feature vector (feature_sample_permille)"} />
         {d.features && (
-          <CardBody className="grid gap-x-6 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+          <CardBody className="grid grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
             {[...groups.entries()].map(([entity, fs]) => (
               <div key={entity}>
                 <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-subtle">{entity}</div>
@@ -209,7 +209,7 @@ function Campaigns({ run, onPick }: { run: string; onPick: (id: string) => void 
   const cs = q.data?.campaigns ?? [];
   if (!cs.length) return <EmptyState icon={<Flag />} title="No fraud campaigns in this run">Pick a fraud pack (e.g. mixed-realistic) to see campaigns.</EmptyState>;
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-[12.5px]">

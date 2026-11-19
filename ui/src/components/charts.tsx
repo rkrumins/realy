@@ -112,7 +112,7 @@ export function TimeChart({
             </defs>
             <CartesianGrid stroke={TOKENS.grid} vertical={false} />
             <XAxis dataKey={x} {...axisProps} tickFormatter={xFormat} minTickGap={48} type="number" domain={["dataMin", "dataMax"]} scale="linear" />
-            <YAxis {...axisProps} width={52} tickFormatter={yFormat} domain={yDomain ?? [0, "auto"]} allowDataOverflow={false} />
+            <YAxis {...axisProps} width={60} tickFormatter={yFormat} domain={yDomain ?? [0, "auto"]} allowDataOverflow={false} />
             <Tooltip cursor={{ stroke: "var(--border-strong)", strokeWidth: 1 }} isAnimationActive={false}
               content={(p) => <TooltipBox {...(p as object)} xFormat={xFormat} yFormat={yFormat} />} />
             {band && <ReferenceArea y1={band.from} y2={band.to} fill={TOKENS.pass} fillOpacity={0.06} stroke="none" ifOverflow="hidden" />}
@@ -204,7 +204,7 @@ export function LoadCurve({ data, budget, knee, height = 260 }: {
           <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
             <CartesianGrid stroke={TOKENS.grid} vertical={false} />
             <XAxis dataKey="tps" type="number" domain={["dataMin", "dataMax"]} {...axisProps} tickFormatter={(v) => fmtCompact(v)} />
-            <YAxis {...axisProps} width={52} tickFormatter={(v) => fmtMs(v)} scale="log" domain={["auto", "auto"]} allowDataOverflow />
+            <YAxis {...axisProps} width={60} tickFormatter={(v) => fmtMs(v)} scale="log" domain={["auto", "auto"]} allowDataOverflow />
             <Tooltip isAnimationActive={false} cursor={{ stroke: "var(--border-strong)" }}
               content={(p) => <TooltipBox {...(p as object)} xFormat={(v) => `${fmtCompact(Number(v))} TPS offered`} yFormat={(v) => fmtMs(v)} />} />
             {isNum(budget) && <ReferenceLine y={budget} stroke={TOKENS.fail} strokeDasharray="5 4"

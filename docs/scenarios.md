@@ -71,6 +71,11 @@ fraud:
 | `spike` | `tps`, `spike_at_s`, `spike_duration_s`, `spike_multiplier` | peak headroom, recovery |
 | `sine` | `tps`, `sine_period_s`, `sine_amplitude` | diurnal patterns |
 
+`warmup_s` covers ramp-up within the run. A *cold* pipeline (just started) is handled before the
+run: the driver primes it with 30 s of unmeasured history events at the scenario's rate (`REALY_PRIME_S`) and waits for Flink and the
+gateway to catch up (see [operations.md](operations.md)), so the first run after `make up` measures
+the same steady state as the tenth.
+
 `time_scale: auto` maps the population's natural transaction rate onto the target TPS. At 500 TPS
 or at 10k TPS each customer still behaves like a real one: the same velocity patterns, so velocity
 rules fire at realistic rates.

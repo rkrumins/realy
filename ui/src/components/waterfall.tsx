@@ -108,19 +108,26 @@ export function SpanWaterfall({ detail }: { detail: DecisionDetail }) {
     { k: "intended", v: detail.timing.t_intended_us }, { k: "sent", v: detail.timing.t_sent_us },
     { k: "decided", v: detail.timing.t_decision_us }, { k: "collected", v: detail.timing.t_collected_us ?? detail.timing.t_response_us },
   ].filter((m) => timed && isNum(m.v)) as { k: string; v: number }[];
+  // merge markers that would print on top of each other ("intended · sent")
+  const merged: { k: string; v: number }[] = [];
+  for (const m of [...marks].sort((a, b) => a.v - b.v)) {
+    const last = merged[merged.length - 1];
+    if (last && (m.v - last.v) / span < 0.07) last.k = `${last.k} · ${m.k}`;
+    else merged.push({ ...m });
+  }
 
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-muted">
         {domains.map((d, i) => (
-          <span key={d} className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-sm" style={{ background: SERIES[i % 8] }} />clock domain {d}
+          <span key={d} className="inline-flex items-center gap-1.5" title={`clock domain id ${d}`}>
+            <span className="size-2 rounded-sm" style={{ background: SERIES[i % 8] }} />{d === "?" ? "unknown clock domain" : `clock domain ${i + 1}`}
           </span>
         ))}
         {!timed && <span className="text-subtle">(durations only: this run predates full span capture)</span>}
       </div>
       <div className="relative">
-        {marks.map((m) => (
+        {merged.map((m) => (
           <div key={m.k} className="pointer-events-none absolute inset-y-0 z-10 border-l border-dashed border-border-strong" style={{ left: `calc(150px + (100% - 150px - 80px) * ${(m.v - t0) / span})` }}>
             <span className="absolute -top-4 -translate-x-1/2 whitespace-nowrap text-[10px] text-subtle">{m.k}</span>
           </div>
@@ -131,7 +138,7 @@ export function SpanWaterfall({ detail }: { detail: DecisionDetail }) {
               <div className="truncate pr-3 text-muted" title={s.stage_name}>
                 {titleCase(s.stage_name.toLowerCase())}{s.entity ? <span className="text-subtle"> · {s.entity}</span> : null}
               </div>
-              <Tooltip content={<span className="num">{s.stage_name} · {fmtMs(s.dur_us / 1000)} · domain {String(s.domain ?? "?")}{timed ? ` · +${fmtMs((s.start - t0) / 1000)}` : ""}</span>}>
+              <Tooltip content={<span className="num">{s.stage_name} · {fmtMs(s.dur_us / 1000)} · domain {domains.indexOf(String(s.domain ?? "?")) + 1}{timed ? ` · +${fmtMs((s.start - t0) / 1000)}` : ""}</span>}>
                 <div className="relative h-3.5 rounded bg-surface-2">
                   <div className="absolute top-0 h-3.5 rounded" style={{
                     left: `${((s.start - t0) / span) * 100}%`, width: `max(3px, ${(s.dur_us / span) * 100}%)`, background: color(s.domain),
