@@ -1,0 +1,17 @@
+name: tail-stress
+description: Heavy-tailed dependencies (bimodal model latency with 1% 150-400 ms spikes, lognormal store) - shows deadlines + fallbacks protecting the p99.
+seed: 19
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic: { profile: { kind: constant, tps: 500 }, duration_s: 90, warmup_s: 15 }
+topology: gateway-kafka
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 25
+  model_deadline_ms: 60
+  on_deadline: FALLBACK_RULES
+  feature_lookup_delay: { lognormal: { median_ms: 3, p99_ms: 30 } }
+model_server:
+  service_time: { bimodal: { median_ms: 10, p99_ms: 30, tail_prob: 0.01, tail_min_ms: 150, tail_max_ms: 400 } }
+  workers: 64
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100 }

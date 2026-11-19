@@ -1,0 +1,22 @@
+name: black-friday
+description: Diurnal peak - 3x traffic spike for 60 s mid-run with background fraud; tests headroom and sustainability.
+seed: 18
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: spike, tps: 400, spike_at_s: 60, spike_duration_s: 60, spike_multiplier: 3.0 }
+  duration_s: 180
+  warmup_s: 15
+  backfill_days: 1
+topology: gateway-kafka
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100 }
+fraud: { background_per_1k: 0.6 }
+guardrails: { max_consumer_lag: 2000000 }

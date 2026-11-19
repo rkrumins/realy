@@ -60,16 +60,19 @@ class _Cols:
 
 
 def collector_main(run_id: str, run_dir: str, index: int, ready, drain, expected, results,
-                   group: str | None = None, idle_timeout_s: float = 10.0, drain_timeout_s: float = 60.0) -> None:
+                   group: str | None = None, idle_timeout_s: float = 10.0, drain_timeout_s: float = 60.0,
+                   read_committed: bool = False) -> None:
     try:
         results.put(("collector", index, _collect(run_id, run_dir, index, ready, drain, expected,
-                                                  group or f"collector-{run_id}", idle_timeout_s, drain_timeout_s)))
+                                                  group or f"collector-{run_id}", idle_timeout_s, drain_timeout_s,
+                                                  read_committed)))
     except Exception:  # noqa: BLE001
         traceback.print_exc()
         results.put(("collector", index, {"error": traceback.format_exc()}))
 
 
-def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout_s, drain_timeout_s) -> dict[str, Any]:
+def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout_s, drain_timeout_s,
+             read_committed=False) -> dict[str, Any]:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -77,7 +80,8 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
     from ..common.metrics import snapshot_json
     from ..scoring.v1 import decision_pb2
 
-    consumer = make_consumer(group, **{"auto.offset.reset": "latest"})
+    consumer = make_consumer(group, **{"auto.offset.reset": "latest",
+                                       "isolation.level": "read_committed" if read_committed else "read_uncommitted"})
     assigned = []
 
     def on_assign(c, parts):

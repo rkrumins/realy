@@ -24,7 +24,7 @@ def render_markdown(rep: dict[str, Any]) -> str:
             f"| within e2e budget | {s['within_budget']:.2%} |",
             f"| on-time publishing p99 (sent − intended) | {_f(s['schedule_lag_p99_ms'])} ms |",
             f"| degraded (fallback) decisions | {s['degraded_fraction']:.2%} |",
-            f"| feature staleness p99 | {_f(s['feature_staleness_p99_ms'])} ms |",
+            f"| online-store update lag p99 (Flink pickup -> Redis) | {_f(s.get('online_store_update_lag_p99_ms'))} ms |",
             f"| outcomes | {s['outcomes']} |", "",
             "## Latency by step (ms)", "", "| step | p50 | p90 | p99 | p99.9 | max |", "|---|---|---|---|---|---|"]
     for k in STEP_ORDER:

@@ -210,7 +210,7 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
     drain = ctx.Event()
     expected = ctx.Value("q", -1 if n_coll > 1 else -1)
     coll_procs = [ctx.Process(target=collector_main, args=(run_id, str(run_dir), i, ready[i], drain, expected, results),
-                              daemon=True) for i in range(n_coll)]
+                              kwargs={"read_committed": sc.exactly_once}, daemon=True) for i in range(n_coll)]
     for p in coll_procs:
         p.start()
     for e in ready:

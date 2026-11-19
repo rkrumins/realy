@@ -153,6 +153,9 @@ class Scenario(_Model):
     # warm: keep Flink keyed state + online-store blobs from earlier runs (realistic state size)
     # fresh: start from empty state so `realy verify` can demand exact feature equality
     flink_state: Literal["warm", "fresh"] = "warm"
+    # Flink transactional (exactly-once) decisions sink; the collector then reads read_committed, like
+    # any EOS consumer would - decisions become visible only when the checkpoint commits.
+    exactly_once: bool = False
     expect: dict[str, Any] = Field(default_factory=dict)  # e.g. {verdict: FAIL}
 
     @model_validator(mode="after")

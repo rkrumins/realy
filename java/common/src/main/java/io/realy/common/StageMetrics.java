@@ -41,6 +41,11 @@ public final class StageMetrics implements AutoCloseable {
     public StageMetrics(String source, String instance) {
         this.source = source;
         this.instance = instance;
+        // JVM health next to the stage latencies: GC pauses are a classic hidden tail-latency source.
+        new io.micrometer.core.instrument.binder.jvm.JvmGcMetrics().bindTo(registry);
+        new io.micrometer.core.instrument.binder.jvm.JvmMemoryMetrics().bindTo(registry);
+        new io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics().bindTo(registry);
+        new io.micrometer.core.instrument.binder.system.ProcessorMetrics().bindTo(registry);
     }
 
     public PrometheusMeterRegistry registry() {

@@ -102,7 +102,8 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
         want = f"realy-{mode}"
         jar, new_code = _jar_id(c)
         fresh = sc.flink_state == "fresh"
-        if any(j["name"] == want for j in running) and mode == "features" and not new_code and not force and not fresh:
+        if (any(j["name"] == want for j in running) and mode == "features" and not new_code and not force and not fresh
+                and not sc.exactly_once):
             log(f"flink: {want} already running")
             return [j["jid"] for j in running if j["name"] == want][0]
         savepoint = None
@@ -115,7 +116,8 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
             savepoint = _stop_with_savepoint(c, j["jid"], log) or savepoint
         args = ["--mode", mode, "--parallelism", str(par), "--bootstrap", os.environ.get("FLINK_KAFKA_BOOTSTRAP", "kafka:29092"),
                 "--group", f"realy-flink-{run_id}" if fresh and run_id else "realy-flink", "--scoring-config", scoring,
-                "--checkpoint-ms", str(int(os.environ.get("FLINK_CHECKPOINT_MS", "10000")))]
+                "--checkpoint-ms", str(int(os.environ.get("FLINK_CHECKPOINT_MS", "10000"))),
+                "--exactly-once", "true" if sc.exactly_once else "false"]
         body = {"entryClass": ENTRY, "programArgsList": args, "parallelism": par}
         if savepoint:
             body.update({"savepointPath": savepoint, "allowNonRestoredState": True})

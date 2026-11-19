@@ -1,0 +1,10 @@
+name: soak-60m
+description: Sustainability - 60 min at constant load; checks p99 drift, bounded lag, state growth (RocksDB compaction, GC, segment rolls).
+seed: 42
+world: { customers: 2000000, merchants: 100000, payees: 200000 }
+traffic: { profile: { kind: constant, tps: 5000 }, duration_s: 3600, warmup_s: 120, generators: 2, backfill_days: 1 }
+topology: gateway-kafka
+scoring: { feature_source: redis, budget_ms: 100, feature_deadline_ms: 30, model_deadline_ms: 80 }
+model_server: { service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }, workers: 256 }
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100 }
+guardrails: { max_consumer_lag: 5000000 }

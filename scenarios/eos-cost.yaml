@@ -1,0 +1,12 @@
+name: eos-cost
+description: Exactly-once delivery cost - Flink-inline with transactional sink; consumers read_committed see decisions only at checkpoint commit (expect e2e >= checkpoint interval -> FAIL).
+seed: 42
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic: { profile: { kind: constant, tps: 500 }, duration_s: 90, warmup_s: 20 }
+topology: flink-inline
+scoring: { feature_source: redis, budget_ms: 100, feature_deadline_ms: 30, model_deadline_ms: 80 }
+model_server: { service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }, workers: 64 }
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100 }
+exactly_once: true
+flink_state: fresh
+expect: { verdict: FAIL }

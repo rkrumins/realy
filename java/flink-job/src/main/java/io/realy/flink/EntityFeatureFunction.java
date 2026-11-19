@@ -79,9 +79,16 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
                 for (int i = 0; i < idx.length; i++) vals[i] = env.features[idx[i]];
                 long asOf = EntityAggregator.lastEventUs(next);
                 long w0 = BenchClock.nowUs();
+                long ingested = env.ingestUs;
                 store.setAll(List.of(StoreBlob.streamKey(entity, key)),
                                 List.of(new StoreBlob(schemaVersion, asOf, w0, vals).encode()), ttlSeconds)
-                        .whenComplete((v, err) -> metrics.recordUs("feature_store_write", BenchClock.nowUs() - w0));
+                        .whenComplete((v, err) -> {
+                            long done = BenchClock.nowUs();
+                            metrics.recordUs("feature_store_write", done - w0);
+                            // Freshness of the online store: how long a new event stays invisible to the
+                            // gateway (Kafka pickup by Flink -> entity blob durable in Redis).
+                            metrics.recordUs("store_update_lag", done - ingested);
+                        });
             }
         }
         long end = BenchClock.nowUs();

@@ -318,7 +318,10 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
         "schedule_lag_p99_ms": overall.get("schedule_lag", {}).get("p99"),
         "degraded_fraction": float(degraded[measured].mean()) if degraded.size and measured.any() else 0.0,
         "outcomes": {OUTCOME.get(int(k), str(k)): int(v) for k, v in zip(*np.unique(outcome, return_counts=True))} if outcome.size else {},
-        "feature_staleness_p99_ms": float(np.percentile(stale[stale >= 0], 99)) if stale.size and (stale >= 0).any() else None,
+        # Online-store freshness (gateway topologies): Flink's Kafka-pickup -> Redis-write lag, i.e. how
+        # long a new event is invisible to the gateway. (Blob age is NOT staleness: an idle entity's
+        # old blob is still exact.)
+        "online_store_update_lag_p99_ms": (service.get("stages", {}).get("flink.store_update_lag", {}) or {}).get("p99_median_ms"),
         "knee": knee, "sustainable": sust.get("sustainable"),
     }
     rep.update({"summary": summary, "stages": overall, "levels": levels, "funnel": funnel, "backlog": backlog,

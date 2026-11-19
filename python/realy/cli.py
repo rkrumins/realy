@@ -9,10 +9,12 @@ import typer
 import yaml
 
 from .cli_world import world_app
+from .control.cli import console
 
 app = typer.Typer(no_args_is_help=True, add_completion=False,
                   help="Deterministic benchmarking & correctness instrument for real-time fraud pipelines.")
 app.add_typer(world_app, name="world", help="Synthetic payments world: build, profile, compile datasets.")
+app.command(help="Operator console (FastAPI + React UI) for configuring and running sustained tests.")(console)
 
 
 def _overrides(sets: list[str]) -> dict:

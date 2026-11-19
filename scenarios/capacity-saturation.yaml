@@ -1,0 +1,16 @@
+name: capacity-saturation
+description: GPU-like model capacity (8 workers, dynamic batching 32 / 2 ms, 12 ms per batch + 0.2 ms/row) under a 500 -> 3000 TPS ramp - queueing appears as load rises.
+seed: 20
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic: { profile: { kind: step, start_tps: 500, step_tps: 500, step_duration_s: 30, tps: 500 }, duration_s: 180, warmup_s: 10 }
+topology: gateway-kafka
+scoring: { feature_source: redis, budget_ms: 100, feature_deadline_ms: 30, model_deadline_ms: 80 }
+model_server:
+  service_time: { lognormal: { median_ms: 12, p99_ms: 20 } }
+  per_item_us: 200
+  workers: 8
+  max_batch: 32
+  max_queue_delay_us: 2000
+  max_queue: 5000
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100 }
+guardrails: { max_consumer_lag: 2000000 }
