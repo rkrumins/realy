@@ -31,8 +31,10 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
         long ingest = BenchClock.nowUs();
         TransactionEvent e = TransactionEvent.parseFrom(r.value());
         Header th = r.headers().lastHeader("x-bench-trace");
-        out.collect(envelope(e, r.value(), th == null ? null : th.value(), r.headers().lastHeader("x-mirrored") != null,
-                filters, nFeatures, ingest));
+        Envelope env = envelope(e, r.value(), th == null ? null : th.value(), r.headers().lastHeader("x-mirrored") != null,
+                filters, nFeatures, ingest);
+        env.backfill = r.headers().lastHeader("x-backfill") != null;
+        out.collect(env);
     }
 
     /** Build an envelope (shared with tests). */

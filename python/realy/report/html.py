@@ -60,6 +60,11 @@ def render_markdown(rep: dict[str, Any]) -> str:
         for k, v in det["by_type"].items():
             out.append(f"| {k} | {v['events']} | {v['campaigns']} | {v['recall_flagged']:.2f} | {v['recall_declined']:.2f} | "
                        f"{v['approved_before_first_decline_mean']:.1f} | {v['usd_approved']:,.0f} |")
+    if det and det.get("by_rule"):
+        out += ["", "## Rules and score thresholds (which ones flag legitimate traffic)", "",
+                "| rule / reason | hits | fraud | legit | precision | legit hit rate |", "|---|---|---|---|---|---|"]
+        for k, v in det["by_rule"].items():
+            out.append(f"| {k} | {v['hits']} | {v['fraud']} | {v['legit']} | {v['precision']:.2f} | {v['legit_hit_rate']:.4f} |")
     svc = rep.get("service", {}).get("stages")
     if svc:
         out += ["", "## Service-side live stats (median of 1 s windows)", "", "| source.stage | p50 | p99 | worst 1 s p99 |", "|---|---|---|---|"]

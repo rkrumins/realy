@@ -245,13 +245,40 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
         th.start()
         gens, ems = [], [th]
     else:
+        start_v = ctx.Value("q", 0)
+        go = ctx.Event()
         queues = [ctx.Queue(maxsize=200) for _ in plans]
-        gens = [ctx.Process(target=generator_main, args=(p, q, handle.rate_mult, handle.stop), daemon=True)
+        gens = [ctx.Process(target=generator_main, args=(p, q, handle.rate_mult, handle.stop, start_v, go), daemon=True)
                 for p, q in zip(plans, queues)]
-        ems = [ctx.Process(target=emitter_main, args=(p, q, handle.stop, results), daemon=True)
-               for p, q in zip(plans, queues)]
+        ems = [ctx.Process(target=emitter_main, args=(p, q, handle.stop, results, "bench.metrics", start_v, go),
+                           daemon=True) for p, q in zip(plans, queues)]
         for p in gens + ems:
             p.start()
+        # warm-start backfill: wait for every shard, then for the feature job to catch up
+        handle.phase = "BACKFILL" if sc.traffic.backfill_days else "PREPARE"
+        bf = 0
+        got = 0
+        while got < len(plans):
+            kind, idx, val = results.get(timeout=1800)
+            if kind == "backfill":
+                got += 1
+                bf += int(val)
+            elif kind == "emitter" and isinstance(val, dict) and "error" in val:
+                raise RuntimeError(val["error"])
+        if bf:
+            log(f"backfill: {bf:,} history events ({sc.traffic.backfill_days} sim days) emitted unpaced")
+            if sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc"):
+                from ..common.kafka import wait_group_caught_up
+                grp = f"realy-flink-{run_id}" if sc.flink_state == "fresh" else "realy-flink"
+                lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max(500, bf // 200),
+                                           timeout_s=float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900")), log=log)
+                log(f"backfill: feature job caught up (lag {lag:,})")
+        t_start = now_us() + 3_000_000
+        start_v.value = t_start
+        manifest["t_start_us"] = t_start
+        manifest["backfill_events"] = bf
+        (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=1))
+        go.set()
     handle.phase = "WARMUP"
     emit_summ: dict[int, dict] = {}
     coll_summ: dict[int, dict] = {}

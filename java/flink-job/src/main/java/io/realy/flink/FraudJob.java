@@ -103,6 +103,7 @@ public final class FraudJob {
             s = s.filter(e -> !e.mirrored).name("skip-mirrored");
         }
         s = features(s, entities, writeStore);
+        if (!"features".equals(mode)) s = s.filter(e -> !e.backfill).name("skip-backfill");
         if ("features".equals(mode)) {
             s.addSink(new org.apache.flink.streaming.api.functions.sink.legacy.DiscardingSink<>()).name("discard");
             return null;

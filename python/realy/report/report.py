@@ -346,6 +346,10 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
     have = d_id[order][pos] == eid if d_id.size else np.zeros(eid.size, bool)
     out_all = d["outcome"].to_numpy()[order]
     outcome = np.where(have, out_all[pos] if d_id.size else 0, 0)
+    rule_col = d["rule_hits"].to_pylist()
+    rule_hits = [rule_col[order[p]] if h else "" for p, h in zip(pos.tolist(), have.tolist())] if d_id.size else []
+    reason_col = d["reason_codes"].to_pylist()
+    reasons = [reason_col[order[p]] if h else "" for p, h in zip(pos.tolist(), have.tolist())] if d_id.size else []
     fraud = ev["is_fraud"].to_numpy().astype(bool) & have
     ftype = ev["fraud_type"].to_numpy()
     amt = ev["amount_usd_minor"].to_numpy()
@@ -361,6 +365,19 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
         "fraud_usd_total": float(amt[fraud].sum() / 100), "fraud_usd_approved": float(amt[fraud & ~flagged].sum() / 100),
         "by_type": {},
     }
+    # per-rule / per-reason precision and false-positive contribution
+    per_rule: dict[str, dict[str, int]] = {}
+    for i, (rh, rc) in enumerate(zip(rule_hits, reasons)):
+        if not have[i]:
+            continue
+        keys = set(x for x in rh.split(",") if x) | {x for x in rc.split(",") if x.startswith("SCORE_")}
+        for k in keys:
+            st = per_rule.setdefault(k, {"hits": 0, "fraud": 0, "legit": 0})
+            st["hits"] += 1
+            st["fraud" if fraud[i] else "legit"] += 1
+    n_legit = max(1, int(legit.sum()))
+    res["by_rule"] = {k: {**v, "precision": v["fraud"] / v["hits"], "legit_hit_rate": v["legit"] / n_legit}
+                      for k, v in sorted(per_rule.items(), key=lambda kv: -kv[1]["legit"])}
     for t, name in FRAUD_TYPES.items():
         m = fraud & (ftype == t)
         if not m.any():

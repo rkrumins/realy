@@ -103,6 +103,7 @@ public final class KafkaIngress implements AutoCloseable {
                 long pollUs = BenchClock.nowUs();
                 for (ConsumerRecord<byte[], byte[]> r : records) {
                     if (header(r, "x-mirrored") != null) continue; // sync-path mirror, already decided
+                    if (header(r, "x-backfill") != null) continue; // warm-start history: features only
                     inflight.acquireUninterruptibly();
                     TopicPartition tp = new TopicPartition(r.topic(), r.partition());
                     pending.computeIfAbsent(tp, k -> new ConcurrentSkipListSet<>()).add(r.offset());

@@ -1,0 +1,24 @@
+name: mixed-realistic
+description: All nine fraud typologies at realistic prevalence over a warm-started (1 sim-day backfill) async gateway pipeline, 500 TPS.
+seed: 42
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 500 }
+  duration_s: 120
+  warmup_s: 20
+  backfill_days: 1
+topology: gateway-kafka
+fraud:
+  background_per_1k: 0.6
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  self_inclusion: true
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }
+flink_state: fresh

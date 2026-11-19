@@ -25,6 +25,7 @@ public class Envelope {
     public long lastEmitUs;
     public long[] spans = new long[0];
     public boolean mirrored;
+    public boolean backfill;       // warm-start history: update features, never score
 
     public Envelope() {}
 

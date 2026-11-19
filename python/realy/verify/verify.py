@@ -167,6 +167,11 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         v = np.asarray(buf, dtype=np.float64).astype(np.float32)
         r = int(c_rows[i])
         attrs = None
+        mb = missing.get(eid)
+        cust_missing = mb is not None and any(mb[s.index] for s in cust_feats)
+        merch_missing = mb is not None and any(mb[s.index] for s in merch_feats)
+        if cust_missing:
+            r = -1  # the pipeline served defaults (lookup deadline/error): mirror it
         if r >= 0:
             for s in cust_feats:
                 v[s.index] = np.float32(cp[s.field][r])
@@ -175,7 +180,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
             for s in cust_feats:
                 v[s.index] = np.float32(s.default)
         mid = int(m_ids[i])
-        mr = int(world.merchant_row(np.asarray([mid], np.uint64))[0]) if mid else -1
+        mr = int(world.merchant_row(np.asarray([mid], np.uint64))[0]) if mid and not merch_missing else -1
         for s in merch_feats:
             v[s.index] = np.float32(mp[s.field][mr]) if mr >= 0 else np.float32(s.default)
         compute_derived(schema, ev, attrs, v)

@@ -96,3 +96,38 @@ def ensure_topics(replication: int | None = None, partitions_override: int | Non
                 if "TOPIC_ALREADY_EXISTS" not in str(e):
                     raise
     return [t.topic for t in new]
+
+
+def group_lag(group: str, topic: str) -> int | None:
+    """Total committed-offset lag of a consumer group on a topic (None if the group has no offsets)."""
+    from confluent_kafka import ConsumerGroupTopicPartitions, TopicPartition
+    admin = AdminClient({"bootstrap.servers": bootstrap()})
+    md = admin.list_topics(topic, timeout=10).topics[topic]
+    parts = [TopicPartition(topic, p) for p in md.partitions]
+    res = admin.list_consumer_group_offsets([ConsumerGroupTopicPartitions(group, parts)])[group].result()
+    committed = {tp.partition: tp.offset for tp in res.topic_partitions}
+    if all(o < 0 for o in committed.values()):
+        return None
+    c = Consumer({"bootstrap.servers": bootstrap(), "group.id": f"lagprobe-{group}"})
+    lag = 0
+    for p in md.partitions:
+        lo, hi = c.get_watermark_offsets(TopicPartition(topic, p), timeout=10)
+        off = committed.get(p, -1)
+        lag += hi - (off if off >= 0 else lo)
+    c.close()
+    return lag
+
+
+def wait_group_caught_up(group: str, topic: str, max_lag: int, timeout_s: float, log=print) -> int:
+    import time
+    end = time.time() + timeout_s
+    last = None
+    while time.time() < end:
+        lag = group_lag(group, topic)
+        if lag is not None and lag <= max_lag:
+            return lag
+        if lag != last:
+            log(f"  waiting for {group}: lag {lag if lag is not None else 'n/a'}")
+            last = lag
+        time.sleep(5)
+    return last if last is not None else -1

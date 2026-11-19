@@ -49,15 +49,15 @@ class ShardPlan:
 
 
 # --------------------------------------------------------------------------------------- generator
-def generator_main(plan: ShardPlan, q, rate_mult, stop) -> None:
+def generator_main(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None:
     try:
-        _generator(plan, q, rate_mult, stop)
+        _generator(plan, q, rate_mult, stop, start, go)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
         q.put(("error", traceback.format_exc()))
 
 
-def _generator(plan: ShardPlan, q, rate_mult, stop) -> None:
+def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -89,8 +89,39 @@ def _generator(plan: ShardPlan, q, rate_mult, stop) -> None:
         writer.write_table(table)
         buf, buf_rows = [], 0
 
+    # ------------------------------------------------------------ warm-start backfill (unpaced)
+    backfilled = 0
+    bf_days = float(sc.traffic.backfill_days or 0)
+    if bf_days > 0:
+        block = 3_600_000_000  # one simulated hour per batch
+        t = plan.sim_start_us - int(bf_days * 86_400_000_000)
+        rate = gen.natural_rate_per_sim_s()
+        bcarry = 0.0
+        while t < plan.sim_start_us and not stop.is_set():
+            t1 = min(plan.sim_start_us, t + block)
+            exp = rate * (t1 - t) / 1e6 + bcarry
+            k = int(exp)
+            bcarry = exp - k
+            b = gen.generate(k, t, t1)
+            if len(b):
+                q.put(("backfill", None, b.payloads, b.keys, b.event_ids, b.labels))
+                backfilled += len(b)
+                if plan.write_events:
+                    cols = dict(b.columns)
+                    cols["t_intended_us"] = np.full(len(b), -1, np.int64)
+                    cols["backfill"] = np.ones(len(b), np.bool_)
+                    buf.append(cols)
+                    buf_rows += len(b)
+                    if buf_rows >= 100_000:
+                        flush()
+            t = t1
+    q.put(("backfill_done", backfilled))
+    if go is not None:
+        go.wait()
+    t_start = int(start.value) if start is not None and start.value > 0 else plan.t_start_us
+
     while wall_t < plan.duration_s and not stop.is_set():
-        ahead = wall_t - (now_us() - plan.t_start_us) / 1e6
+        ahead = wall_t - (now_us() - t_start) / 1e6
         if ahead > LOOKAHEAD_S:
             time.sleep(min(0.05, ahead - LOOKAHEAD_S))
             continue
@@ -109,7 +140,8 @@ def _generator(plan: ShardPlan, q, rate_mult, stop) -> None:
             q.put(("batch", offs, b.payloads, b.keys, b.event_ids, b.labels))
             if plan.write_events:
                 cols = dict(b.columns)
-                cols["t_intended_us"] = offs + plan.t_start_us
+                cols["t_intended_us"] = offs + t_start
+                cols["backfill"] = np.zeros(len(b), np.bool_)
                 buf.append(cols)
                 buf_rows += len(b)
                 if buf_rows >= 100_000:
@@ -145,15 +177,15 @@ class _Timing:
         self.ack = b
 
 
-def emitter_main(plan: ShardPlan, q, stop, results, metrics_topic: str = "bench.metrics") -> None:
+def emitter_main(plan: ShardPlan, q, stop, results, metrics_topic: str = "bench.metrics", start=None, go=None) -> None:
     try:
-        results.put(("emitter", plan.shard, _emitter(plan, q, stop, metrics_topic)))
+        results.put(("emitter", plan.shard, _emitter(plan, q, stop, metrics_topic, results, start, go)))
     except Exception:  # noqa: BLE001
         traceback.print_exc()
         results.put(("emitter", plan.shard, {"error": traceback.format_exc()}))
 
 
-def _emitter(plan: ShardPlan, q, stop, metrics_topic: str) -> dict[str, Any]:
+def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=None, go=None) -> dict[str, Any]:
     from ..bench.v1 import trace_pb2
     from ..common.kafka import LABELS, make_producer
     from ..common.metrics import snapshot_json
@@ -177,7 +209,33 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str) -> dict[str, Any]:
     BT = trace_pb2.BenchTrace
     run_id = plan.run_id
     run_b = run_id.encode()
-    t0 = plan.t_start_us
+    # ------------------------------------------------------------ backfill phase: unpaced, untraced
+    bf_hdr = [("x-backfill", b"1"), ("x-run-id", run_b + b":backfill")]
+    backfilled = 0
+    while not stop.is_set():
+        item = q.get()
+        if item[0] == "backfill":
+            for p_, k_ in zip(item[2], item[3]):
+                while True:
+                    try:
+                        producer.produce(plan.events_topic, p_, k_, headers=bf_hdr)
+                        break
+                    except BufferError:
+                        producer.poll(0.01)
+                backfilled += 1
+            for _, lb in item[5]:
+                producer.produce(LABELS, lb, headers=bf_hdr[1:])
+            producer.poll(0)
+        elif item[0] == "backfill_done":
+            break
+        elif item[0] == "error":
+            raise RuntimeError("generator failed:\n" + item[1])
+    producer.flush(120)
+    if results is not None:
+        results.put(("backfill", plan.shard, backfilled))
+    if go is not None:
+        go.wait()
+    t0 = int(start.value) if start is not None and start.value > 0 else plan.t_start_us
     ts = plan.time_scale
     sim0 = plan.sim_start_us
     labels_heap: list[tuple[int, bytes]] = []
@@ -285,7 +343,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str) -> dict[str, Any]:
     }), Path(plan.run_dir) / f"emit-{plan.shard}.parquet", compression="zstd")
     lag = tm.sent[:n] - tm.intended[:n]
     summary = {
-        "shard": plan.shard, "gen_id": plan.shard, "emitted": int(n), "generated": total_gen,
+        "shard": plan.shard, "gen_id": plan.shard, "emitted": int(n), "generated": total_gen, "backfilled": backfilled,
         "errors": errors[0], "undelivered": int(remaining), "labels": labels_sent,
         "first_seq": int(ev[0] & np.uint64(0xFFFFFFFFFFFF)) if n else None,
         "last_seq": int(ev[-1] & np.uint64(0xFFFFFFFFFFFF)) if n else None,
