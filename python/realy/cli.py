@@ -57,7 +57,7 @@ def report(run_dir: Path):
 
 @app.command()
 def verify(run_dir: Path, clickhouse: Optional[str] = typer.Option(None, help="ClickHouse HTTP URL"),
-           max_events: int = typer.Option(250_000, help="above this, verify a customer sample")):
+           max_events: int = typer.Option(1_000_000, help="above this, verify a customer sample")):
     """Independent correctness checks: features, CEL rule parity, score/outcome parity, ClickHouse audit."""
     from .verify.verify import render, verify_run
     v = verify_run(run_dir, clickhouse=clickhouse, max_events=max_events)

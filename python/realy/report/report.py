@@ -197,8 +197,14 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
             md = (intended >= lo_m) & (intended < hi) & measured if intended.size else intended.astype(bool)
             me = (e_int >= lo_m) & (e_int < hi) & m_emit
             secs = (hi - lo_m) / 1e6
+            # decided rate by ARRIVAL time (not intended time): falls behind the emitted rate when a backlog builds
+            if d is not None and d.num_rows or sync:
+                tc = dd["t_collected_us"]
+                n_dec = int(((tc >= lo_m) & (tc < hi)).sum())
+            else:
+                n_dec = 0
             lv = {"level": li, "t_from_s": li * width, "target_tps": round(prof.rate_at(li * width + width / 2), 1),
-                  "emitted_tps": round(int(me.sum()) / secs, 1), "decided_tps": round(int(md.sum()) / secs, 1),
+                  "emitted_tps": round(int(me.sum()) / secs, 1), "decided_tps": round(n_dec / secs, 1),
                   "stages": step_stats(md, me)}
             if "e2e" in lv["stages"]:
                 lv["within_budget"] = float((_ms(lat["e2e"][md]) <= budget.e2e_p99_ms).mean())

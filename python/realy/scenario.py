@@ -175,9 +175,13 @@ class Scenario(_Model):
         return hashlib.sha256(json.dumps(self.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:16]
 
     def scoring_config(self) -> dict[str, Any]:
-        """ScoringConfig JSON with the rule set inlined (hot-reloadable by the services)."""
-        cfg = {"version": self.fingerprint(), "budget_ms": int(self.budget.hot_path_p99_ms),
-               "feature_sample_permille": self.feature_sample_permille}
+        """COMPLETE ScoringConfig JSON (service defaults + this scenario), rule set inlined.
+
+        Services apply config with presence semantics, so a run must send every field explicitly —
+        otherwise settings leak from the previous run (e.g. echo mode, injected delays)."""
+        cfg = dict(SCORING_DEFAULTS)
+        cfg.update({"version": self.fingerprint(), "budget_ms": int(self.budget.hot_path_p99_ms),
+                    "feature_sample_permille": self.feature_sample_permille})
         cfg.update(self.scoring)
         rules_path = REPO_ROOT / "rules" / f"{self.rules}.yaml"
         text = rules_path.read_text()
@@ -186,6 +190,26 @@ class Scenario(_Model):
         if self.topology.startswith("echo"):
             cfg["echo"] = True
         return cfg
+
+    def model_server_config(self) -> dict[str, Any]:
+        """COMPLETE ModelServerConfig JSON (defaults + this scenario)."""
+        cfg = dict(MODEL_SERVER_DEFAULTS)
+        cfg.update(self.model_server)
+        return cfg
+
+
+# Explicit values for every ScoringConfig / ModelServerConfig field a scenario may leave out
+# (mirrors ScoringConfigHolder.defaults() in Java; {} clears a latency distribution = no delay).
+SCORING_DEFAULTS: dict[str, Any] = {
+    "budget_ms": 100, "feature_deadline_ms": 30, "model_deadline_ms": 80, "on_deadline": "FALLBACK_RULES",
+    "feature_lookup_delay": {}, "model_extra_delay": {}, "feature_source": "redis",
+    "microbatch_window_us": 0, "microbatch_max": 0, "hedge_after_ms": 0, "feature_sample_permille": 1000,
+    "audit_on_failure": "SPOOL_LOCAL", "self_inclusion": True, "echo": False,
+}
+MODEL_SERVER_DEFAULTS: dict[str, Any] = {
+    "service_time": {"lognormal": {"median_ms": 8, "p99_ms": 25}}, "per_item_us": 0, "workers": 0,
+    "max_batch": 1, "max_queue_delay_us": 0, "max_queue": 0,
+}
 
 
 def load_scenario(name_or_path: str | Path, overrides: dict[str, Any] | None = None) -> Scenario:

@@ -106,7 +106,7 @@ class Rules:
         return 1
 
 
-def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: int = 250_000,
+def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: int = 1_000_000,
                log=print) -> dict[str, Any]:
     import cel
     from ..world import World
@@ -121,6 +121,9 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     if events is None or dec is None:
         out["error"] = "run has no events or decisions"
         return out
+    n_run_events = int(events.num_rows)
+    if "backfill" in events.column_names:
+        n_run_events = int(events.num_rows - pa.compute.sum(events["backfill"]).as_py())
     dec = dec.filter(pa.compute.equal(dec["revision"], 0))
     d_ids = dec["event_id"].to_numpy()
     _, first = np.unique(d_ids, return_index=True)
@@ -268,7 +271,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     # ------------------------------------------------------------------ 5. ClickHouse audit
     ch = clickhouse or os.environ.get("CLICKHOUSE_URL", "http://localhost:8123")
     try:
-        out["audit"] = audit_checks(ch, run_dir.name, int(events.num_rows), scorer, rules, schema)
+        out["audit"] = audit_checks(ch, run_dir.name, n_run_events, scorer, rules, schema)
     except Exception as e:  # noqa: BLE001
         out["audit"] = {"error": f"ClickHouse unavailable or not ingesting: {e}"}
     passed = (out["rules"]["parity"] == 1.0 and out["score"]["parity"] == 1.0 and out["outcome"]["parity"] == 1.0

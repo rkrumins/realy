@@ -74,7 +74,7 @@ def check(sc: Scenario, n: int = 200_000, infra: dict[str, dict] | None = None, 
     rng = np.random.default_rng(seed)
     cfg = sc.scoring_config()
     inf = {**INFRA_DEFAULTS, **(infra or {})}
-    ms = sc.model_server or {}
+    ms = sc.model_server_config()
     budget = float(cfg.get("budget_ms", 100))
     fdl = float(cfg.get("feature_deadline_ms", 30)) or np.inf
     mdl = float(cfg.get("model_deadline_ms", 80)) or np.inf

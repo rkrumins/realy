@@ -56,13 +56,12 @@ def new_run_id(sc: Scenario) -> str:
 
 def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str], None]) -> None:
     scoring = sc.scoring_config()
-    model_cfg = dict(sc.model_server)
+    model_cfg = sc.model_server_config()
     msgs = [
         control.control_message(run_id, "gateway", ingress={"kafka_enabled": sc.topology in ("gateway-kafka", "echo-kafka")}),
         control.control_message(run_id, "*", scoring=scoring),
     ]
-    if model_cfg:
-        msgs.append(control.control_message(run_id, "model", model_server=model_cfg))
+    msgs.append(control.control_message(run_id, "model", model_server=model_cfg))
     control.publish(msgs)
     # Admin HTTP for immediate, verifiable effect (bench.control is the scalable path).
     with httpx.Client(timeout=5) as c:
