@@ -64,6 +64,17 @@ def verify(run_dir: Path, clickhouse: Optional[str] = typer.Option(None, help="C
 
 
 @app.command()
+def budget(scenario: str, set_: list[str] = typer.Option([], "--set"), samples: int = 200_000,
+           as_json: bool = typer.Option(False, "--json")):
+    """Monte Carlo feasibility of the scenario's latency budget (before running anything)."""
+    from .budget.check import check, render
+    from .scenario import load_scenario
+    r = check(load_scenario(scenario, _overrides(set_)), n=samples)
+    typer.echo(json.dumps(r, indent=1) if as_json else render(r))
+    raise typer.Exit(0 if r["verdict"] != "INFEASIBLE" else 2)
+
+
+@app.command()
 def topics(replication: int = typer.Option(1)):
     """Create the contract topics (contracts/kafka/topics.yaml)."""
     from .common.kafka import ensure_topics
