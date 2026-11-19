@@ -1,184 +1,204 @@
-import { useEffect, useState } from "react";
-import { ago, api, fmt, fmtInt, Job, pct, RunSummary, ScenarioInfo, Schedule } from "../api";
-import { go } from "../App";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CalendarClock, GitCompareArrows, History, ListOrdered, Rocket, Search, ShieldCheck, ShieldX, Trash2, X } from "lucide-react";
+import * as React from "react";
+import { useNavigate, useSearchParams } from "react-router";
+import { toast } from "sonner";
+import { EmptyState, ErrorState, PageHeader, StatusBadge, TopologyBadge, topologyLabel, VerdictBadge } from "@/components/common";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox, Skeleton } from "@/components/ui/controls";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { api } from "@/lib/api";
+import { cn } from "@/lib/cn";
+import { fmtAgo, fmtCompact, fmtDuration, fmtMs, fmtNum, fmtPct, fmtTime } from "@/lib/format";
+import { TOPOLOGIES, type Job, type RunSummary, type Schedule } from "@/lib/types";
 
-const TOPOLOGIES = ["", "gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"];
+const th = "px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-subtle whitespace-nowrap";
 
-function setPath(o: Record<string, any>, path: string, v: unknown) {
-  const parts = path.split(".");
-  let cur = o;
-  for (const p of parts.slice(0, -1)) cur = cur[p] ??= {};
-  cur[parts[parts.length - 1]] = v;
+function HistoryTable({ rows, selected, toggle }: { rows: RunSummary[]; selected: string[]; toggle: (id: string) => void }) {
+  const nav = useNavigate();
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[980px] text-[13px]">
+        <thead className="border-b border-border bg-surface-2/40">
+          <tr>
+            <th className="w-10 px-4 py-2" />
+            <th className={th}>Verdict</th><th className={th}>Run</th><th className={th}>Topology</th>
+            <th className={cn(th, "text-right")}>TPS</th><th className={cn(th, "text-right")}>p50</th><th className={cn(th, "text-right")}>p99</th>
+            <th className={cn(th, "text-right")}>In budget</th><th className={cn(th, "text-right")}>Decided</th><th className={th}>Verify</th>
+            <th className={cn(th, "pr-5 text-right")}>Started</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const sel = selected.includes(r.run_id);
+            return (
+              <tr key={r.run_id} onClick={() => nav(`/runs/${encodeURIComponent(r.run_id)}`)}
+                className={cn("cursor-pointer border-b border-border last:border-0 transition-colors hover:bg-surface-2/60", sel && "bg-accent/6")}>
+                <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                  <Checkbox checked={sel} onCheckedChange={() => toggle(r.run_id)} />
+                </td>
+                <td className="px-3 py-2.5">{r.verdict ? <VerdictBadge verdict={r.verdict} /> : <StatusBadge status={r.status} phase={r.phase} />}</td>
+                <td className="max-w-[300px] px-3 py-2.5">
+                  <div className="truncate font-mono text-[12.5px] text-fg">{r.scenario}</div>
+                  <div className="truncate font-mono text-[11px] text-subtle">{r.run_id}</div>
+                </td>
+                <td className="px-3 py-2.5"><TopologyBadge topology={r.topology} /></td>
+                <td className="px-3 py-2.5 text-right num">{fmtNum(r.achieved_tps)}</td>
+                <td className="px-3 py-2.5 text-right num text-muted">{fmtMs(r.e2e_p50_ms)}</td>
+                <td className="px-3 py-2.5 text-right num">{fmtMs(r.e2e_p99_ms)}</td>
+                <td className="px-3 py-2.5 text-right num">{fmtPct(r.within_budget, 2)}</td>
+                <td className="px-3 py-2.5 text-right num text-muted">{fmtCompact(r.decided)}{r.missing ? <span className="text-fail"> −{fmtCompact(r.missing)}</span> : null}</td>
+                <td className="px-3 py-2.5">
+                  {r.verify_passed === true ? <Badge tone="pass"><ShieldCheck />verified</Badge>
+                    : r.verify_passed === false ? <Badge tone="fail"><ShieldX />mismatch</Badge> : <span className="text-subtle">—</span>}
+                </td>
+                <td className="px-3 py-2.5 pr-5 text-right text-muted" title={fmtTime(r.started_at)}>{fmtAgo(r.started_at)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function JobRow({ j, onAbort }: { j: Job; onAbort?: () => void }) {
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-[13px]">
+      <StatusBadge status={j.status} />
+      <span className="font-mono text-fg">{j.scenario}</span>
+      {j.run_id && <span className="font-mono text-[11.5px] text-subtle">{j.run_id}</span>}
+      {Object.keys(j.overrides || {}).length > 0 && <span className="truncate font-mono text-[11px] text-subtle">{JSON.stringify(j.overrides)}</span>}
+      {j.error && <span className="text-[12px] text-fail">{j.error}</span>}
+      <span className="ml-auto text-[12px] text-subtle">{j.finished_at ? `finished ${fmtAgo(j.finished_at)}` : j.started_at ? `started ${fmtAgo(j.started_at)}` : `queued ${fmtAgo(j.created_at)}`}</span>
+      {onAbort && <Button size="sm" variant="ghost" onClick={onAbort}><X />{j.status === "running" ? "Abort" : "Cancel"}</Button>}
+    </li>
+  );
 }
 
 export default function Runs() {
-  const [scenarios, setScenarios] = useState<ScenarioInfo[]>([]);
-  const [data, setData] = useState<{ queue: Job[]; jobs: Job[]; history: RunSummary[]; current: any } | null>(null);
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [err, setErr] = useState("");
-  const [form, setForm] = useState({ scenario: "smoke", tps: "", duration: "", warmup: "", topology: "", backfill: "", verify: false });
-  const [sched, setSched] = useState({ every: "60", count: "", at: "" });
+  const [params, setParams] = useSearchParams();
+  const nav = useNavigate();
+  const qc = useQueryClient();
+  const tab = params.get("tab") || "history";
+  const runs = useQuery({ queryKey: ["runs"], queryFn: () => api.runs(500), refetchInterval: 5000 });
+  const schedules = useQuery({ queryKey: ["schedules"], queryFn: api.schedules, refetchInterval: 15_000 });
+  const [q, setQ] = React.useState("");
+  const [verdict, setVerdict] = React.useState("");
+  const [topology, setTopology] = React.useState("");
+  const [selected, setSelected] = React.useState<string[]>([]);
+  const toggle = (id: string) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id].slice(-2)));
 
-  const load = () => {
-    api.runs().then(setData).catch((e) => setErr(String(e)));
-    api.schedules().then(setSchedules).catch(() => {});
-  };
-  useEffect(() => {
-    api.scenarios().then(setScenarios).catch((e) => setErr(String(e)));
-    load();
-    const t = setInterval(load, 3000);
-    return () => clearInterval(t);
-  }, []);
+  const abort = useMutation({
+    mutationFn: (id: string) => api.abort(id),
+    onSuccess: (r) => { toast.success(`Abort: ${r.result}`); qc.invalidateQueries({ queryKey: ["runs"] }); },
+    onError: (e) => toast.error("Abort failed", { description: (e as Error).message }),
+  });
+  const del = useMutation({
+    mutationFn: (id: string) => api.deleteSchedule(id),
+    onSuccess: () => { toast.success("Schedule deleted"); qc.invalidateQueries({ queryKey: ["schedules"] }); },
+  });
 
-  const overrides = () => {
-    const o: Record<string, any> = {};
-    if (form.tps) setPath(o, "traffic.profile.tps", +form.tps);
-    if (form.duration) setPath(o, "traffic.duration_s", +form.duration);
-    if (form.warmup) setPath(o, "traffic.warmup_s", +form.warmup);
-    if (form.backfill) setPath(o, "traffic.backfill_days", +form.backfill);
-    if (form.topology) o.topology = form.topology;
-    return o;
-  };
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErr("");
-    try {
-      await api.startRun(form.scenario, overrides(), form.verify);
-      load();
-    } catch (x) {
-      setErr(String(x));
-    }
-  };
-  const addSchedule = async () => {
-    setErr("");
-    try {
-      await api.addSchedule({
-        scenario: form.scenario, overrides: overrides(), verify: form.verify,
-        every_minutes: sched.every ? +sched.every : null, count: sched.count ? +sched.count : null,
-        at: sched.at ? new Date(sched.at).toISOString() : null,
-      });
-      load();
-    } catch (x) {
-      setErr(String(x));
-    }
-  };
-  const sel = scenarios.find((s) => s.name === form.scenario);
-  const cur = data?.current;
+  const history = (runs.data?.history ?? []).filter((r) =>
+    (!q || `${r.run_id} ${r.scenario}`.toLowerCase().includes(q.toLowerCase()))
+    && (!verdict || (verdict === "none" ? !r.verdict : r.verdict === verdict))
+    && (!topology || r.topology === topology));
+  const queue = runs.data?.queue ?? [];
+  const jobs = runs.data?.jobs ?? [];
+  const running = jobs.filter((j) => j.status === "running");
 
   return (
-    <div className="grid">
-      <div className="grid side">
-        <section className="panel">
-          <div className="head"><h2>Start a run</h2><span className="sp" />
-            {sel && <span className="muted">{sel.topology} · {fmtInt(sel.tps)} TPS · {fmtInt(sel.duration_s)} s</span>}</div>
-          <form className="inline" onSubmit={submit}>
-            <label className="f">Scenario
-              <select value={form.scenario} onChange={(e) => setForm({ ...form, scenario: e.target.value })}>
-                {scenarios.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
-              </select>
-            </label>
-            <label className="f">TPS<input type="number" min="1" placeholder={String(sel?.tps ?? "")} value={form.tps}
-              onChange={(e) => setForm({ ...form, tps: e.target.value })} /></label>
-            <label className="f">Duration s<input type="number" min="5" placeholder={String(sel?.duration_s ?? "")} value={form.duration}
-              onChange={(e) => setForm({ ...form, duration: e.target.value })} /></label>
-            <label className="f">Warmup s<input type="number" min="0" value={form.warmup}
-              onChange={(e) => setForm({ ...form, warmup: e.target.value })} /></label>
-            <label className="f">Backfill days<input type="number" min="0" step="0.5" value={form.backfill}
-              onChange={(e) => setForm({ ...form, backfill: e.target.value })} /></label>
-            <label className="f">Topology
-              <select value={form.topology} onChange={(e) => setForm({ ...form, topology: e.target.value })}>
-                {TOPOLOGIES.map((t) => <option key={t} value={t}>{t || "(scenario)"}</option>)}
-              </select>
-            </label>
-            <label className="f" style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingBottom: 6 }}>
-              <input type="checkbox" checked={form.verify} onChange={(e) => setForm({ ...form, verify: e.target.checked })} /> verify
-            </label>
-            <button className="primary" type="submit">Queue run</button>
-          </form>
-          {sel && <p className="muted" style={{ margin: "8px 0 0" }}>{sel.description}</p>}
-          {err && <div className="err" style={{ marginTop: 8 }}>{err}</div>}
-        </section>
-        <section className="panel">
-          <div className="head"><h2>Now running</h2></div>
-          {cur ? (
-            <div className="grid">
-              <div><span className={`badge ${cur.phase}`}>{cur.phase}</span> <span className="mono">{cur.run_id}</span></div>
-              <div className="muted">{cur.scenario} · {cur.topology} · base {fmtInt(cur.base_tps)} TPS × {fmt(cur.rate_multiplier, 2)} · started {ago(cur.started_at)}</div>
-              <div className="row">
-                <button onClick={() => go("live")}>Open live view</button>
-                <button className="danger" onClick={() => api.abort(cur.run_id).then(load)}>Abort</button>
-              </div>
+    <>
+      <PageHeader eyebrow="Runs" title="Runs, queue and schedules"
+        subtitle="Every run keeps its manifest, Parquet results, report and (optionally) verification. Select two runs to compare them."
+        actions={<>
+          <Button variant="secondary" disabled={selected.length !== 2} onClick={() => nav(`/compare?a=${encodeURIComponent(selected[0])}&b=${encodeURIComponent(selected[1])}`)}>
+            <GitCompareArrows />Compare{selected.length ? ` (${selected.length}/2)` : ""}
+          </Button>
+          <Button variant="gradient" onClick={() => nav("/launch")}><Rocket />New run</Button>
+        </>} />
+      <Tabs value={tab} onValueChange={(t) => setParams((p) => { p.set("tab", t); return p; }, { replace: true })}>
+        <TabsList>
+          <TabsTrigger value="history"><History className="size-3.5" />History <span className="text-subtle">{runs.data?.history.length ?? ""}</span></TabsTrigger>
+          <TabsTrigger value="queue"><ListOrdered className="size-3.5" />Queue <span className="text-subtle">{queue.length + running.length || ""}</span></TabsTrigger>
+          <TabsTrigger value="schedules"><CalendarClock className="size-3.5" />Schedules <span className="text-subtle">{schedules.data?.length || ""}</span></TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="history" className="mt-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="relative w-full max-w-xs">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search run id or scenario…" className="pl-9" />
             </div>
-          ) : <div className="muted">Nothing running. Queued runs start automatically, one at a time.</div>}
-          {data && data.queue.length > 0 && (
-            <>
-              <h3 style={{ marginTop: 12 }}>Queue</h3>
-              <table><tbody>
-                {data.queue.map((j) => (
-                  <tr key={j.id}><td>{j.scenario}</td><td className="muted mono">{JSON.stringify(j.overrides)}</td>
-                    <td><button onClick={() => api.abort(j.id).then(load)}>cancel</button></td></tr>
-                ))}
-              </tbody></table>
-            </>
-          )}
-        </section>
-      </div>
+            <Select className="w-36" value={verdict} onChange={setVerdict} ariaLabel="Verdict filter" options={[
+              { value: "", label: "any verdict" }, { value: "PASS", label: "PASS" }, { value: "FAIL", label: "FAIL" }, { value: "none", label: "no verdict" },
+            ]} />
+            <Select className="w-44" value={topology} onChange={setTopology} ariaLabel="Topology filter"
+              options={[{ value: "", label: "any topology" }, ...TOPOLOGIES.map((t) => ({ value: t, label: topologyLabel(t) }))]} />
+            {selected.length > 0 && <Button variant="ghost" size="sm" onClick={() => setSelected([])}><X />Clear selection</Button>}
+            <span className="ml-auto text-[12.5px] text-subtle">{history.length} runs</span>
+          </div>
+          {runs.error && <ErrorState error={runs.error} />}
+          <Card className="overflow-hidden">
+            {runs.isLoading ? <div className="space-y-2 p-4">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="h-10" />)}</div>
+              : history.length === 0 ? <div className="p-5"><EmptyState title="No runs match" icon={<History />}>Clear the filters or launch a new run.</EmptyState></div>
+                : <HistoryTable rows={history} selected={selected} toggle={toggle} />}
+          </Card>
+        </TabsContent>
 
-      <section className="panel">
-        <div className="head"><h2>Run history</h2><span className="sp" /><span className="muted">click a run for its report</span></div>
-        <div className="tw">
-          <table>
-            <thead><tr>
-              <th>Run</th><th>Topology</th><th>Status</th><th>Verdict</th><th className="num">TPS</th>
-              <th className="num">e2e p50</th><th className="num">e2e p99</th><th className="num">hot p99</th>
-              <th className="num">in budget</th><th className="num">missing</th><th className="num">dups</th><th>Verify</th><th>Notes</th>
-            </tr></thead>
-            <tbody>
-              {(data?.history || []).map((r) => (
-                <tr key={r.run_id} className="click" onClick={() => go(`reports/${r.run_id}`)}>
-                  <td className="mono">{r.run_id}</td><td>{r.topology}</td>
-                  <td><span className={`badge ${r.status}`}>{r.phase || r.status}</span></td>
-                  <td>{r.verdict && <span className={`badge ${r.verdict}`}>{r.verdict}</span>}</td>
-                  <td className="num">{fmtInt(r.achieved_tps)}</td>
-                  <td className="num">{fmt(r.e2e_p50_ms)}</td><td className="num">{fmt(r.e2e_p99_ms)}</td>
-                  <td className="num">{fmt(r.hot_path_p99_ms)}</td><td className="num">{pct(r.within_budget)}</td>
-                  <td className="num">{fmtInt(r.missing)}</td><td className="num">{fmtInt(r.duplicates)}</td>
-                  <td>{r.verify_passed === true ? <span className="badge ok">PASS</span> : r.verify_passed === false ? <span className="badge FAIL">FAIL</span> : ""}</td>
-                  <td className="wrap muted">{r.abort_reason || (r.reasons || []).join("; ")}</td>
-                </tr>
-              ))}
-              {data && data.history.length === 0 && <tr><td colSpan={13} className="empty">No runs yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </section>
+        <TabsContent value="queue" className="mt-4 space-y-4">
+          <Card>
+            <div className="border-b border-border px-5 py-3 text-[13px] font-semibold">Running and queued</div>
+            {running.length + queue.length === 0 ? <div className="px-5 py-6 text-[13px] text-subtle">Nothing running or queued.</div> : (
+              <ul className="divide-y divide-border">
+                {running.map((j) => <JobRow key={j.id} j={j} onAbort={() => abort.mutate(j.id)} />)}
+                {queue.map((j) => <JobRow key={j.id} j={j} onAbort={() => abort.mutate(j.id)} />)}
+              </ul>
+            )}
+          </Card>
+          <Card>
+            <div className="border-b border-border px-5 py-3 text-[13px] font-semibold">Recent jobs</div>
+            <ul className="divide-y divide-border">
+              {jobs.filter((j) => j.status !== "queued" && j.status !== "running").slice(0, 30).map((j) => <JobRow key={j.id} j={j} />)}
+            </ul>
+          </Card>
+        </TabsContent>
 
-      <section className="panel">
-        <div className="head"><h2>Schedules (sustained / soak testing)</h2><span className="sp" />
-          <span className="muted">uses the start-run form above for scenario + overrides</span></div>
-        <div className="row">
-          <label className="f">Every (minutes)<input type="number" min="1" value={sched.every} onChange={(e) => setSched({ ...sched, every: e.target.value })} /></label>
-          <label className="f">Count (blank = forever)<input type="number" min="1" value={sched.count} onChange={(e) => setSched({ ...sched, count: e.target.value })} /></label>
-          <label className="f">First at (blank = now)<input type="datetime-local" value={sched.at} onChange={(e) => setSched({ ...sched, at: e.target.value })} /></label>
-          <button onClick={addSchedule}>Add schedule for “{form.scenario}”</button>
-        </div>
-        <div className="tw" style={{ marginTop: 8 }}>
-          <table>
-            <thead><tr><th>Scenario</th><th>Overrides</th><th>Next</th><th>Every</th><th>Remaining</th><th>Enabled</th><th /></tr></thead>
-            <tbody>
-              {schedules.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.scenario}</td><td className="mono muted">{JSON.stringify(s.overrides)}</td>
-                  <td>{new Date(s.next_at * 1000).toLocaleString()}</td><td>{s.every_minutes ? `${s.every_minutes} min` : "once"}</td>
-                  <td>{s.remaining ?? "∞"}</td><td>{s.enabled ? "yes" : "no"}</td>
-                  <td><button onClick={() => api.deleteSchedule(s.id).then(load)}>delete</button></td>
-                </tr>
-              ))}
-              {schedules.length === 0 && <tr><td colSpan={7} className="muted">No schedules.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </div>
+        <TabsContent value="schedules" className="mt-4">
+          <Card className="overflow-hidden">
+            {!schedules.data?.length ? (
+              <div className="p-5"><EmptyState icon={<CalendarClock />} title="No schedules" action={<Button variant="secondary" onClick={() => nav("/launch")}>Schedule a run</Button>}>
+                Recurring soak tests and nightly regressions live here. Create one from the Launch page.
+              </EmptyState></div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[720px] text-[13px]">
+                  <thead className="border-b border-border bg-surface-2/40">
+                    <tr><th className={cn(th, "pl-5")}>Scenario</th><th className={th}>Next run</th><th className={th}>Repeat</th><th className={th}>Remaining</th><th className={th}>Overrides</th><th className={th}>Last job</th><th /></tr>
+                  </thead>
+                  <tbody>
+                    {schedules.data.map((s: Schedule) => (
+                      <tr key={s.id} className="border-b border-border last:border-0">
+                        <td className="px-3 py-2.5 pl-5 font-mono">{s.scenario}</td>
+                        <td className="px-3 py-2.5 num">{fmtTime(s.next_at)}</td>
+                        <td className="px-3 py-2.5">{s.every_minutes ? `every ${fmtDuration(s.every_minutes * 60)}` : "once"}</td>
+                        <td className="px-3 py-2.5 num">{s.remaining ?? "∞"}</td>
+                        <td className="max-w-[240px] truncate px-3 py-2.5 font-mono text-[11.5px] text-subtle">{typeof s.overrides === "string" ? s.overrides : JSON.stringify(s.overrides)}</td>
+                        <td className="px-3 py-2.5 font-mono text-[11.5px] text-subtle">{s.last_job ?? "—"}</td>
+                        <td className="px-3 py-2.5 pr-5 text-right"><Button size="icon-sm" variant="ghost" aria-label="Delete schedule" onClick={() => del.mutate(s.id)}><Trash2 /></Button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </>
   );
 }
