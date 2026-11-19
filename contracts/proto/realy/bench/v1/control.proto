@@ -1,0 +1,135 @@
+// Runtime configuration + control plane. Serialized as proto3 JSON (snake_case field names)
+// on the compacted `bench.control` topic, in scenario YAML files and on admin HTTP endpoints,
+// so Java services and Python tools share one schema.
+syntax = "proto3";
+
+package realy.bench.v1;
+
+option java_package = "io.realy.contracts.bench.v1";
+option java_multiple_files = true;
+
+// ---------------- latency distributions (all values milliseconds) ----------------
+message Fixed { double ms = 1; }
+message Uniform { double min_ms = 1; double max_ms = 2; }
+message Normal { double mean_ms = 1; double sd_ms = 2; double min_ms = 3; double max_ms = 4; }
+// Parameterised by median and p99 (more intuitive than mu/sigma); optional hard cap.
+message LogNormal { double median_ms = 1; double p99_ms = 2; double max_ms = 3; }
+// Mostly-lognormal body plus an occasional uniform tail spike (GC pause, retransmit, ...).
+message Bimodal { double median_ms = 1; double p99_ms = 2; double tail_prob = 3; double tail_min_ms = 4; double tail_max_ms = 5; }
+// Piecewise-linear inverse CDF: quantiles[i] in [0,1] ascending, ms[i] the value at that quantile.
+message Empirical { repeated double quantiles = 1; repeated double ms = 2; }
+
+message LatencyDist {
+  oneof dist {
+    Fixed fixed = 1;
+    Uniform uniform = 2;
+    Normal normal = 3;
+    LogNormal lognormal = 4;
+    Bimodal bimodal = 5;
+    Empirical empirical = 6;
+  }
+  double error_rate = 10;     // fraction of calls failing fast
+  double timeout_rate = 11;   // fraction of calls that never answer (caller deadline fires)
+}
+
+// ---------------- mock model server (KServe v2) capacity model ----------------
+message ModelServerConfig {
+  LatencyDist service_time = 1;     // service time of one batch (base)
+  double per_item_us = 2;           // extra compute per item in a batch
+  uint32 workers = 3;               // concurrent batches (GPU instances / CUDA streams); 0 = unlimited
+  uint32 max_batch = 4;             // dynamic batching: max items per batch (1 = off)
+  uint32 max_queue_delay_us = 5;    // dynamic batching: max wait to fill a batch
+  uint32 max_queue = 6;             // queued requests beyond this are rejected (0 = unbounded)
+  string model_version = 7;
+}
+
+enum OnDeadline {
+  FALLBACK_RULES = 0;           // rules-only decision, flagged degraded
+  TIMEOUT = 1;                  // fail the request (sync) / emit nothing until done (async)
+  PROVISIONAL_THEN_ASYNC = 2;   // answer provisionally now, publish final decision later
+}
+
+enum AuditFailure {
+  SPOOL_LOCAL = 0;   // append to local WAL, replay later, never block payments
+  FAIL_CLOSED = 1;   // decline when the audit record cannot be made durable
+}
+
+// ---------------- scoring orchestrator (gateway + Flink inline) ----------------
+message ScoringConfig {
+  string version = 1;
+  uint32 budget_ms = 2;                 // overall hot-path budget (deadline from ingest)
+  uint32 feature_deadline_ms = 3;       // per-stage deadline for feature lookup
+  uint32 model_deadline_ms = 4;         // per-stage deadline for model call
+  OnDeadline on_deadline = 5;
+  LatencyDist feature_lookup_delay = 6; // injected on top of the real store, per lookup
+  LatencyDist model_extra_delay = 7;    // injected client-side before the model call
+  string feature_source = 8;            // "redis" | "mock"
+  float review_threshold = 9;
+  float decline_threshold = 10;
+  uint32 microbatch_window_us = 11;     // 0 = one RPC per event
+  uint32 microbatch_max = 12;
+  uint32 hedge_after_ms = 13;           // 0 = no hedging
+  uint32 feature_sample_permille = 14;  // decisions carrying the full feature vector (default all)
+  string rule_set_version = 15;
+  string rule_set_yaml = 16;            // full rule set (hot reload)
+  AuditFailure audit_on_failure = 17;
+  bool self_inclusion = 18;             // add current event to online-store aggregates (gateway)
+  bool echo = 19;                       // calibration: decide immediately, no features/model
+}
+
+// Enable/disable a service's Kafka ingress (topology switching without restarts). On enable the
+// consumer seeks to the end of the topic, so a new run never processes an old backlog.
+message IngressCommand {
+  bool kafka_enabled = 1;
+}
+
+message RateCommand {
+  double tps = 1;          // absolute target (0 = keep)
+  double multiplier = 2;   // relative change (0 = keep)
+}
+
+enum RunPhase {
+  RUN_PHASE_UNSPECIFIED = 0;
+  PREPARE = 1;
+  WARMUP = 2;
+  MEASURE = 3;
+  DRAIN = 4;
+  COMPLETE = 5;
+  ABORTED = 6;
+}
+
+message ControlMessage {
+  string run_id = 1;
+  sfixed64 issued_at_us = 2;
+  uint64 version = 3;
+  string target = 4;       // "*" | "gateway" | "flink" | "model" | "emitter"
+  oneof cmd {
+    ScoringConfig scoring = 10;
+    ModelServerConfig model_server = 11;
+    RateCommand rate = 12;
+    RunPhase phase = 13;
+    IngressCommand ingress = 14;
+  }
+}
+
+// ---------------- live telemetry (`bench.metrics`, 1 s windows) ----------------
+message StageStat {
+  string name = 1;
+  uint64 count = 2;
+  double p50_ms = 3;
+  double p90_ms = 4;
+  double p99_ms = 5;
+  double p999_ms = 6;
+  double max_ms = 7;
+}
+
+message MetricsSnapshot {
+  string run_id = 1;
+  string source = 2;       // "emitter" | "collector" | "gateway" | "model" | "flink"
+  string instance = 3;
+  sfixed64 ts_us = 4;      // window end
+  uint32 window_ms = 5;
+  map<string, double> counters = 6;
+  repeated StageStat stages = 7;
+  RunPhase phase = 8;
+}

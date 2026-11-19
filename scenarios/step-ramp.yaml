@@ -1,0 +1,21 @@
+name: step-ramp
+description: Latency vs throughput. Steps 1k -> 10k TPS (1k per 30 s) through the async gateway; finds the knee.
+seed: 42
+world: { customers: 2000000, merchants: 100000, payees: 200000 }
+traffic:
+  profile: { kind: step, start_tps: 1000, step_tps: 1000, step_duration_s: 30, tps: 1000 }
+  duration_s: 300
+  warmup_s: 10
+  generators: 2
+topology: gateway-kafka
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 256
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100 }
+guardrails: { max_consumer_lag: 2000000 }

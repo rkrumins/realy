@@ -1,0 +1,55 @@
+// In-band per-event benchmark telemetry. Travels as the `x-bench-trace` Kafka header
+// (or ScoreRequest.trace on gRPC) and is returned inside DecisionRecord.trace.
+syntax = "proto3";
+
+package realy.bench.v1;
+
+option java_package = "io.realy.contracts.bench.v1";
+option java_multiple_files = true;
+
+enum Stage {
+  STAGE_UNSPECIFIED = 0;
+  // --- service ingress -------------------------------------------------------
+  INGEST = 10;              // point: record received by the service (attr = IngressMode)
+  QUEUE_WAIT = 11;          // received -> processing started
+  DESERIALIZE = 12;
+  // --- Flink stream features --------------------------------------------------
+  SHUFFLE = 20;             // previous operator emit -> this keyed operator (attr = Entity)
+  STATE_FEATURES = 21;      // keyed state read/update/compute (attr = Entity)
+  FEATURE_STORE_WRITE = 22; // features -> online store (Redis)
+  // --- scoring orchestrator ---------------------------------------------------
+  FEATURE_LOOKUP = 30;      // online-store lookup incl. injected delay (attr = lookup index)
+  FEATURE_ASSEMBLE = 31;
+  MODEL_CALL = 40;          // client-observed model latency
+  MODEL_BATCH_WAIT = 41;    // client-side micro-batch formation
+  MODEL_SERVER_QUEUE = 42;  // reported by the model server
+  MODEL_SERVER_COMPUTE = 43;// reported by the model server (attr = batch size)
+  RULES = 50;
+  POLICY = 51;
+  AUDIT_ACK = 60;           // decision record durably acknowledged by Kafka
+  SINK = 61;                // Flink sink handoff
+  DECISION = 70;            // point: decision made
+  RESPONSE = 71;            // point: sync response written
+  FALLBACK = 80;            // point: deadline/err fallback taken (attr = reason)
+  ASYNC_WAIT = 81;          // Flink async I/O queue wait (attr = operator)
+}
+
+message Span {
+  Stage stage = 1;
+  uint32 attr = 2;
+  fixed32 domain = 3;       // clock domain (process) the timestamps were taken in
+  sfixed64 start_us = 4;    // epoch microseconds (calibrated clock of `domain`)
+  sfixed32 dur_us = 5;
+}
+
+message BenchTrace {
+  string run_id = 1;
+  fixed32 gen_id = 2;
+  fixed64 seq = 3;
+  sfixed64 t_intended_us = 4;  // open-loop schedule time (coordinated-omission safe)
+  sfixed64 t_sent_us = 5;      // handed to the producer / RPC
+  fixed32 driver_domain = 6;
+  fixed32 payload_crc32 = 7;   // crc32 of the serialized TransactionEvent
+  uint32 flags = 8;            // bit0: sample full features into the decision record
+  repeated Span spans = 9;
+}

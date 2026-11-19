@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package realy.scoring.v1;
+
+import "realy/payments/v1/transaction.proto";
+import "realy/bench/v1/trace.proto";
+import "realy/scoring/v1/decision.proto";
+
+option java_package = "io.realy.contracts.scoring.v1";
+option java_multiple_files = true;
+
+// Synchronous hot-path API (card-authorisation style rails).
+// Unframed JSON is also accepted on the same port: POST /realy.scoring.v1.ScoringService/Score
+service ScoringService {
+  rpc Score(ScoreRequest) returns (ScoreResponse);
+  // High-rate clients: one long-lived bidi stream, responses may arrive out of order.
+  rpc ScoreStream(stream ScoreRequest) returns (stream ScoreResponse);
+}
+
+message ScoreRequest {
+  realy.payments.v1.TransactionEvent event = 1;
+  realy.bench.v1.BenchTrace trace = 2;
+  uint32 deadline_ms = 3;   // 0 = use the gateway's configured budget
+}
+
+message ScoreResponse {
+  fixed64 event_id = 1;
+  Outcome outcome = 2;
+  float score = 3;
+  repeated string reason_codes = 4;
+  DecisionPath path = 5;
+  bool degraded = 6;
+  sfixed64 decided_at_us = 7;
+  realy.bench.v1.BenchTrace trace = 8;
+}

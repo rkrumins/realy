@@ -1,0 +1,11 @@
+name: echo-calibration
+description: Instrument floor. Gateway answers immediately (no features/model); measures Kafka + driver overhead.
+seed: 42
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 2000 }
+  duration_s: 60
+  warmup_s: 10
+topology: echo-kafka
+scoring: { echo: true }
+budget: { e2e_p99_ms: 50, hot_path_p99_ms: 10 }

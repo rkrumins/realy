@@ -1,0 +1,8 @@
+global: { scrape_interval: 5s, evaluation_interval: 5s }
+scrape_configs:
+  - job_name: gateway
+    static_configs: [{ targets: ["gateway:8080"] }]
+  - job_name: mock-model
+    static_configs: [{ targets: ["mock-model:8002"] }]
+  - job_name: flink
+    static_configs: [{ targets: ["flink-jobmanager:9249", "flink-taskmanager:9249"] }]

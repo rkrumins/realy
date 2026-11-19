@@ -1,0 +1,193 @@
+"""Scenario schema: one YAML file fully describes a reproducible benchmark run.
+
+The `scoring` and `model_server` sections are proto3-JSON of realy.bench.v1.ScoringConfig /
+ModelServerConfig, so the exact same document is pushed to the Java services (admin HTTP or the
+`bench.control` topic) without translation.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCENARIO_DIR = REPO_ROOT / "scenarios"
+
+Topology = Literal["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"]
+FraudKind = Literal[
+    "card_testing", "account_takeover", "lost_stolen", "counterfeit", "merchant_breach",
+    "atm_cashout", "app_scam_mule", "bust_out", "bot_ecom",
+]
+FRAUD_KINDS: tuple[str, ...] = FraudKind.__args__  # type: ignore[attr-defined]
+
+
+class _Model(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class WorldSpec(_Model):
+    customers: int = 200_000
+    merchants: int = 20_000
+    payees: int = 50_000
+    mule_fraction: float = 0.002
+    dir: str | None = None  # default: data/world-<customers>-<seed>
+
+
+class RateProfile(_Model):
+    """Wall-clock target rate as a function of time since run start."""
+    kind: Literal["constant", "ramp", "step", "spike", "sine"] = "constant"
+    tps: float = 1000.0              # constant / base rate
+    start_tps: float | None = None   # ramp/step start
+    end_tps: float | None = None     # ramp end
+    step_tps: float | None = None    # step increment
+    step_duration_s: float | None = None
+    spike_at_s: float | None = None
+    spike_duration_s: float | None = None
+    spike_multiplier: float = 3.0
+    sine_period_s: float = 600.0
+    sine_amplitude: float = 0.3
+
+    def rate_at(self, t: float) -> float:
+        k = self.kind
+        if k == "constant":
+            return self.tps
+        if k == "ramp":
+            s = self.start_tps if self.start_tps is not None else 0.0
+            e = self.end_tps if self.end_tps is not None else self.tps
+            return s + (e - s) * min(1.0, max(0.0, t / max(self._duration, 1e-9)))
+        if k == "step":
+            s = self.start_tps if self.start_tps is not None else self.tps
+            inc = self.step_tps if self.step_tps is not None else s
+            d = self.step_duration_s or 60.0
+            return s + inc * int(t // d)
+        if k == "spike":
+            at = self.spike_at_s or 0.0
+            dur = self.spike_duration_s or 30.0
+            return self.tps * (self.spike_multiplier if at <= t < at + dur else 1.0)
+        if k == "sine":
+            import math
+            return self.tps * (1.0 + self.sine_amplitude * math.sin(2 * math.pi * t / self.sine_period_s))
+        raise ValueError(k)
+
+    _duration: float = 0.0  # set by Scenario for ramps
+
+    def step_index(self, t: float) -> int:
+        if self.kind == "step":
+            return int(t // (self.step_duration_s or 60.0))
+        return 0
+
+
+class TrafficSpec(_Model):
+    profile: RateProfile = Field(default_factory=RateProfile)
+    arrivals: Literal["uniform", "poisson"] = "uniform"
+    duration_s: float = 60.0
+    warmup_s: float = 10.0
+    # Simulated seconds per wall second. "auto" = the population's natural rate maps onto the
+    # target TPS, so each customer behaves realistically (rules fire at realistic rates).
+    time_scale: float | Literal["auto"] = "auto"
+    generators: int = 1              # emitter processes (shards of the customer population)
+    sim_start: str = "2026-11-02T00:00:00Z"
+    backfill_days: float = 0.0       # unpaced history replay before the measured run
+
+
+class CampaignSpec(_Model):
+    kind: FraudKind
+    at_s: float = 0.0                # wall seconds after run start
+    count: int = 1                   # number of campaigns started at `at_s`
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class FraudSpec(_Model):
+    # Background campaigns started per 1,000 legitimate events (Poisson), and their mix.
+    background_per_1k: float = 0.5
+    mix: dict[FraudKind, float] = Field(default_factory=lambda: {
+        "card_testing": 0.22, "account_takeover": 0.15, "lost_stolen": 0.12, "counterfeit": 0.10,
+        "merchant_breach": 0.08, "atm_cashout": 0.03, "app_scam_mule": 0.12, "bust_out": 0.06,
+        "bot_ecom": 0.12})
+    campaigns: list[CampaignSpec] = Field(default_factory=list)
+    unreported_fraction: float = 0.10       # fraud never labelled
+    friendly_fraud_per_1k: float = 0.2      # legit events charged back (label noise)
+    chargeback_delay_days: tuple[float, float] = (1.0, 45.0)
+
+
+class BudgetSpec(_Model):
+    e2e_p99_ms: float = 150.0        # Kafka-to-Kafka (async) / request-to-response (sync)
+    hot_path_p99_ms: float = 100.0   # service ingest -> decision
+    min_compliance: float = 0.99     # fraction of events within e2e budget
+
+
+class GuardrailSpec(_Model):
+    max_consumer_lag: int = 500_000
+    max_error_rate: float = 0.05
+    max_schedule_lag_ms: float = 2_000.0
+    max_missing_fraction: float = 0.01
+
+
+class Scenario(_Model):
+    name: str
+    description: str = ""
+    seed: int = 42
+    world: WorldSpec = Field(default_factory=WorldSpec)
+    traffic: TrafficSpec = Field(default_factory=TrafficSpec)
+    fraud: FraudSpec = Field(default_factory=FraudSpec)
+    topology: Topology = "gateway-kafka"
+    rules: str = "baseline"
+    scoring: dict[str, Any] = Field(default_factory=dict)       # proto3 JSON ScoringConfig
+    model_server: dict[str, Any] = Field(default_factory=dict)  # proto3 JSON ModelServerConfig
+    budget: BudgetSpec = Field(default_factory=BudgetSpec)
+    guardrails: GuardrailSpec = Field(default_factory=GuardrailSpec)
+    feature_sample_permille: int = 1000
+    expect: dict[str, Any] = Field(default_factory=dict)  # e.g. {verdict: FAIL}
+
+    @model_validator(mode="after")
+    def _wire(self) -> "Scenario":
+        self.traffic.profile._duration = self.traffic.duration_s
+        return self
+
+    # ------------------------------------------------------------------ helpers
+    @property
+    def world_dir(self) -> Path:
+        if self.world.dir:
+            p = Path(self.world.dir)
+            return p if p.is_absolute() else REPO_ROOT / p
+        return REPO_ROOT / "data" / f"world-{self.world.customers}-{self.seed}"
+
+    def fingerprint(self) -> str:
+        return hashlib.sha256(json.dumps(self.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:16]
+
+    def scoring_config(self) -> dict[str, Any]:
+        """ScoringConfig JSON with the rule set inlined (hot-reloadable by the services)."""
+        cfg = {"version": self.fingerprint(), "budget_ms": int(self.budget.hot_path_p99_ms),
+               "feature_sample_permille": self.feature_sample_permille}
+        cfg.update(self.scoring)
+        rules_path = REPO_ROOT / "rules" / f"{self.rules}.yaml"
+        text = rules_path.read_text()
+        cfg.setdefault("rule_set_yaml", text)
+        cfg.setdefault("rule_set_version", yaml.safe_load(text).get("version", self.rules))
+        if self.topology.startswith("echo"):
+            cfg["echo"] = True
+        return cfg
+
+
+def load_scenario(name_or_path: str | Path, overrides: dict[str, Any] | None = None) -> Scenario:
+    p = Path(name_or_path)
+    if not p.exists():
+        p = SCENARIO_DIR / f"{name_or_path}.yaml"
+    data = yaml.safe_load(p.read_text())
+    if overrides:
+        data = deep_merge(data, overrides)
+    return Scenario.model_validate(data)
+
+
+def deep_merge(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    out = dict(a)
+    for k, v in b.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
