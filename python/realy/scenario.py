@@ -127,6 +127,14 @@ class GuardrailSpec(_Model):
     max_missing_fraction: float = 0.01
 
 
+class SyncSpec(_Model):
+    """Synchronous rail (topology gateway-grpc): Java open-loop gRPC emitter settings."""
+    mode: Literal["unary", "stream"] = "unary"
+    channels: int = 4
+    deadline_ms: int = 0           # per-request deadline sent to the gateway (0 = gateway budget)
+    target: str | None = None      # default: GATEWAY_GRPC env or localhost:8080
+
+
 class Scenario(_Model):
     name: str
     description: str = ""
@@ -141,6 +149,7 @@ class Scenario(_Model):
     budget: BudgetSpec = Field(default_factory=BudgetSpec)
     guardrails: GuardrailSpec = Field(default_factory=GuardrailSpec)
     feature_sample_permille: int = 1000
+    sync: SyncSpec = Field(default_factory=SyncSpec)
     expect: dict[str, Any] = Field(default_factory=dict)  # e.g. {verdict: FAIL}
 
     @model_validator(mode="after")

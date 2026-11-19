@@ -32,7 +32,7 @@ STEP_LABEL = {
     "model_call": "5 model call (client)", "model_batch_wait": "6 model micro-batch wait",
     "model_server_queue": "6 model server queue", "model_server_compute": "6 model server compute",
     "rules": "5 rules (CEL)", "policy": "5 policy", "audit_ack": "5 audit ack (Kafka)", "hot_path": "= hot path (ingest->decision)",
-    "egress": "7 egress transit", "e2e": "8 END-TO-END (intended->collected)",
+    "egress": "7 egress transit / response", "e2e": "8 END-TO-END (intended->collected|response)",
 }
 
 
@@ -103,7 +103,37 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     order = np.argsort(e_id)
     e_sorted = e_id[order]
     lat: dict[str, np.ndarray] = {}
-    if d is not None and d.num_rows:
+    sync = "t_response_us" in emit.column_names
+    if sync:
+        # Synchronous rail: latency is what the CLIENT observed (intended -> response), from the
+        # load emitter's per-event results; the audit log (decisions) is used for completeness.
+        st_ = emit["status"].to_numpy()
+        okr = st_ == 0
+        t_resp = emit["t_response_us"].to_numpy()
+        t_ing = emit["t_ingest_us"].to_numpy()
+        t_dec = emit["t_decision_us"].to_numpy()
+        ei = np.arange(n_emit)
+        intended = e_int
+        measured = (e_int >= t0 + int(warm * 1e6)) & okr
+        lat["e2e"] = np.where(okr, t_resp - e_int, -1)
+        lat["ingress"] = np.where(okr & (t_ing > 0), t_ing - e_sent, -1)
+        lat["hot_path"] = np.where(okr & (t_ing > 0) & (t_dec > 0), t_dec - t_ing, -1)
+        lat["egress"] = np.where(okr & (t_dec > 0), t_resp - t_dec, -1)
+        for k in emit.column_names:
+            if k.startswith("rs_"):
+                lat[k[3:]] = emit[k].to_numpy().astype(np.int64)
+        outcome = emit["outcome"].to_numpy()
+        degraded = emit["degraded"].to_numpy().astype(bool)
+        stale = np.full(n_emit, -1.0)
+        if d is not None and d.num_rows:
+            dpos = np.clip(np.searchsorted(d_id, e_id), 0, d_id.size - 1)
+            hit = d_id[dpos] == e_id
+            stale = np.where(hit, d["feature_staleness_ms"].to_numpy()[dpos], -1.0)
+        dd = {"t_decision_us": np.where(okr, t_dec, -1), "t_collected_us": np.where(okr, t_resp, -1)}
+        rep["sync"] = {"responses_ok": int(okr.sum()), "deadline": int((st_ == 1).sum()),
+                       "errors": int((st_ == 2).sum()), "no_response": int((st_ == 3).sum()),
+                       "audit_records": int(d_id.size)}
+    elif d is not None and d.num_rows:
         pos = np.searchsorted(e_sorted, d_id)
         pos = np.clip(pos, 0, e_sorted.size - 1)
         ok = e_sorted[pos] == d_id
@@ -146,7 +176,7 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
         return out
 
     overall = step_stats(measured, m_emit)
-    e2e_m = _ms(lat["e2e"][measured]) if "e2e" in lat else np.zeros(0)
+    e2e_m = _ms(lat["e2e"][measured & (lat["e2e"] >= 0)]) if "e2e" in lat else np.zeros(0)
     hot_m = _ms(lat["hot_path"][measured]) if "hot_path" in lat else np.zeros(0)
     hot_m = hot_m[hot_m >= 0]
 
@@ -183,19 +213,20 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     funnel = {"emitted": per_sec(e_sent), "acked": per_sec(e_sent[e_ack >= 0] + e_ack[e_ack >= 0])}
     series_p99: list[float | None] = []
     series_p50: list[float | None] = []
-    if d is not None and d.num_rows:
+    if (d is not None and d.num_rows) or sync:
         funnel["decided"] = per_sec(dd["t_decision_us"][dd["t_decision_us"] > 0])
-        funnel["collected"] = per_sec(dd["t_collected_us"])
+        funnel["responded" if sync else "collected"] = per_sec(dd["t_collected_us"][dd["t_collected_us"] > 0])
         sec_of = ((intended - t0) // 1_000_000).astype(np.int64)
-        e2e_all = _ms(lat["e2e"])
+        e2e_all = np.where(lat["e2e"] >= 0, _ms(lat["e2e"]), np.nan)
         idx_sort = np.argsort(sec_of, kind="stable")
         bounds = np.searchsorted(sec_of[idx_sort], np.arange(dur + 1))
         for s in range(dur):
             v = e2e_all[idx_sort[bounds[s]:bounds[s + 1]]]
+            v = v[~np.isnan(v)]
             series_p99.append(float(np.percentile(v, 99)) if v.size else None)
             series_p50.append(float(np.percentile(v, 50)) if v.size else None)
     cum_e = np.cumsum(funnel["emitted"])
-    cum_c = np.cumsum(funnel.get("collected", [0] * len(cum_e))[: len(cum_e)])
+    cum_c = np.cumsum(funnel.get("collected", funnel.get("responded", [0] * len(cum_e)))[: len(cum_e)])
     backlog = (cum_e[: len(cum_c)] - cum_c).tolist()
 
     # ---------------------------------------------------------------- tail attribution
@@ -259,7 +290,12 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     e2e_p99 = float(np.percentile(e2e_m, 99)) if e2e_m.size else float("nan")
     hot_p99 = float(np.percentile(hot_m, 99)) if hot_m.size else float("nan")
     if missing / max(1, n_emit) > scenario.guardrails.max_missing_fraction:
-        reasons.append(f"missing decisions {missing} ({missing / n_emit:.2%})")
+        reasons.append(f"missing decisions {missing} ({missing / n_emit:.2%})"
+                       + (" in the audit log" if sync else ""))
+    if sync and rep["sync"]["responses_ok"] < n_emit:
+        bad = n_emit - rep["sync"]["responses_ok"]
+        if bad / n_emit > scenario.guardrails.max_missing_fraction:
+            reasons.append(f"{bad} requests without a successful response ({rep['sync']})")
     if not (e2e_p99 <= budget.e2e_p99_ms):
         reasons.append(f"e2e p99 {e2e_p99:.1f} ms > budget {budget.e2e_p99_ms:.0f} ms")
     if hot_m.size and not (hot_p99 <= budget.hot_path_p99_ms):

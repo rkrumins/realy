@@ -97,6 +97,7 @@ def _metrics_monitor(handle: RunHandle, sc: Scenario, stop_evt: threading.Event,
                 except ValueError:
                     continue
                 if m.topic() == METRICS:
+                    data = normalize_snapshot(data)
                     if data.get("run_id") not in ("", handle.run_id):
                         continue
                     out.write(json.dumps(data) + "\n")
@@ -121,6 +122,17 @@ def _metrics_monitor(handle: RunHandle, sc: Scenario, stop_evt: threading.Event,
     finally:
         out.close()
         cons.close()
+
+
+def normalize_snapshot(s: dict) -> dict:
+    """proto3 JSON (Java side) omits empty maps and zero-valued fields and prints int64 as strings."""
+    s["counters"] = {k: float(v) for k, v in (s.get("counters") or {}).items()}
+    s["stages"] = [{"name": st.get("name", "?"), "count": int(st.get("count", 0)),
+                    **{f: float(st.get(f, 0.0)) for f in ("p50_ms", "p90_ms", "p99_ms", "p999_ms", "max_ms")}}
+                   for st in (s.get("stages") or [])]
+    s["ts_us"] = int(s.get("ts_us", 0))
+    s.setdefault("run_id", "")
+    return s
 
 
 def _guardrails(handle: RunHandle, sc: Scenario, snap: dict, log) -> None:
@@ -174,6 +186,14 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
     apply_topology(sc, run_id, ep, log)
     time.sleep(float(os.environ.get("REALY_CONFIG_SETTLE_S", "2")))
 
+    sync = sc.topology == "gateway-grpc"
+    sim0 = sim_start_us(sc)
+    if sync:
+        from .sync import compile_run_dataset
+        t_c = time.time()
+        meta = compile_run_dataset(world, sc, run_dir, ts, sim0)
+        log(f"compiled {meta['events']:,} events for the sync rail in {time.time() - t_c:.1f}s (sha256 {meta['sha256'][:12]})")
+
     results = ctx.Queue()
     stop_mon = threading.Event()
     mon = threading.Thread(target=_metrics_monitor, args=(handle, sc, stop_mon, log), daemon=True)
@@ -192,9 +212,8 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
             raise RuntimeError("collector did not get a partition assignment within 60 s")
     time.sleep(1.0)
 
-    n_shards = max(1, sc.traffic.generators)
+    n_shards = 1 if sync else max(1, sc.traffic.generators)
     t_start = now_us() + 3_000_000
-    sim0 = sim_start_us(sc)
     plans = [ShardPlan(shard=s, n_shards=n_shards, run_id=run_id, run_dir=str(run_dir),
                        scenario=sc.model_dump(mode="json"), world_dir=str(sc.world_dir), t_start_us=t_start,
                        time_scale=ts, sim_start_us=sim0, duration_s=sc.traffic.duration_s) for s in range(n_shards)]
@@ -205,13 +224,28 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=1))
     log(f"run {run_id}: {sc.topology}, {n_shards} emitter shard(s), {n_coll} collector(s), "
         f"{sc.traffic.duration_s:.0f}s ({sc.traffic.profile.kind} {sc.traffic.profile.tps:.0f} TPS)")
-    queues = [ctx.Queue(maxsize=200) for _ in plans]
-    gens = [ctx.Process(target=generator_main, args=(p, q, handle.rate_mult, handle.stop), daemon=True)
-            for p, q in zip(plans, queues)]
-    ems = [ctx.Process(target=emitter_main, args=(p, q, handle.stop, results), daemon=True)
-           for p, q in zip(plans, queues)]
-    for p in gens + ems:
-        p.start()
+    if sync:
+        from .sync import run_emitter
+        target = sc.sync.target or os.environ.get("GATEWAY_GRPC", "localhost:8080")
+
+        def _sync_emit() -> None:
+            try:
+                results.put(("emitter", 0, run_emitter(run_dir, run_id, t_start, ts, sim0, target, sc.sync.mode,
+                                                       sc.sync.channels, sc.sync.deadline_ms, log)))
+            except Exception as e:  # noqa: BLE001
+                results.put(("emitter", 0, {"error": str(e)}))
+
+        th = threading.Thread(target=_sync_emit, daemon=True)
+        th.start()
+        gens, ems = [], [th]
+    else:
+        queues = [ctx.Queue(maxsize=200) for _ in plans]
+        gens = [ctx.Process(target=generator_main, args=(p, q, handle.rate_mult, handle.stop), daemon=True)
+                for p, q in zip(plans, queues)]
+        ems = [ctx.Process(target=emitter_main, args=(p, q, handle.stop, results), daemon=True)
+               for p, q in zip(plans, queues)]
+        for p in gens + ems:
+            p.start()
     handle.phase = "WARMUP"
     emit_summ: dict[int, dict] = {}
     coll_summ: dict[int, dict] = {}
