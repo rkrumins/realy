@@ -1,0 +1,19 @@
+# prometheus-operator (kube-prometheus-stack) scrape configs.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata: { name: realy-services }
+spec:
+  selector:
+    matchExpressions: [{ key: app, operator: In, values: [gateway, mock-model] }]
+  podMetricsEndpoints:
+    - { targetPort: 8080, path: /metrics, interval: 5s }
+    - { targetPort: 8002, path: /metrics, interval: 5s }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata: { name: realy-flink }
+spec:
+  selector:
+    matchExpressions: [{ key: type, operator: In, values: [flink-native-kubernetes] }]
+  podMetricsEndpoints:
+    - { targetPort: 9249, interval: 5s }

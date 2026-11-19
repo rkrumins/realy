@@ -1,0 +1,33 @@
+# Real proxy models on NVIDIA L4 via KServe + Triton (model repo produced by `realy train`:
+# models/triton/{fraud_mlp,fraud_gbdt} -> upload to the bucket below). RawDeployment mode avoids the
+# Knative activator hop on the hot path; HPA scales on GPU duty cycle via custom metrics if installed.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: fraud-models
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+    serving.kserve.io/autoscalerClass: hpa
+spec:
+  predictor:
+    minReplicas: 2
+    maxReplicas: 8
+    nodeSelector:
+      cloud.google.com/gke-accelerator: nvidia-l4
+    tolerations:
+      - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+    model:
+      modelFormat: { name: triton }
+      runtime: kserve-tritonserver
+      storageUri: gs://REPLACE_BUCKET/realy/models/triton
+      args:
+        - --model-control-mode=explicit
+        - --load-model=fraud_mlp
+        - --load-model=fraud_gbdt
+        - --grpc-infer-allocation-pool-size=1024
+        - --allow-metrics=true
+      ports:
+        - { name: h2c, containerPort: 9000, protocol: TCP }
+      resources:
+        requests: { cpu: "8", memory: 24Gi, nvidia.com/gpu: "1" }
+        limits: { cpu: "8", memory: 24Gi, nvidia.com/gpu: "1" }

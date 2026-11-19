@@ -64,7 +64,8 @@ services:
     ports: ["8001:8001", "8002:8002"]
     environment:
       <<: *jvm-env
-      MODEL_WEIGHTS: ${MODEL_WEIGHTS:-}
+      # trained proxy (realy train); empty -> bundled hand-set default weights
+      MODEL_WEIGHTS: ${MODEL_WEIGHTS:-/models/proxy/fraud_mlp.weights.json}
       JAVA_OPTS: "-XX:+UseZGC -XX:+ZGenerational -Xmx1g"
     volumes: ["../../models:/models:ro"]
     depends_on: { kafka: { condition: service_healthy } }

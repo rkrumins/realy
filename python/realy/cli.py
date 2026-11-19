@@ -75,6 +75,18 @@ def budget(scenario: str, set_: list[str] = typer.Option([], "--set"), samples: 
 
 
 @app.command()
+def train(run: list[Path] = typer.Option(..., "--run", help="finished run dir(s) to train on (served features + labels)"),
+          hidden: str = typer.Option("64,32", help="MLP hidden layer sizes"),
+          trees: int = 300, depth: int = 6,
+          input_dim: int = typer.Option(0, help="pad the tensor to the production model width (0 = schema size)")):
+    """Train structural proxy models (MLP->ONNX/Triton + weights JSON, XGBoost->Triton FIL) on synthetic data."""
+    from .train.proxy import train as do_train
+    meta = do_train(run, hidden=tuple(int(x) for x in hidden.split(",") if x), trees=trees, depth=depth,
+                    input_dim=input_dim or None)
+    typer.echo(json.dumps({k: meta[k] for k in ("version", "rows", "fraud_rate", "input_dim", "metrics", "parity", "files")}, indent=1))
+
+
+@app.command()
 def topics(replication: int = typer.Option(1)):
     """Create the contract topics (contracts/kafka/topics.yaml)."""
     from .common.kafka import ensure_topics

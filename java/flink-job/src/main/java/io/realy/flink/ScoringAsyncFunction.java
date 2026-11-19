@@ -55,7 +55,7 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
         store = "mock".equals(holder.get().cfg().getFeatureSource())
                 ? new MockOnlineStore() : RedisOnlineStore.shared(Env.str("REDIS_URI", "redis://localhost:6379"), 4);
         model = new KServeModelClient(Env.str("MODEL_TARGET", "localhost:8001"), Env.str("MODEL_NAME", "fraud_mlp"),
-                schema.size(), 2);
+                Env.integer("MODEL_INPUT_DIM", schema.size()), 2);
         model.configureBatching(holder.get().cfg().getMicrobatchWindowUs(), holder.get().cfg().getMicrobatchMax());
         holder.onChange(a -> model.configureBatching(a.cfg().getMicrobatchWindowUs(), a.cfg().getMicrobatchMax()));
         instance = Env.str("HOSTNAME", "flink") + "/" + getRuntimeContext().getTaskInfo().getIndexOfThisSubtask();

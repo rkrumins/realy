@@ -1,0 +1,15 @@
+name: "fraud_gbdt"
+backend: "fil"
+max_batch_size: 8192
+input [ { name: "input__0", data_type: TYPE_FP32, dims: [ 54 ] } ]
+output [ { name: "output__0", data_type: TYPE_FP32, dims: [ 1 ] } ]
+dynamic_batching { max_queue_delay_microseconds: 300 }
+instance_group [ { count: 1, kind: KIND_GPU } ]
+parameters [
+  { key: "model_type" value: { string_value: "xgboost_json" } },
+  { key: "output_class" value: { string_value: "false" } },
+  { key: "predict_proba" value: { string_value: "false" } },
+  { key: "storage_type" value: { string_value: "AUTO" } },
+  { key: "use_experimental_optimizations" value: { string_value: "true" } },
+  { key: "realy_version" value: { string_value: "proxy-105020-42" } }
+]

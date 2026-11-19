@@ -47,6 +47,7 @@ class _Cols:
         self.data: dict[str, list] = {k: [] for k in self.FIELDS}
         self.reasons: list[str] = []
         self.rules: list[str] = []
+        self.model_version: list[str] = []
         self.n = 0
 
     def table(self):
@@ -54,6 +55,7 @@ class _Cols:
         cols = {k: np.asarray(v, dtype=t) for k, v in self.data.items() for t in [self.FIELDS[k]]}
         cols["reason_codes"] = np.asarray(self.reasons, dtype=object)
         cols["rule_hits"] = np.asarray(self.rules, dtype=object)
+        cols["model_version"] = np.asarray(self.model_version, dtype=object)
         return pa.table(cols)
 
 
@@ -207,6 +209,7 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
                 c[f"st_{colname}"].append(st.get(stg, -1))
             cols.reasons.append(",".join(d.reason_codes))
             cols.rules.append(",".join(h.rule_id for h in d.rule_hits))
+            cols.model_version.append(d.model.model_version)
             cols.n += 1
             if d.revision == 0:
                 sec_count += 1

@@ -1,0 +1,39 @@
+{
+ "version": "proxy-105020-42",
+ "rows": 105020,
+ "fraud_rate": 0.022709960007617595,
+ "input_dim": 54,
+ "features": 54,
+ "hidden": [
+  64,
+  32
+ ],
+ "trees": 300,
+ "depth": 6,
+ "metrics": {
+  "fraud_mlp": {
+   "roc_auc": 0.9998555525999093,
+   "pr_auc": 0.9959204080988082
+  },
+  "fraud_gbdt": {
+   "roc_auc": 0.999954488279555,
+   "pr_auc": 0.9985099349153786
+  }
+ },
+ "parity": {
+  "weights_json_vs_sklearn_max_abs": 5.960464477539063e-08,
+  "onnx_vs_sklearn_max_abs": 1.0529385008339887e-07
+ },
+ "files": [
+  "models/proxy/fraud_mlp.weights.json",
+  "models/triton/fraud_mlp/1/model.onnx",
+  "models/triton/fraud_mlp/config.pbtxt",
+  "models/triton/fraud_gbdt/1/xgboost.json",
+  "models/triton/fraud_gbdt/config.pbtxt"
+ ],
+ "runs": [
+  "mixed-realistic-20261119-084755",
+  "flink-inline-smoke-20261119-084229",
+  "sync-smoke-20261119-083451"
+ ]
+}

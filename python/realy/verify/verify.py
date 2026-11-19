@@ -39,6 +39,18 @@ def _read(run_dir: Path, pattern: str) -> pa.Table | None:
 
 
 class ProxyScorer:
+    @classmethod
+    def for_version(cls, version: str | None) -> "ProxyScorer":
+        """Weights file whose `version` matches the model version recorded in the decisions."""
+        if version:
+            for p in sorted((REPO_ROOT / "models" / "proxy").glob("*.weights.json")):
+                try:
+                    if json.loads(p.read_text()).get("version") == version:
+                        return cls(p)
+                except ValueError:
+                    continue
+        return cls()
+
     def __init__(self, path: str | Path | None = None) -> None:
         path = path or os.environ.get("MODEL_WEIGHTS") or REPO_ROOT / "models" / "proxy" / "default.weights.json"
         w = json.loads(Path(path).read_text())
@@ -217,7 +229,11 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
 
     # ------------------------------------------------------------------ 2-4. rules / score / outcome parity
     rules = Rules(sc.scoring_config()["rule_set_yaml"])
-    scorer = ProxyScorer()
+    mv = None
+    if "model_version" in dec.column_names:
+        vals = [v for v in dec["model_version"].to_pylist() if v]
+        mv = max(set(vals), key=vals.count) if vals else None
+    scorer = ProxyScorer.for_version(mv)
     d_pos = {int(e): j for j, e in enumerate(d_ids)}
     dd = {c: dec[c].to_numpy(zero_copy_only=False) for c in ("outcome", "score", "path", "rule_hits")}
     ev_idx = {int(e): j for j, e in enumerate(cols["event_id"].tolist())}

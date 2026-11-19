@@ -1,0 +1,78 @@
+# ClickHouse: asynchronous audit / analytics / training store, fed by its Kafka table engine (never on the
+# hot path). Single replica here; for HA use the Altinity operator (ClickHouseInstallation) with
+# ReplicatedReplacingMergeTree + Keeper — the generated DDL keeps the same ORDER BY/PARTITION keys.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  labels: { app: clickhouse }
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector: { matchLabels: { app: clickhouse } }
+  template:
+    metadata: { labels: { app: clickhouse } }
+    spec:
+      # The server entrypoint chowns its data paths, so format schemas are copied into the (writable)
+      # data volume instead of being mounted read-only where ClickHouse looks for them.
+      initContainers:
+        - name: format-schemas
+          image: busybox:1.37
+          command: ["sh", "-c", "mkdir -p /data/format_schemas && cp -rL /src/. /data/format_schemas/"]
+          volumeMounts:
+            - { name: protos, mountPath: /src, readOnly: true }
+            - { name: data, mountPath: /data }
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:26.9
+          env:
+            - { name: CLICKHOUSE_SKIP_USER_SETUP, value: "1" }
+          ports:
+            - { name: http, containerPort: 8123 }
+            - { name: native, containerPort: 9000 }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/clickhouse }
+          resources:
+            requests: { cpu: "8", memory: 32Gi }
+            limits: { cpu: "8", memory: 32Gi }
+          readinessProbe: { httpGet: { path: /ping, port: 8123 }, periodSeconds: 5 }
+      volumes:
+        - { name: protos, configMap: { name: contract-protos } }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: premium-rwo
+        resources: { requests: { storage: 500Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: clickhouse }
+spec:
+  selector: { app: clickhouse }
+  ports:
+    - { name: http, port: 8123, targetPort: 8123 }
+    - { name: native, port: 9000, targetPort: 9000 }
+---
+# Restores the proto directory layout (ConfigMap keys use "__" for "/") and applies the DDL.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: clickhouse-init
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: clickhouse/clickhouse-server:26.9
+          command: ["bash", "-ec"]
+          args:
+            - |
+              until clickhouse-client --host clickhouse -q 'SELECT 1'; do sleep 3; done
+              for f in /ddl/*.sql; do
+                sed "s/__KAFKA_BROKERS__/realy-kafka-bootstrap:9092/g" "$f" | clickhouse-client --host clickhouse --multiquery
+              done
+          volumeMounts: [{ name: ddl, mountPath: /ddl }]
+      volumes: [{ name: ddl, configMap: { name: clickhouse-ddl } }]

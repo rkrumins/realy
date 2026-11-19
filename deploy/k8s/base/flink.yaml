@@ -1,0 +1,89 @@
+# Flink Kubernetes Operator (>= 1.10) FlinkDeployments in application mode (one cluster per job, so no
+# shared-JVM classloader concerns). Image: deploy/docker/flink-job.Dockerfile (jar in usrlib).
+# `features` (Topology B) runs permanently; `inline` (Topology A) is suspended until a run needs it.
+# Switching keeps state: the operator's savepoint upgrade mode restores keyed RocksDB state (same uids).
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: realy-features
+spec:
+  image: realy/flink-job:dev
+  flinkVersion: v2_2
+  serviceAccount: flink
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "4"
+    state.backend.type: rocksdb
+    execution.checkpointing.incremental: "true"
+    execution.checkpointing.dir: gs://REPLACE_BUCKET/realy/checkpoints
+    execution.checkpointing.savepoint-dir: gs://REPLACE_BUCKET/realy/savepoints
+    state.backend.rocksdb.localdir: /rocksdb
+    state.backend.rocksdb.memory.managed: "true"
+    taskmanager.memory.managed.fraction: "0.4"
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: "9249"
+    kubernetes.operator.savepoint.history.max.count: "5"
+  jobManager:
+    resource: { cpu: 2, memory: 4g }
+  taskManager:
+    resource: { cpu: 4, memory: 16g }
+    podTemplate:
+      spec:
+        containers:
+          - name: flink-main-container
+            env:
+              - { name: KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+              - { name: REDIS_URI, value: redis://redis:6379 }
+              - { name: MODEL_TARGET, value: mock-model:8001 }
+            volumeMounts: [{ name: rocksdb, mountPath: /rocksdb }]
+        volumes:
+          - name: rocksdb          # local NVMe SSD on the node pool (overlay sets the storage)
+            emptyDir: {}
+  job:
+    jarURI: local:///opt/flink/usrlib/realy-flink-job.jar
+    entryClass: io.realy.flink.FraudJob
+    args: ["--mode", "features", "--parallelism", "24", "--bootstrap", "realy-kafka-bootstrap:9092",
+           "--group", "realy-flink", "--checkpoint-ms", "10000", "--buffer-timeout-ms", "1"]
+    parallelism: 24
+    upgradeMode: savepoint
+    state: running
+---
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: realy-inline
+spec:
+  image: realy/flink-job:dev
+  flinkVersion: v2_2
+  serviceAccount: flink
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "4"
+    state.backend.type: rocksdb
+    execution.checkpointing.incremental: "true"
+    execution.checkpointing.dir: gs://REPLACE_BUCKET/realy/checkpoints-inline
+    execution.checkpointing.savepoint-dir: gs://REPLACE_BUCKET/realy/savepoints-inline
+    state.backend.rocksdb.localdir: /rocksdb
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: "9249"
+  jobManager:
+    resource: { cpu: 2, memory: 4g }
+  taskManager:
+    resource: { cpu: 4, memory: 16g }
+    podTemplate:
+      spec:
+        containers:
+          - name: flink-main-container
+            env:
+              - { name: KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+              - { name: REDIS_URI, value: redis://redis:6379 }
+              - { name: MODEL_TARGET, value: mock-model:8001 }
+            volumeMounts: [{ name: rocksdb, mountPath: /rocksdb }]
+        volumes:
+          - { name: rocksdb, emptyDir: {} }
+  job:
+    jarURI: local:///opt/flink/usrlib/realy-flink-job.jar
+    entryClass: io.realy.flink.FraudJob
+    args: ["--mode", "both", "--parallelism", "24", "--bootstrap", "realy-kafka-bootstrap:9092",
+           "--group", "realy-flink-inline", "--async-capacity", "1000", "--checkpoint-ms", "10000"]
+    parallelism: 24
+    upgradeMode: savepoint
+    state: suspended

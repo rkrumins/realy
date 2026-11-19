@@ -1,0 +1,62 @@
+# Small single-node cluster (kind / minikube / k3d): one broker, tiny resources, mock model only.
+#   kubectl apply -k deploy/k8s/overlays/dev
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - target: { kind: KafkaNodePool, name: brokers }
+    patch: |-
+      - { op: replace, path: /spec/replicas, value: 1 }
+      - { op: replace, path: /spec/resources, value: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "2", memory: 2Gi } } }
+      - { op: replace, path: /spec/jvmOptions, value: { "-Xms": 1g, "-Xmx": 1g } }
+      - { op: replace, path: /spec/storage/volumes/0/size, value: 10Gi }
+      - { op: remove, path: /spec/storage/volumes/0/class }
+      - { op: remove, path: /spec/template }
+  - target: { kind: Kafka, name: realy }
+    patch: |-
+      - { op: replace, path: /spec/kafka/config/default.replication.factor, value: 1 }
+      - { op: replace, path: /spec/kafka/config/min.insync.replicas, value: 1 }
+      - { op: replace, path: /spec/kafka/config/offsets.topic.replication.factor, value: 1 }
+      - { op: replace, path: /spec/kafka/config/transaction.state.log.replication.factor, value: 1 }
+      - { op: replace, path: /spec/kafka/config/transaction.state.log.min.isr, value: 1 }
+  - target: { kind: KafkaTopic }
+    patch: |-
+      - { op: replace, path: /spec/replicas, value: 1 }
+      - { op: replace, path: /spec/config/min.insync.replicas, value: "1" }
+  - target: { kind: Deployment, name: gateway }
+    patch: |-
+      - { op: replace, path: /spec/replicas, value: 1 }
+      - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "2", memory: 2Gi } } }
+  - target: { kind: HorizontalPodAutoscaler, name: gateway }
+    patch: |-
+      - { op: replace, path: /spec/minReplicas, value: 1 }
+      - { op: replace, path: /spec/maxReplicas, value: 2 }
+  - target: { kind: Deployment, name: mock-model }
+    patch: |-
+      - { op: replace, path: /spec/replicas, value: 1 }
+      - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: "1", memory: 1Gi } } }
+  - target: { kind: StatefulSet, name: redis }
+    patch: |-
+      - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: 500m, memory: 2Gi }, limits: { cpu: "1", memory: 2Gi } } }
+      - { op: replace, path: /spec/template/spec/containers/0/args, value: ["--save", "", "--appendonly", "no", "--maxmemory", "1500mb"] }
+  - target: { kind: StatefulSet, name: clickhouse }
+    patch: |-
+      - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "2", memory: 4Gi } } }
+      - { op: replace, path: /spec/volumeClaimTemplates/0/spec, value: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 10Gi } } } }
+  - target: { kind: FlinkDeployment }
+    patch: |-
+      - { op: replace, path: /spec/taskManager/resource, value: { cpu: 1, memory: 3g } }
+      - { op: replace, path: /spec/job/parallelism, value: 2 }
+      - { op: replace, path: /spec/flinkConfiguration/execution.checkpointing.dir, value: "file:///tmp/checkpoints" }
+      - { op: replace, path: /spec/flinkConfiguration/execution.checkpointing.savepoint-dir, value: "file:///tmp/savepoints" }
+  - target: { kind: Job, name: bench-run }
+    patch: |-
+      - { op: replace, path: /spec/template/spec/containers/0/args, value: ["run", "smoke"] }
+      - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "2", memory: 4Gi } } }
+  - target: { kind: Deployment, name: console }
+    patch: |-
+      - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: "2", memory: 4Gi } } }
+  - target: { kind: PersistentVolumeClaim, name: bench-runs }
+    patch: |-
+      - { op: replace, path: /spec/resources/requests/storage, value: 10Gi }
