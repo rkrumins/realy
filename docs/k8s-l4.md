@@ -32,13 +32,13 @@ helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack -n
 ## 3. Images and models
 
 ```bash
-make images                                   # gateway, mock-model, flink-job, bench
-for i in scoring-gateway mock-model-server flink-job bench; do
-  docker tag realy/$i:dev REGISTRY/realy/$i:v0.1.0 && docker push REGISTRY/realy/$i:v0.1.0; done
+make images                                   # gateway, mock-model, flink, console (all from source)
+for i in scoring-gateway mock-model-server flink console; do
+  docker tag realy/$i:dev REGISTRY/realy/$i:v0.2.0 && docker push REGISTRY/realy/$i:v0.2.0; done
 realy train --run runs/<a> --run runs/<b>     # -> models/triton/{fraud_mlp,fraud_gbdt}
 gsutil -m cp -r models/triton gs://BUCKET/realy/models/
 ```
-Replace `REGISTRY` and `REPLACE_BUCKET` in `deploy/k8s/overlays/gke-l4` and `base/flink.yaml`. For
+Replace `REGISTRY` and `REPLACE_BUCKET` in `deploy/k8s/overlays/gke-l4` and `components/operators/flink.yaml`. For
 "structurally identical" proxies, train with the production tensor width and capacity
 (`realy train --input-dim 512 --hidden 512,256,128 --trees 800 --depth 8`) and set
 `MODEL_INPUT_DIM` on gateway/Flink to the same width — the GPU then executes real GEMMs and
@@ -53,8 +53,8 @@ kubectl -n realy get kafka,flinkdeployment,inferenceservice,pods
 kubectl -n realy create job --from=job/bench-run step-ramp-1      # or edit args: run baseline-10k
 kubectl -n realy port-forward svc/console 8090                     # operator console
 ```
-The bench driver pod runs emitters **and** collectors (one clock domain); results land on the
-`bench-runs` PVC and in ClickHouse (`realy.decisions`, `v_latency_by_second`, `v_training_dataset`).
+The console pod (and the optional `bench-run` Job) runs emitters **and** collectors (one clock
+domain); results land on the `realy-console` PVC and in ClickHouse (`realy.decisions`, `v_latency_by_second`, `v_training_dataset`).
 
 ## Notes
 

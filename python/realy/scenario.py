@@ -14,8 +14,14 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SCENARIO_DIR = REPO_ROOT / "scenarios"
+import os as _os
+
+# REALY_HOME: directory holding contracts/, rules/, scenarios/, models/, docs/ (the repository root in a
+# checkout; /opt/realy in the container images). REALY_DATA: synthetic-world cache. REALY_SCENARIOS:
+# writable scenario directory (the console's builder saves there).
+REPO_ROOT = Path(_os.environ.get("REALY_HOME") or Path(__file__).resolve().parents[2])
+SCENARIO_DIR = Path(_os.environ.get("REALY_SCENARIOS") or REPO_ROOT / "scenarios")
+DATA_DIR = Path(_os.environ.get("REALY_DATA") or REPO_ROOT / "data")
 
 Topology = Literal["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"]
 FraudKind = Literal[
@@ -169,7 +175,7 @@ class Scenario(_Model):
         if self.world.dir:
             p = Path(self.world.dir)
             return p if p.is_absolute() else REPO_ROOT / p
-        return REPO_ROOT / "data" / f"world-{self.world.customers}-{self.seed}"
+        return DATA_DIR / f"world-{self.world.customers}-{self.seed}"
 
     def fingerprint(self) -> str:
         return hashlib.sha256(json.dumps(self.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:16]

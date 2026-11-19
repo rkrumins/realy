@@ -5,22 +5,41 @@ production-shaped system (Kafka → Flink → Redis/ClickHouse → KServe/Triton
 synthetic payments, times every event through every stage, and independently proves the decisions
 were complete and correct.
 
+```mermaid
+flowchart LR
+  subgraph driver["Console pod / container (one clock domain)"]
+    EM["realy emitter<br/>open-loop, paced per event"]
+    JE["Java gRPC emitter<br/>(sync rail)"]
+    CO["realy collector<br/>-> Parquet"]
+  end
+  RAW[("payments.events.raw<br/>key = customer_id<br/>x-bench-trace header")]
+  DEC[("payments.decisions<br/>audit WAL, acks=all")]
+  subgraph flink["Flink (RocksDB keyed state)"]
+    FS["7 keyed feature stages<br/>customer, card, device, ip,<br/>merchant, terminal, payee"]
+    FI["inline: profile lookup -><br/>model -> policy"]
+  end
+  RD[("Redis<br/>online feature store")]
+  GW["scoring-gateway<br/>features -> model -> rules<br/>-> policy -> audit ack"]
+  MM["model server, KServe v2 gRPC<br/>mock capacity model | Triton on L4"]
+  CH[("ClickHouse<br/>Kafka engine -> MergeTree<br/>audit, analytics, training")]
+  EM --> RAW
+  RAW --> FS
+  FS -- "features mode" --> RD
+  FS -- "flink-inline" --> FI
+  FI --> MM
+  FI --> DEC
+  RAW -- "gateway-kafka" --> GW
+  JE -- "gateway-grpc: Score()" --> GW
+  GW --> RD
+  GW --> MM
+  GW --> DEC
+  DEC --> CO
+  DEC --> CH
 ```
-                    ┌──────────────── Topology A: flink-inline (async rail) ────────────────┐
- realy emitter ──► payments.events.raw ──► Flink: source → keyBy(customer) → keyBy(card) → … (7 keyed
- (Python, open-loop,  (Kafka, key=customer,   stages, RocksDB) → async profile lookup → model → policy ─┐
-  paced per event)     x-bench-trace header)                                                         │
-                                                                                                     ▼
-                    ┌──────────────── Topology B: gateway (sync or async rail) ──────────────┐  payments.decisions
- Java gRPC emitter ─gRPC Score()─► scoring-gateway ◄─ or consumes events.raw (async)         │  (audit WAL, acks=all)
-                                   Redis features (Flink `features` mode writes them)        │        │
-                                   → model → rules → policy → audit ack → response ──────────┘        │
-                                                                                                     ▼
- realy collector (same host/clock as emitter) ◄──────────────────────────────── payments.decisions ──┤
-   → Parquet → realy report / realy verify                                                            ▼
-                                                                    ClickHouse Kafka engine → MergeTree (audit,
- Model backends (identical KServe v2 gRPC): mock-model-server (capacity model) | Triton on L4      analytics, training)
-```
+
+Every topology calls the same scoring code and emits the same `DecisionRecord`. The emitter and the
+collector live in one process tree on one host, so end-to-end latency is measured on one clock.
+ClickHouse ingests decisions asynchronously from Kafka and is never on the hot path.
 
 ## Components
 
@@ -53,12 +72,37 @@ All topologies call the same `ScoringOrchestrator` (Java, `scoring-core`) and em
 Topology switching is runtime: `bench.control` enables/disables the gateway's Kafka ingress, and the
 runner switches the Flink job mode via stop-with-savepoint so RocksDB feature state stays warm.
 
+## Run lifecycle
+
+```mermaid
+sequenceDiagram
+  participant U as Operator (console UI / CLI)
+  participant C as Console + driver
+  participant S as Services (gateway, model, Flink)
+  participant K as Kafka
+  U->>C: launch scenario (+ overrides)
+  C->>C: budget check (Monte Carlo), build/load world
+  C->>S: complete ScoringConfig / ModelServerConfig (admin HTTP + bench.control)
+  C->>S: topology: gateway ingress on/off, Flink job mode (stop-with-savepoint)
+  opt backfill_days > 0
+    C->>K: unpaced history replay (warm state, excluded from results)
+  end
+  C->>K: open-loop paced events (warmup, then measure)
+  S->>K: decisions + 1 s metrics snapshots
+  K->>C: collector correlates every decision with its event
+  C->>U: live KPIs, topology map, decision feed (WebSocket)
+  C->>C: drain, report (verdict + reasons), optional verify
+  C->>U: report, explorer, compare
+```
+
 ## Clock domains and in-band telemetry
 
 Every event carries a `BenchTrace` (Kafka header `x-bench-trace`, or `ScoreRequest.trace`):
 `t_intended` (open-loop schedule), `t_sent`, and spans appended by every service, each tagged with
-its clock **domain** (host/process). Durations inside one process are exact (calibrated
-wall-clock anchor + monotonic clock); end-to-end latency is measured in **one** domain because the
+its clock **domain** (host/process). Every service stamps the same clock (`Clock.systemUTC()` in
+Java, `time.time_ns()` in Python, so microsecond wall time that NTP slews but never steps). An
+earlier anchored-monotonic clock drifted about 10 ms from the wall clock over a long-lived JVM and
+skewed cross-process spans, so it was dropped. End-to-end latency is measured in **one** domain because the
 emitter and collector run on the same host (in Kubernetes: the same pod). Cross-domain spans
 (ingress/egress transit) are flagged and are exact only on one host or with PTP-synced clocks.
 

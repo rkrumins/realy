@@ -13,6 +13,7 @@ spec:
       labels: { app: mock-model }
       annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8002", prometheus.io/path: /metrics }
     spec:
+      enableServiceLinks: false
       containers:
         - name: mock-model
           image: realy/mock-model-server:dev

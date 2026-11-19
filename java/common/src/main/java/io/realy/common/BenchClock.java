@@ -3,24 +3,26 @@ package io.realy.common;
 import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.zip.CRC32;
 
 /**
- * Calibrated epoch-microsecond clock. The wall clock is read once (anchor) and then advanced with
- * the monotonic {@link System#nanoTime()}, so intervals measured inside one process are exact and
- * never jump with NTP slews. Every timestamp is tagged with this process' clock {@link #domain()}.
+ * Epoch-microsecond clock for benchmark spans, tagged with this process' clock {@link #domain()}.
+ *
+ * <p>Reads the system wall clock directly (microsecond resolution on Linux), exactly like the Python
+ * driver ({@code time.time_ns()}), so timestamps taken in different processes on the same host are
+ * directly comparable (ingress/egress transit spans). An anchored-monotonic clock was used before;
+ * it drifted from wall time whenever the host disciplined its clock (observed: ~10 ms within minutes
+ * on a VM), which skewed every cross-process span while leaving in-process durations exact.
+ * Across hosts, cross-process spans are only as good as the hosts' clock sync (chrony/PTP).
  */
 public final class BenchClock {
-    private static final long ANCHOR_WALL_US;
-    private static final long ANCHOR_NANO;
+    private static final Clock UTC = Clock.systemUTC();
     private static final int DOMAIN;
     private static final String DOMAIN_NAME;
 
     static {
-        Instant now = Instant.now();
-        ANCHOR_NANO = System.nanoTime();
-        ANCHOR_WALL_US = now.getEpochSecond() * 1_000_000L + now.getNano() / 1_000L;
         String host;
         try {
             host = InetAddress.getLocalHost().getHostName();
@@ -35,9 +37,10 @@ public final class BenchClock {
 
     private BenchClock() {}
 
-    /** Epoch microseconds (anchored wall clock + monotonic delta). */
+    /** Epoch microseconds (system wall clock). */
     public static long nowUs() {
-        return ANCHOR_WALL_US + (System.nanoTime() - ANCHOR_NANO) / 1_000L;
+        Instant now = UTC.instant();
+        return now.getEpochSecond() * 1_000_000L + now.getNano() / 1_000L;
     }
 
     public static int domain() {

@@ -1,0 +1,39 @@
+# Headless benchmark run (CI / scheduled): the same image and driver as the console, without the UI.
+# Writes into the console's PVC, so its report appears in the console's run history.
+#   kubectl -n realy delete job bench-run --ignore-not-found && kubectl apply -k deploy/k8s/overlays/<overlay>
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-run
+  labels: { app: bench-driver }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: { labels: { app: bench-driver } }
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      containers:
+        - name: driver
+          image: realy/console:dev
+          args: ["run", "step-ramp"]
+          env:
+            - { name: KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+            - { name: REDIS_URI, value: redis://redis:6379 }
+            - { name: GATEWAY_ADMIN, value: http://gateway:8080 }
+            - { name: GATEWAY_GRPC, value: gateway:8080 }
+            - { name: MODEL_ADMIN, value: http://mock-model:8002 }
+            - { name: CLICKHOUSE_URL, value: http://clickhouse:8123 }
+            - { name: FLINK_REST, value: "" }
+            - { name: FLINK_KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+          volumeMounts:
+            - { name: state, mountPath: /runs, subPath: runs }
+            - { name: state, mountPath: /data, subPath: data }
+            - { name: shm, mountPath: /dev/shm }
+          resources:
+            requests: { cpu: "8", memory: 16Gi }
+            limits: { cpu: "8", memory: 16Gi }
+      volumes:
+        - { name: state, persistentVolumeClaim: { claimName: realy-console } }
+        - { name: shm, emptyDir: { medium: Memory, sizeLimit: 1Gi } }

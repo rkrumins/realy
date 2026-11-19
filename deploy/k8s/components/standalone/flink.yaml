@@ -1,0 +1,118 @@
+# Flink session cluster from the realy/flink image (job jar on the system classpath, parent-first).
+# The console submits, savepoints, restores and cancels the realy jobs over REST exactly as it does
+# in the compose stack (FLINK_REST=http://flink-jobmanager:8081), so fresh/warm state scenarios work.
+# Checkpoints/savepoints sit on one RWO volume shared by the JobManager and TaskManager - fine on a
+# single node (k3d/kind/minikube); use object storage (s3://, gs://) for multi-node clusters.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: flink-checkpoints
+  labels: { app: flink }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager
+  labels: { app: flink, component: jobmanager }
+spec:
+  selector: { app: flink, component: jobmanager }
+  ports:
+    - { name: rest, port: 8081, targetPort: 8081 }
+    - { name: rpc, port: 6123, targetPort: 6123 }
+    - { name: blob, port: 6124, targetPort: 6124 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+  labels: { app: flink, component: jobmanager }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: flink, component: jobmanager } }
+  template:
+    metadata:
+      labels: { app: flink, component: jobmanager }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "9249" }
+    spec:
+      enableServiceLinks: false
+      securityContext: { fsGroup: 9999 }      # the image drops to the flink user (9999)
+      containers:
+        - name: jobmanager
+          image: realy/flink:dev
+          args: ["jobmanager"]
+          ports:
+            - { name: rest, containerPort: 8081 }
+            - { name: rpc, containerPort: 6123 }
+            - { name: blob, containerPort: 6124 }
+            - { name: metrics, containerPort: 9249 }
+          env:
+            - name: FLINK_PROPERTIES
+              value: |
+                jobmanager.rpc.address: flink-jobmanager
+                jobmanager.memory.process.size: 1600m
+                classloader.resolve-order: parent-first
+                state.backend.type: rocksdb
+                execution.checkpointing.incremental: true
+                execution.checkpointing.dir: file:///checkpoints
+                execution.checkpointing.savepoint-dir: file:///checkpoints/savepoints
+                metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+                metrics.reporter.prom.port: 9249
+          volumeMounts: [{ name: checkpoints, mountPath: /checkpoints }]
+          readinessProbe: { httpGet: { path: /overview, port: 8081 }, periodSeconds: 5 }
+          resources:
+            requests: { cpu: 500m, memory: 1600Mi }
+            limits: { cpu: "2", memory: 1600Mi }
+      volumes:
+        - { name: checkpoints, persistentVolumeClaim: { claimName: flink-checkpoints } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager
+  labels: { app: flink, component: taskmanager }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: flink, component: taskmanager } }
+  template:
+    metadata:
+      labels: { app: flink, component: taskmanager }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "9249" }
+    spec:
+      enableServiceLinks: false
+      securityContext: { fsGroup: 9999 }
+      containers:
+        - name: taskmanager
+          image: realy/flink:dev
+          args: ["taskmanager"]
+          ports:
+            - { name: rpc, containerPort: 6122 }
+            - { name: metrics, containerPort: 9249 }
+          env:
+            - { name: KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+            - { name: REDIS_URI, value: redis://redis:6379 }
+            - { name: MODEL_TARGET, value: mock-model:8001 }
+            - { name: RUN_SEED, value: "42" }
+            - name: FLINK_PROPERTIES
+              value: |
+                jobmanager.rpc.address: flink-jobmanager
+                taskmanager.numberOfTaskSlots: 4
+                taskmanager.memory.process.size: 4g
+                taskmanager.memory.managed.fraction: 0.35
+                taskmanager.memory.jvm-metaspace.size: 512m
+                classloader.resolve-order: parent-first
+                state.backend.type: rocksdb
+                state.backend.rocksdb.metrics.estimate-num-keys: true
+                state.backend.rocksdb.metrics.block-cache-usage: true
+                execution.checkpointing.dir: file:///checkpoints
+                metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+                metrics.reporter.prom.port: 9249
+          volumeMounts: [{ name: checkpoints, mountPath: /checkpoints }]
+          resources:
+            requests: { cpu: "2", memory: 4Gi }
+            limits: { cpu: "4", memory: 4Gi }
+      volumes:
+        - { name: checkpoints, persistentVolumeClaim: { claimName: flink-checkpoints } }

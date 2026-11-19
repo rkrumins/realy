@@ -10,7 +10,14 @@ API (JSON):
   live        WS /api/live · GET /api/live/history · GET /api/status
               POST /api/live/rate · POST /api/live/scoring · POST /api/live/model
   schedules   POST /api/schedules · GET /api/schedules · DELETE /api/schedules/{id}
-The built UI (ui/ -> realy/control/static) is served at /.
+  overview    GET /api/summary · GET /api/health
+  auth        GET /api/auth/me · POST /api/auth/login · POST /api/auth/logout   (REALY_CONSOLE_TOKEN)
+  env         GET /api/env · GET /api/env/{kafka,flink,redis,clickhouse}
+  explorer    GET /api/runs/{id}/search · /decisions/{event_id} · /customers/{cid} · /campaigns[/{cid}]
+  topology    GET /api/topology?topology=
+  docs        GET /api/docs · GET /api/docs/page?path= · GET /api/docs/raw/{path} · GET /api/reference/scenario-schema
+  openapi     GET /api/openapi.json · Swagger UI at /api/swagger
+The built UI (ui/ -> realy/control/static) is served at / with SPA deep-link fallback.
 """
 from __future__ import annotations
 
@@ -31,6 +38,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from ..scenario import SCENARIO_DIR, Scenario, deep_merge
+from . import auth as auth_mod
+from . import docs as docs_mod
+from . import env as env_mod
+from . import topology as topology_mod
+from .explorer import make_router as explorer_router
 from .store import Store
 from .telemetry import Hub
 from .worker import RunWorker, Scheduler
@@ -112,8 +124,18 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         worker.shutdown()
         scheduler.shutdown()
 
-    app = FastAPI(title="realy console", lifespan=lifespan)
+    app = FastAPI(title="realy console", lifespan=lifespan, openapi_url="/api/openapi.json",
+                  docs_url="/api/swagger", redoc_url=None,
+                  description="Operator console API: launch and steer benchmark runs, live telemetry, reports, "
+                              "explorer, environment and docs.")
     app.state.store, app.state.hub, app.state.worker, app.state.scheduler = store, hub, worker, scheduler
+    app.add_middleware(auth_mod.AuthMiddleware)
+    for r in (auth_mod.router, env_mod.router, topology_mod.router, docs_mod.router, explorer_router(runs_dir)):
+        app.include_router(r)
+
+    @app.get("/api/health")
+    def health() -> dict[str, Any]:
+        return {"ok": True, "kafka": hub.connected}
 
     # ================================================================== scenarios
     def _scenario_path(name: str) -> Path:
@@ -253,6 +275,20 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                     h["phase"] = cur["phase"]
         return {"queue": store.queued(), "jobs": jobs[:50], "history": history, "current": cur}
 
+    @app.get("/api/summary")
+    def summary(limit: int = 12) -> dict[str, Any]:
+        dirs = sorted((d for d in runs_dir.iterdir() if d.is_dir() and (d / "manifest.json").exists()),
+                      key=lambda d: d.stat().st_mtime, reverse=True)
+        rows = [_summary(d) for d in dirs]
+        done = [r for r in rows if r.get("verdict")]
+        return {"runs_total": len(rows), "runs_pass": sum(r["verdict"] == "PASS" for r in done),
+                "runs_fail": sum(r["verdict"] == "FAIL" for r in done),
+                "events_total": sum(r.get("emitted") or 0 for r in done),
+                "decisions_total": sum(r.get("decided") or 0 for r in done),
+                "last_runs": [{**r, "started": r.get("started_at"), "achieved_emit_tps": r.get("achieved_tps")}
+                              for r in rows[:limit]],
+                "current": worker.status()["current"]}
+
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> dict[str, Any]:
         d = _run_dir(run_id)
@@ -360,6 +396,8 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
     @app.websocket("/api/live")
     async def live_ws(ws: WebSocket) -> None:
         await ws.accept()
+        if not await auth_mod.websocket_authorized(ws):
+            return
         q = hub.subscribe()
         try:
             await ws.send_json({"type": "status", **worker.status(), "kafka": hub.connected})
@@ -403,7 +441,19 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
 
     # ================================================================== UI
     if STATIC.is_dir() and (STATIC / "index.html").exists():
-        app.mount("/", StaticFiles(directory=STATIC, html=True), name="ui")
+        if (STATIC / "assets").is_dir():
+            app.mount("/assets", StaticFiles(directory=STATIC / "assets"), name="assets")
+        index_html = STATIC / "index.html"
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def spa(full_path: str):
+            # Deep links (/runs/<id>, /explorer, ...) are client-side routes: serve index.html.
+            if full_path.startswith("api/"):
+                raise HTTPException(404, "not found")
+            f = (STATIC / full_path).resolve()
+            if full_path and STATIC.resolve() in f.parents and f.is_file():
+                return FileResponse(f)
+            return FileResponse(index_html, media_type="text/html", headers={"Cache-Control": "no-cache"})
     else:
         @app.get("/")
         def no_ui() -> dict[str, str]:

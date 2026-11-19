@@ -1,16 +1,18 @@
 # Running benchmarks
 
-## Local stack (docker compose)
+## Local stack (Docker only)
 
 ```bash
-make venv build up            # Python venv, JVM artefacts, Kafka/Redis/ClickHouse/gateway/mock model/Flink
-.venv/bin/realy scenarios     # list scenario packs
-.venv/bin/realy budget smoke  # Monte Carlo feasibility before spending a run
-.venv/bin/realy run smoke     # writes runs/<run_id>/report.{json,md,html}; exit code = verdict
-.venv/bin/realy verify runs/<run_id>
+make up                                   # build every image from source + start the stack
+open http://localhost:8090                # console: Launch -> smoke -> watch Live -> report
+make smoke                                # or from the CLI, inside the console container
+docker compose -f deploy/compose/docker-compose.yml exec console realy budget smoke
+docker compose -f deploy/compose/docker-compose.yml exec console sh -c 'realy verify $(ls -td /runs/*/ | head -1)'
 ```
-`make up-obs` adds Prometheus (:9090) and Grafana (:3000, dashboard "realy — pipeline").
-The operator console: `make ui console` → http://localhost:8090.
+The CLI (`realy ...`, [reference](reference/cli.md)) and the console share one run queue and one
+run directory (`/runs` volume), so a run started from either shows up in both. `make up-obs` adds
+Prometheus (:9090) and Grafana (:3000, dashboard "realy - pipeline"). With the host toolchain
+(`make dev-venv dev-build`) the same commands run as `.venv/bin/realy ...` against `make up`'s stack.
 
 ## What a run does
 

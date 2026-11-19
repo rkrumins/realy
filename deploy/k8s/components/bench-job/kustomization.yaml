@@ -1,0 +1,5 @@
+# Optional headless bench Job (runs a scenario on apply). Overlays opt in via `components:`.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - bench-job.yaml

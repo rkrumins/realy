@@ -1,5 +1,7 @@
-# Flink Kubernetes Operator (>= 1.10) FlinkDeployments in application mode (one cluster per job, so no
-# shared-JVM classloader concerns). Image: deploy/docker/flink-job.Dockerfile (jar in usrlib).
+# Flink Kubernetes Operator (>= 1.10) FlinkDeployments in application mode (one cluster per job).
+# Image: realy/flink (deploy/docker/Dockerfile target `flink`) - the job jar sits in /opt/flink/lib/realy
+# on the system classpath and loads parent-first, the same image the compose stack and the standalone
+# session cluster use.
 # `features` (Topology B) runs permanently; `inline` (Topology A) is suspended until a run needs it.
 # Switching keeps state: the operator's savepoint upgrade mode restores keyed RocksDB state (same uids).
 apiVersion: flink.apache.org/v1beta1
@@ -7,11 +9,12 @@ kind: FlinkDeployment
 metadata:
   name: realy-features
 spec:
-  image: realy/flink-job:dev
+  image: realy/flink:dev
   flinkVersion: v2_2
   serviceAccount: flink
   flinkConfiguration:
     taskmanager.numberOfTaskSlots: "4"
+    classloader.resolve-order: parent-first
     state.backend.type: rocksdb
     execution.checkpointing.incremental: "true"
     execution.checkpointing.dir: gs://REPLACE_BUCKET/realy/checkpoints
@@ -39,7 +42,7 @@ spec:
           - name: rocksdb          # local NVMe SSD on the node pool (overlay sets the storage)
             emptyDir: {}
   job:
-    jarURI: local:///opt/flink/usrlib/realy-flink-job.jar
+    jarURI: local:///opt/flink/lib/realy/realy-flink-job.jar
     entryClass: io.realy.flink.FraudJob
     args: ["--mode", "features", "--parallelism", "24", "--bootstrap", "realy-kafka-bootstrap:9092",
            "--group", "realy-flink", "--checkpoint-ms", "10000", "--buffer-timeout-ms", "1"]
@@ -52,11 +55,12 @@ kind: FlinkDeployment
 metadata:
   name: realy-inline
 spec:
-  image: realy/flink-job:dev
+  image: realy/flink:dev
   flinkVersion: v2_2
   serviceAccount: flink
   flinkConfiguration:
     taskmanager.numberOfTaskSlots: "4"
+    classloader.resolve-order: parent-first
     state.backend.type: rocksdb
     execution.checkpointing.incremental: "true"
     execution.checkpointing.dir: gs://REPLACE_BUCKET/realy/checkpoints-inline
@@ -80,7 +84,7 @@ spec:
         volumes:
           - { name: rocksdb, emptyDir: {} }
   job:
-    jarURI: local:///opt/flink/usrlib/realy-flink-job.jar
+    jarURI: local:///opt/flink/lib/realy/realy-flink-job.jar
     entryClass: io.realy.flink.FraudJob
     args: ["--mode", "both", "--parallelism", "24", "--bootstrap", "realy-kafka-bootstrap:9092",
            "--group", "realy-flink-inline", "--async-capacity", "1000", "--checkpoint-ms", "10000"]

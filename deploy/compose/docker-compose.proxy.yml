@@ -1,0 +1,27 @@
+# Build behind a TLS-intercepting / corporate proxy:
+#   REALY_BUILD_CA=/path/to/proxy-ca.pem HTTPS_PROXY=http://proxy:3128 \
+#     docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.proxy.yml up -d --build
+# The CA (PEM, may contain several certificates) is passed as a BuildKit secret — never baked into an
+# image layer — and trusted by apt/pip/npm/Gradle during the build only (deploy/docker/build-trust.sh).
+# `network: host` lets build steps reach a proxy listening on the host's loopback.
+x-proxy-build: &proxy-build
+  network: host
+  args:
+    HTTPS_PROXY: ${HTTPS_PROXY:-}
+  secrets: [ca]
+
+services:
+  mock-model:
+    build: *proxy-build
+  gateway:
+    build: *proxy-build
+  flink-jobmanager:
+    build: *proxy-build
+  flink-taskmanager:
+    build: *proxy-build
+  console:
+    build: *proxy-build
+
+secrets:
+  ca:
+    file: ${REALY_BUILD_CA:-/dev/null}

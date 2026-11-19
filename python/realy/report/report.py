@@ -138,7 +138,7 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
         pos = np.clip(pos, 0, e_sorted.size - 1)
         ok = e_sorted[pos] == d_id
         ei = order[pos[ok]]
-        dd = {name: d[name].to_numpy()[ok] for name in d.column_names if name not in ("reason_codes", "rule_hits")}
+        dd = {name: d[name].to_numpy()[ok] for name in d.column_names if name not in ("reason_codes", "rule_hits", "model_version") and not name.startswith("span_")}
         intended = e_int[ei]
         sent = e_sent[ei]
         measured = intended >= t0 + int(warm * 1e6)

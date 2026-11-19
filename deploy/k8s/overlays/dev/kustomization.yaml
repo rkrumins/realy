@@ -1,9 +1,14 @@
-# Small single-node cluster (kind / minikube / k3d): one broker, tiny resources, mock model only.
+# Small cluster WITH the operators (Strimzi, Flink Kubernetes Operator) installed: one broker, small
+# resources, mock model only - a cheap rehearsal of the gke-l4 layout. Without operators use overlays/local.
 #   kubectl apply -k deploy/k8s/overlays/dev
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+namespace: realy
 resources:
   - ../../base
+components:
+  - ../../components/operators
+  - ../../components/bench-job
 patches:
   - target: { kind: KafkaNodePool, name: brokers }
     patch: |-
@@ -11,7 +16,6 @@ patches:
       - { op: replace, path: /spec/resources, value: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "2", memory: 2Gi } } }
       - { op: replace, path: /spec/jvmOptions, value: { "-Xms": 1g, "-Xmx": 1g } }
       - { op: replace, path: /spec/storage/volumes/0/size, value: 10Gi }
-      - { op: remove, path: /spec/storage/volumes/0/class }
       - { op: remove, path: /spec/template }
   - target: { kind: Kafka, name: realy }
     patch: |-
@@ -57,6 +61,6 @@ patches:
   - target: { kind: Deployment, name: console }
     patch: |-
       - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: "2", memory: 4Gi } } }
-  - target: { kind: PersistentVolumeClaim, name: bench-runs }
+  - target: { kind: PersistentVolumeClaim, name: realy-console }
     patch: |-
       - { op: replace, path: /spec/resources/requests/storage, value: 10Gi }

@@ -13,6 +13,7 @@ spec:
   template:
     metadata: { labels: { app: clickhouse } }
     spec:
+      enableServiceLinks: false
       # The server entrypoint chowns its data paths, so format schemas are copied into the (writable)
       # data volume instead of being mounted read-only where ClickHouse looks for them.
       initContainers:
@@ -42,7 +43,6 @@ spec:
     - metadata: { name: data }
       spec:
         accessModes: [ReadWriteOnce]
-        storageClassName: premium-rwo
         resources: { requests: { storage: 500Gi } }
 ---
 apiVersion: v1

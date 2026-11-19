@@ -1,4 +1,5 @@
 # Strimzi Kafka (KRaft, no ZooKeeper). Requires the Strimzi operator (>= 0.45) in the cluster.
+# Strimzi names the bootstrap Service `realy-kafka-bootstrap`; components/standalone mirrors that name.
 # 3 brokers so acks=all / min.insync.replicas=2 behave like production (the audit WAL depends on it).
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaNodePool
@@ -11,7 +12,7 @@ spec:
   storage:
     type: jbod
     volumes:
-      - { id: 0, type: persistent-claim, size: 200Gi, class: premium-rwo, deleteClaim: false, kraftMetadata: shared }
+      - { id: 0, type: persistent-claim, size: 200Gi, deleteClaim: false, kraftMetadata: shared }
   resources:
     requests: { cpu: "4", memory: 16Gi }
     limits: { cpu: "4", memory: 16Gi }

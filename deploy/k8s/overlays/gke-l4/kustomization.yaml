@@ -2,18 +2,29 @@
 #   kubectl apply -k deploy/k8s/overlays/gke-l4
 # Node pools assumed (create with deploy/k8s/README.md): realy-kafka (n2-standard-8, pd-ssd),
 # realy-flink (n2-highmem-8 + local NVMe), realy-serving (c3-standard-8), realy-gpu (g2-standard-8, 1x L4),
-# realy-driver (c3-standard-8). Replace REPLACE_BUCKET and the image registry.
+# realy-driver (c3-standard-8). Replace REPLACE_BUCKET and REGISTRY (see docs/deployment-kubernetes.md).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+namespace: realy
 resources:
   - ../../base
   - kserve-triton.yaml
+components:
+  - ../../components/operators
+  - ../../components/bench-job
 images:
-  - { name: realy/scoring-gateway, newName: REGISTRY/realy/scoring-gateway, newTag: v0.1.0 }
-  - { name: realy/mock-model-server, newName: REGISTRY/realy/mock-model-server, newTag: v0.1.0 }
-  - { name: realy/flink-job, newName: REGISTRY/realy/flink-job, newTag: v0.1.0 }
-  - { name: realy/bench, newName: REGISTRY/realy/bench, newTag: v0.1.0 }
+  - { name: realy/scoring-gateway, newName: REGISTRY/realy/scoring-gateway, newTag: v0.2.0 }
+  - { name: realy/mock-model-server, newName: REGISTRY/realy/mock-model-server, newTag: v0.2.0 }
+  - { name: realy/flink, newName: REGISTRY/realy/flink, newTag: v0.2.0 }
+  - { name: realy/console, newName: REGISTRY/realy/console, newTag: v0.2.0 }
 patches:
+  # SSD persistent disks for the stateful pieces
+  - target: { kind: KafkaNodePool, name: brokers }
+    patch: |-
+      - { op: add, path: /spec/storage/volumes/0/class, value: premium-rwo }
+  - target: { kind: StatefulSet, name: clickhouse }
+    patch: |-
+      - { op: add, path: /spec/volumeClaimTemplates/0/spec/storageClassName, value: premium-rwo }
   # Gateway scores against Triton on L4 instead of the mock (same KServe v2 gRPC protocol).
   - target: { kind: Deployment, name: gateway }
     patch: |-

@@ -1,0 +1,97 @@
+# Single-node Kafka (KRaft, broker + controller in one pod) from the stock apache/kafka image - no
+# operator needed. The client Service is named `realy-kafka-bootstrap`, exactly like Strimzi's, so the
+# rest of the stack is identical across components/standalone and components/operators.
+# One broker means replication factor 1: fine for functional and latency work, not a durability test.
+apiVersion: v1
+kind: Service
+metadata:
+  name: realy-kafka-bootstrap
+  labels: { app: kafka }
+spec:
+  selector: { app: kafka }
+  ports: [{ name: client, port: 9092, targetPort: 9092 }]
+---
+# Headless: gives the broker a stable DNS name (realy-kafka-0.realy-kafka-headless) to advertise, so
+# clients talk to the pod directly after bootstrap instead of hair-pinning through the Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: realy-kafka-headless
+  labels: { app: kafka }
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: { app: kafka }
+  ports: [{ name: client, port: 9092, targetPort: 9092 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: realy-kafka
+  labels: { app: kafka }
+spec:
+  serviceName: realy-kafka-headless
+  replicas: 1
+  selector: { matchLabels: { app: kafka } }
+  template:
+    metadata: { labels: { app: kafka } }
+    spec:
+      # the image turns every KAFKA_* variable into a broker property; service links would inject some
+      enableServiceLinks: false
+      securityContext: { fsGroup: 1000 }
+      containers:
+        - name: kafka
+          image: apache/kafka:4.4.0
+          ports:
+            - { name: client, containerPort: 9092 }
+            - { name: controller, containerPort: 9093 }
+          env:
+            - { name: CLUSTER_ID, value: cmVhbHktc3RhbmRhbG9uZQ }
+            - { name: KAFKA_NODE_ID, value: "1" }
+            - { name: KAFKA_PROCESS_ROLES, value: "broker,controller" }
+            - { name: KAFKA_LISTENERS, value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093" }
+            - { name: KAFKA_ADVERTISED_LISTENERS, value: "PLAINTEXT://realy-kafka-0.realy-kafka-headless:9092" }
+            - { name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT" }
+            - { name: KAFKA_INTER_BROKER_LISTENER_NAME, value: PLAINTEXT }
+            - { name: KAFKA_CONTROLLER_LISTENER_NAMES, value: CONTROLLER }
+            - { name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "1@localhost:9093" }
+            - { name: KAFKA_LOG_DIRS, value: /var/lib/kafka/data/logs }
+            - { name: KAFKA_AUTO_CREATE_TOPICS_ENABLE, value: "false" }
+            - { name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1" }
+            - { name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS, value: "0" }
+            - { name: KAFKA_NUM_NETWORK_THREADS, value: "4" }
+            - { name: KAFKA_NUM_IO_THREADS, value: "8" }
+            - { name: KAFKA_HEAP_OPTS, value: "-Xms1g -Xmx1g" }
+          volumeMounts: [{ name: data, mountPath: /var/lib/kafka/data }]
+          readinessProbe: { tcpSocket: { port: 9092 }, periodSeconds: 5 }
+          resources:
+            requests: { cpu: "2", memory: 3Gi }
+            limits: { cpu: "4", memory: 3Gi }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: 50Gi } }
+---
+# Creates the contract topics (same script as the compose stack; idempotent, retried until Kafka is up).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topics
+spec:
+  backoffLimit: 30
+  template:
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+      containers:
+        - name: create
+          image: apache/kafka:4.4.0
+          command: ["bash", "/scripts/create-topics.sh"]
+          env:
+            - { name: BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+            - { name: PARTITIONS, value: "12" }
+          volumeMounts: [{ name: scripts, mountPath: /scripts }]
+      volumes: [{ name: scripts, configMap: { name: kafka-topics-script } }]

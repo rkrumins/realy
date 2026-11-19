@@ -12,6 +12,7 @@ spec:
   template:
     metadata: { labels: { app: redis } }
     spec:
+      enableServiceLinks: false
       containers:
         - name: redis
           image: redis:8.8-alpine

@@ -48,6 +48,12 @@ class _Cols:
         self.reasons: list[str] = []
         self.rules: list[str] = []
         self.model_version: list[str] = []
+        # full span list per decision (parallel lists) -> exact waterfall in the console Explorer
+        self.span_stage: list[list[int]] = []
+        self.span_attr: list[list[int]] = []
+        self.span_domain: list[list[int]] = []
+        self.span_start: list[list[int]] = []
+        self.span_dur: list[list[int]] = []
         self.n = 0
 
     def table(self):
@@ -56,7 +62,12 @@ class _Cols:
         cols["reason_codes"] = np.asarray(self.reasons, dtype=object)
         cols["rule_hits"] = np.asarray(self.rules, dtype=object)
         cols["model_version"] = np.asarray(self.model_version, dtype=object)
-        return pa.table(cols)
+        t = pa.table(cols)
+        for name, typ, vals in (("span_stage", pa.int16(), self.span_stage), ("span_attr", pa.int32(), self.span_attr),
+                                ("span_domain", pa.uint32(), self.span_domain), ("span_start_us", pa.int64(), self.span_start),
+                                ("span_dur_us", pa.int32(), self.span_dur)):
+            t = t.append_column(name, pa.array(vals, type=pa.list_(typ)))
+        return t
 
 
 def collector_main(run_id: str, run_dir: str, index: int, ready, drain, expected, results,
@@ -176,8 +187,10 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             dec_dom = 0
             fb = 0
             st = {}
+            ss, sa, sd, s0, sl = [], [], [], [], []
             for sp in tr.spans:
                 stg = sp.stage
+                ss.append(stg); sa.append(sp.attr); sd.append(sp.domain); s0.append(sp.start_us); sl.append(sp.dur_us)
                 if stg == INGEST:
                     t_ingest, ingest_dom = sp.start_us, sp.domain
                 elif stg == DECISION:
@@ -214,6 +227,8 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             cols.reasons.append(",".join(d.reason_codes))
             cols.rules.append(",".join(h.rule_id for h in d.rule_hits))
             cols.model_version.append(d.model.model_version)
+            cols.span_stage.append(ss); cols.span_attr.append(sa); cols.span_domain.append(sd)
+            cols.span_start.append(s0); cols.span_dur.append(sl)
             cols.n += 1
             if d.revision == 0:
                 sec_count += 1
