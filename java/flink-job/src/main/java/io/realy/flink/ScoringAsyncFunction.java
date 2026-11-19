@@ -49,9 +49,9 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
     @Override
     public void open(OpenContext ctx) {
         FeatureSchema schema = FeatureSchema.load();
-        ScoringConfig.Builder cfg = ScoringConfigHolder.defaults().toBuilder();
-        if (initialConfigJson != null && !initialConfigJson.isBlank()) ProtoJson.mergeJson(initialConfigJson, cfg);
-        ScoringConfigHolder holder = new ScoringConfigHolder(cfg.build());
+        ScoringConfig cfg = ScoringConfigHolder.defaults();
+        if (initialConfigJson != null && !initialConfigJson.isBlank()) cfg = ProtoJson.overlay(cfg, initialConfigJson);
+        ScoringConfigHolder holder = new ScoringConfigHolder(cfg);
         store = "mock".equals(holder.get().cfg().getFeatureSource())
                 ? new MockOnlineStore() : RedisOnlineStore.shared(Env.str("REDIS_URI", "redis://localhost:6379"), 4);
         model = new KServeModelClient(Env.str("MODEL_TARGET", "localhost:8001"), Env.str("MODEL_NAME", "fraud_mlp"),

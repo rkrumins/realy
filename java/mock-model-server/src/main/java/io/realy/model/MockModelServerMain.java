@@ -24,11 +24,12 @@ public final class MockModelServerMain {
         ModelServerConfig.Builder cfg = ModelServerConfig.newBuilder()
                 .setServiceTime(LatencyDist.newBuilder().setUniform(Uniform.newBuilder().setMinMs(30).setMaxMs(100)))
                 .setWorkers(0).setMaxBatch(1).setModelVersion(model.version);
+        ModelServerConfig initialCfg = cfg.build();
         String initial = Env.str("MODEL_SERVER_CONFIG", "");
-        if (!initial.isEmpty()) ProtoJson.mergeJson(initial, cfg);
+        if (!initial.isEmpty()) initialCfg = ProtoJson.overlay(initialCfg, initial);
         String instance = Env.str("HOSTNAME", "mock-model");
         StageMetrics metrics = new StageMetrics("model", instance).startPublishing();
-        MockInferenceService svc = new MockInferenceService(model, cfg.build(), metrics, Env.lng("RUN_SEED", 42));
+        MockInferenceService svc = new MockInferenceService(model, initialCfg, metrics, Env.lng("RUN_SEED", 42));
 
         int port = Env.integer("GRPC_PORT", 8001);
         var server = NettyServerBuilder.forAddress(new InetSocketAddress(port))

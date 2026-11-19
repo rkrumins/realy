@@ -32,10 +32,10 @@ public final class GatewayMain {
     public static void main(String[] args) throws Exception {
         String instance = Env.str("HOSTNAME", "gateway");
         FeatureSchema schema = FeatureSchema.load();
-        ScoringConfig.Builder cfg = ScoringConfigHolder.defaults().toBuilder();
+        ScoringConfig cfg = ScoringConfigHolder.defaults();
         String initial = Env.str("SCORING_CONFIG", "");
-        if (!initial.isEmpty()) ProtoJson.mergeJson(initial, cfg);
-        ScoringConfigHolder holder = new ScoringConfigHolder(cfg.build());
+        if (!initial.isEmpty()) cfg = ProtoJson.overlay(cfg, initial);
+        ScoringConfigHolder holder = new ScoringConfigHolder(cfg);
 
         OnlineStore store = "mock".equals(holder.get().cfg().getFeatureSource())
                 ? new MockOnlineStore()

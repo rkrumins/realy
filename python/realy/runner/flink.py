@@ -44,23 +44,40 @@ def _jar_id(c: httpx.Client) -> tuple[str, bool]:
     return r.json()["filename"].split("/")[-1], True
 
 
-def _stop_with_savepoint(c: httpx.Client, jid: str, log) -> str | None:
-    r = c.post(f"/jobs/{jid}/stop", json={"targetDirectory": SAVEPOINT_DIR, "drain": False})
-    if r.status_code >= 300:
-        log(f"stop-with-savepoint failed ({r.status_code}); cancelling")
-        c.patch(f"/jobs/{jid}", params={"mode": "cancel"})
-        return None
-    trig = r.json()["request-id"]
-    for _ in range(240):
-        st = c.get(f"/jobs/{jid}/savepoints/{trig}").json()
-        if st.get("status", {}).get("id") == "COMPLETED":
-            op = st.get("operation", {})
-            if "location" in op:
-                return op["location"]
-            log(f"savepoint failed: {op.get('failure-cause', {}).get('stack-trace', '')[:200]}")
-            return None
+def _wait_terminal(c: httpx.Client, jid: str, timeout_s: float = 60) -> None:
+    end = time.time() + timeout_s
+    while time.time() < end:
+        if c.get(f"/jobs/{jid}").json().get("state") in ("FINISHED", "CANCELED", "FAILED"):
+            return
         time.sleep(0.5)
-    return None
+
+
+def _cancel(c: httpx.Client, jid: str) -> None:
+    c.patch(f"/jobs/{jid}", params={"mode": "cancel"})
+    _wait_terminal(c, jid)
+
+
+def _stop_with_savepoint(c: httpx.Client, jid: str, log) -> str | None:
+    """Stop a job keeping its state; if that is impossible (e.g. job restarting), cancel it.
+    Either way the job is terminal when this returns, so its slots are free."""
+    location = None
+    r = c.post(f"/jobs/{jid}/stop", json={"targetDirectory": SAVEPOINT_DIR, "drain": False})
+    if r.status_code < 300:
+        trig = r.json()["request-id"]
+        for _ in range(240):
+            st = c.get(f"/jobs/{jid}/savepoints/{trig}").json()
+            if st.get("status", {}).get("id") == "COMPLETED":
+                op = st.get("operation", {})
+                location = op.get("location")
+                if not location:
+                    log(f"savepoint failed ({op.get('failure-cause', {}).get('class', '?')}); cancelling (state starts cold)")
+                break
+            time.sleep(0.5)
+    if location is None:
+        _cancel(c, jid)
+    else:
+        _wait_terminal(c, jid)
+    return location
 
 
 def desired_mode(sc: Scenario) -> str | None:
