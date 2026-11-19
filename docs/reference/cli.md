@@ -220,6 +220,20 @@ realy status [OPTIONS]
 | `--console` | str |  | console URL, to include its queue |
 | `--json` | flag |  |  |
 
+## `realy store get`
+
+Decode fs:<entity>:<id> (written by Flink) and pf:<entity>:<id> (profile) into named features.
+
+```
+realy store get ENTITY ENTITY_ID [OPTIONS]
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `ENTITY` | argument |  | customer \| card \| device \| ip \| merchant \| terminal \| payee |
+| `ENTITY_ID` | argument |  |  |
+| `--json` | flag |  |  |
+
 ## `realy topics`
 
 Create the contract topics (contracts/kafka/topics.yaml).

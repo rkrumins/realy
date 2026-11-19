@@ -37,6 +37,18 @@ local cluster: `make k8s-local && make k8s-test` ([guide](docs/deployment-kubern
 * **Correctness proofs.** Each run checks for loss and duplicates and recomputes features exactly
   and independently. It also checks Java↔Python CEL rule parity, recomputes scores and outcomes, and
   verifies ClickHouse audit completeness.
+* **Live runs you can trust and stop.**
+  * **One run per pipeline:** a lease enforces it, whoever starts the run.
+  * **Abort anywhere:** from the console, the CLI or a signal, in any phase; one run, many, or
+    everything at once.
+  * **Partial reports:** an aborted run still gets one (verdict ABORTED), checked against the
+    ClickHouse audit.
+  * **Proven by tests:** `make live-test` checks all of it, and restarts the gateway, Flink, Redis,
+    Kafka and the console mid-run (zero decisions lost).
+* **Honest detection numbers.**
+  * **Realistic labels:** models train on the labels a bank would have (late, partial, noisy).
+  * **Out-of-sample evaluation:** they are scored on a world they never saw (`make eval`), and every
+    report says in-sample or out-of-sample.
 * **A full operator console**, built with React and Tailwind CSS:
   * launch, queue and schedule runs;
   * watch a live topology map with events/s and p99 on every hop, plus a feed of real decisions;
@@ -75,7 +87,7 @@ console container. The others ran on the same services built on the host.
 |---|---|---|---|---|
 | † first `smoke` right after `make up` (cold stack, auto-primed) | 500 | 19.9 / 92.2 ms | 40.1 ms | PASS · zero loss |
 | echo calibration (instrument floor) | 2,000 | 4.5 / 30.6 ms | 0.6 ms | PASS |
-| † async gateway, warm, trained proxy, 9 fraud typologies | 500 | 19.3 / 76.0 ms | 40.7 ms | PASS · recall 1.00 · FPR 3.5% · verify PASS |
+| † async gateway, warm, trained proxy, 9 fraud typologies | 500 | 19.3 / 76.0 ms | 40.7 ms | PASS · verify PASS · detection in-sample (out-of-sample: [fraud-detection.md](docs/fraud-detection.md#training-and-evaluation)) |
 | † Flink-inline (fresh state) | 500 | 24.6 / 111.5 ms | 80.4 ms | PASS · features **exact** · verify PASS · tail = 42% keyBy shuffles |
 | sync gRPC unary / bidi stream | 500 | 18.9 / 96.4 ms · 14.7 / 43.5 ms | 45.7 / 32.7 ms | PASS |
 | brief's example (100 ms feature + 30–100 ms model vs 150 ms) | 1,000 | 171 / 593 ms | 162 ms | FAIL as predicted by `realy budget` |
@@ -93,10 +105,10 @@ The docs are rendered in the console (**Docs**) and on GitHub.
 | Start here | Concepts | Run & deploy | Reference |
 |---|---|---|---|
 | [Getting started](docs/getting-started.md) | [Architecture](docs/architecture.md) | [Running benchmarks](docs/running-benchmarks.md) | [Scenario schema](docs/reference/scenario-schema.md) |
-| [Console guide](docs/console-guide.md) | [Contracts](docs/contracts.md) | [Docker](docs/deployment-docker.md) | [Runtime config](docs/reference/config.md) |
-| [Scenarios](docs/scenarios.md) | [Synthetic data](docs/synthetic-data.md) | [Kubernetes](docs/deployment-kubernetes.md) · [GKE / L4](docs/k8s-l4.md) | [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/http-api.md) |
-| [Developer guide](docs/developer-guide.md) | [Latency budget](docs/latency-budget.md) | [Production & sizing](docs/production.md) · [Capacity planning](docs/capacity-planning.md) | [Features](docs/reference/features.md) · [Rules](docs/reference/rules.md) |
-| | | [Operations](docs/operations.md) · [Security](docs/security.md) | [Topics](docs/reference/topics.md) · [Scenarios](docs/reference/scenarios.md) |
+| [Console guide](docs/console-guide.md) | [Feature store, state & inference](docs/feature-store-and-inference.md) | [Docker](docs/deployment-docker.md) | [Runtime config](docs/reference/config.md) |
+| [Scenarios](docs/scenarios.md) | [Fraud detection](docs/fraud-detection.md) | [Kubernetes](docs/deployment-kubernetes.md) · [GKE / L4](docs/k8s-l4.md) | [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/http-api.md) |
+| [Developer guide](docs/developer-guide.md) | [Contracts](docs/contracts.md) · [Synthetic data](docs/synthetic-data.md) | [Production & sizing](docs/production.md) · [Capacity planning](docs/capacity-planning.md) | [Features](docs/reference/features.md) · [Rules](docs/reference/rules.md) |
+| | [Latency budget](docs/latency-budget.md) | [Operations & resilience](docs/operations.md) · [Security](docs/security.md) | [Topics](docs/reference/topics.md) · [Scenarios](docs/reference/scenarios.md) |
 
 ## Repository
 

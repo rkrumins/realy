@@ -22,12 +22,15 @@ run() {  # run_id scenario [--set ...]
   out+=("$id")
 }
 
-run "fraud-train-$TS" fraud-train
+# TRAIN_RUN=<run id> reuses a finished fraud-train run (resume after a failure)
+TRAIN="${TRAIN_RUN:-fraud-train-$TS}"
+[ -n "${TRAIN_RUN:-}" ] || run "$TRAIN" fraud-train
 
 echo "=== train (observed labels)"
-OBS=$("${EX[@]}" realy train --run "/runs/fraud-train-$TS" --labels observed | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["weights_path"]); print(json.dumps(d["label_stats"]), file=sys.stderr)')
+OBS=$("${EX[@]}" realy train --run "/runs/$TRAIN" --labels observed | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["weights_path"]); print("labels", json.dumps(d["label_stats"]), "metrics", json.dumps(d["metrics"]), file=sys.stderr)')
 echo "=== train (ground truth)"
-GT=$("${EX[@]}" realy train --run "/runs/fraud-train-$TS" --labels ground-truth | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["weights_path"])')
+GT=$("${EX[@]}" realy train --run "/runs/$TRAIN" --labels ground-truth | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["weights_path"]); print("labels", json.dumps(d["label_stats"]), "metrics", json.dumps(d["metrics"]), file=sys.stderr)')
+[ -n "$OBS" ] && [ -n "$GT" ] || { echo "training failed"; exit 1; }
 
 "${EX[@]}" realy deploy-model "$OBS"
 run "fraud-eval-obs-$TS" fraud-eval

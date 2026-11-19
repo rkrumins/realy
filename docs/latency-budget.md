@@ -12,7 +12,8 @@
 | 6 | Model server queue, batch formation, compute, batch size | KServe v2 response parameters | model server |
 | 7 | Egress transit (async) / response (sync) | `t_collected − t_decision` | cross |
 | 8 | End to end | `t_collected − t_intended` (sync: `t_response − t_intended`) | driver |
-| 9 | Audit visibility | `ingested_at − decided_at` (ClickHouse) | ClickHouse |
+| 9 | Audit append | `appended_at − decided_at`: broker LogAppendTime of the decision record (`lat_audit_append_us`, 1 ms resolution) | broker vs service |
+| 10 | Audit visibility | `ingested_at − decided_at` (ClickHouse) | ClickHouse |
 
 ## Local results (4 vCPU / 15 GB container, everything on one host)
 
@@ -22,7 +23,7 @@ All runs: zero missing decisions and zero duplicates unless stated. Budget: e2e 
 |---|---|---|---|---|---|---|---|
 | echo-calibration | echo (gateway answers immediately) | 2,000 | 4.5 ms | 30.6 ms | 0.6 ms | PASS | **instrument floor**: Kafka round trip + driver |
 | smoke (warm) | gateway-kafka | 500 | 19.1 ms | 75.9 ms | 37.8 ms | PASS | tail: egress 78% |
-| mixed-realistic | gateway-kafka + 1-day backfill, trained proxy | 500 | 19.8 ms | 107.3 ms | 44.6 ms | PASS | recall 0.99, precision 0.48, FPR 3.8%; `verify` PASS |
+| mixed-realistic | gateway-kafka + 1-day backfill, trained proxy | 500 | 19.8 ms | 107.3 ms | 44.6 ms | PASS | recall 0.99, precision 0.48, FPR 3.8% **in-sample** (the model was trained on this world; see [fraud-detection.md](fraud-detection.md#training-and-evaluation) for out-of-sample numbers); `verify` PASS |
 | flink-inline-smoke (fresh) | flink-inline | 500 | 23.1 ms | 99.4 ms | 70.6 ms | PASS | tail: **keyBy shuffles 61%**; features verified **exact** |
 | sync-smoke | gateway-grpc (unary) | 500 | 18.9 ms | 96.4 ms | 45.7 ms | PASS | audit ack p99 39.8 ms = 27% of tail |
 | sync-vs-async | gateway-grpc (bidi stream) | 500 | 14.7 ms | 43.5 ms | 32.7 ms | PASS | streaming halves the sync p99 |

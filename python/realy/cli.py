@@ -236,8 +236,10 @@ def train(run: list[Path] = typer.Option(..., "--run", help="finished run dir(s)
     Evaluate the result on a run of ANOTHER world (different seed): reports flag runs scored by a model
     trained on their own world as in-sample."""
     from .train.proxy import train as do_train
+    # progress on stderr: stdout is the JSON result only (scripts parse it)
     meta = do_train(run, hidden=tuple(int(x) for x in hidden.split(",") if x), trees=trees, depth=depth,
-                    input_dim=input_dim or None, labels=labels, maturity_days=label_maturity_days)
+                    input_dim=input_dim or None, labels=labels, maturity_days=label_maturity_days,
+                    log=lambda m: typer.echo(m, err=True))
     typer.echo(json.dumps({k: meta.get(k) for k in ("version", "rows", "fraud_rate", "label_stats", "input_dim", "metrics",
                                                     "parity", "weights_path")}, indent=1))
     if deploy:
