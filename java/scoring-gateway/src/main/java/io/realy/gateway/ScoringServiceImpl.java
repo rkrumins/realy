@@ -41,9 +41,18 @@ public final class ScoringServiceImpl extends ScoringServiceGrpc.ScoringServiceI
                 .setDecidedAtUs(d.getDecidedAtUs()).setTrace(t).build();
     }
 
+    /** Armeria serves this gRPC service as plain HTTP/JSON too (unframed requests): label which rail it was. */
+    private static IngressMode unaryMode() {
+        var ctx = com.linecorp.armeria.server.ServiceRequestContext.currentOrNull();
+        if (ctx == null) return IngressMode.SYNC_GRPC;
+        var ct = ctx.request().contentType();
+        return ct != null && ct.subtype().contains("json") && !ct.subtype().startsWith("grpc")
+                ? IngressMode.SYNC_HTTP : IngressMode.SYNC_GRPC;
+    }
+
     @Override
     public void score(ScoreRequest req, StreamObserver<ScoreResponse> obs) {
-        handle(req, IngressMode.SYNC_GRPC).whenComplete((d, err) -> {
+        handle(req, unaryMode()).whenComplete((d, err) -> {
             if (err != null) {
                 obs.onError(Status.INTERNAL.withDescription(err.toString()).asRuntimeException());
             } else if (d.getReasonCodesList().contains("DEADLINE_EXCEEDED")) {

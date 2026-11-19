@@ -192,7 +192,6 @@ class Scenario(_Model):
         rules_path = REPO_ROOT / "rules" / f"{self.rules}.yaml"
         text = rules_path.read_text()
         cfg.setdefault("rule_set_yaml", text)
-        cfg.setdefault("rule_set_version", yaml.safe_load(text).get("version", self.rules))
         if self.topology.startswith("echo"):
             cfg["echo"] = True
         return cfg

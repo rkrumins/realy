@@ -62,16 +62,25 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     from ..scenario import Scenario
     scenario = Scenario.model_validate(sc)
     budget = scenario.budget
-    t0 = man["t_start_us"]
-    warm = man["warmup_s"]
-    emit = _read(run_dir, "emit-*.parquet")
-    dec = _read(run_dir, "decisions-*.parquet")
     run = json.loads((run_dir / "run.json").read_text()) if (run_dir / "run.json").exists() else {}
+    abort = _abort_info(run)
     rep: dict[str, Any] = {"run_id": man["run_id"], "scenario": scenario.name, "topology": scenario.topology,
                            "manifest": man, "budget": budget.model_dump()}
+    if abort:
+        rep["abort"] = abort
+    t0 = man.get("t_start_us")
+    warm = man["warmup_s"]
+    emit = _read(run_dir, "emit-*.parquet") if t0 else None
+    dec = _read(run_dir, "decisions-*.parquet") if t0 else None
     if emit is None or emit.num_rows == 0:
-        rep["summary"] = {"verdict": "ERROR", "reasons": ["no events emitted"]}
-        rep["text"] = "no events emitted"
+        if abort:
+            why = f"aborted in {abort.get('phase') or 'PREPARE'} before any event was measured: {abort['reason']}"
+            verdict = "FAIL" if abort.get("kind") in FAIL_KINDS else "ABORTED"
+        else:
+            why, verdict = (run.get("error") and f"error: {run['error']}") or "no events emitted", "ERROR"
+        rep["summary"] = {"verdict": verdict, "reasons": [why], "emitted": 0, "decided": 0, "missing": 0,
+                          "duplicates": 0, "aborted": abort, "measured_s": 0.0}
+        rep["text"] = f"{verdict}: {why}"
         _write(run_dir, rep)
         return rep
 
@@ -189,11 +198,17 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
         else:
             width = max(10.0, scenario.traffic.duration_s / 10)
         nlev = int(math.ceil(scenario.traffic.duration_s / width))
+        end_us = run.get("emission_end_us") if abort else None
         for li in range(nlev):
             lo = t0 + int(li * width * 1e6)
             hi = t0 + int((li + 1) * width * 1e6)
             # skip the first 20% of each level (transition)
             lo_m = lo + int(0.2 * width * 1e6)
+            partial = bool(end_us and end_us < hi)
+            if end_us and end_us <= lo_m:
+                break                          # the run was aborted before this level
+            if partial:
+                hi = int(end_us)
             md = (intended >= lo_m) & (intended < hi) & measured if intended.size else intended.astype(bool)
             me = (e_int >= lo_m) & (e_int < hi) & m_emit
             secs = (hi - lo_m) / 1e6
@@ -206,6 +221,8 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
             lv = {"level": li, "t_from_s": li * width, "target_tps": round(prof.rate_at(li * width + width / 2), 1),
                   "emitted_tps": round(int(me.sum()) / secs, 1), "decided_tps": round(n_dec / secs, 1),
                   "stages": step_stats(md, me)}
+            if partial:
+                lv["partial"] = True           # aborted mid-level: reported, never used for the knee
             if "e2e" in lv["stages"]:
                 lv["within_budget"] = float((_ms(lat["e2e"][md]) <= budget.e2e_p99_ms).mean())
             levels.append(lv)
@@ -279,6 +296,8 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     knee = None
     for lv in levels:
         st = lv["stages"].get("e2e")
+        if lv.get("partial"):
+            continue
         if st and (st["p99"] > budget.e2e_p99_ms or lv["decided_tps"] < 0.95 * lv["emitted_tps"]):
             knee = {"level": lv["level"], "target_tps": lv["target_tps"], "e2e_p99_ms": st["p99"],
                     "decided_tps": lv["decided_tps"], "emitted_tps": lv["emitted_tps"]}
@@ -302,7 +321,9 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     hot_p99 = float(np.percentile(hot_m, 99)) if hot_m.size else float("nan")
     if missing / max(1, n_emit) > scenario.guardrails.max_missing_fraction:
         reasons.append(f"missing decisions {missing} ({missing / n_emit:.2%})"
-                       + (" in the audit log" if sync else ""))
+                       + (" in the audit log" if sync else "")
+                       + (" - includes events still in flight when the run was aborted; the ClickHouse audit"
+                          " (realy verify) is authoritative" if abort else ""))
     if sync and rep["sync"]["responses_ok"] < n_emit:
         bad = n_emit - rep["sync"]["responses_ok"]
         if bad / n_emit > scenario.guardrails.max_missing_fraction:
@@ -315,10 +336,17 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
         reasons.append(f"only {compliance:.2%} of events within {budget.e2e_p99_ms:.0f} ms (< {budget.min_compliance:.0%})")
     if sust and not sust.get("sustainable", True):
         reasons.append("not sustainable (backlog growing or p99 drifting)")
-    if run.get("aborted"):
-        reasons.append(f"aborted: {run['aborted']}")
-    verdict = "PASS" if not reasons else "FAIL"
-    measured_secs = max(1e-9, scenario.traffic.duration_s - warm)
+    if abort:
+        reasons.insert(0, f"aborted ({abort.get('kind')}, in {abort.get('phase')}): {abort['reason']}")
+    # An operator / instrument / watchdog abort leaves no verdict on the system under test (ABORTED);
+    # a guardrail abort IS a verdict: the pipeline failed under this load (FAIL).
+    if abort and abort.get("kind") not in FAIL_KINDS:
+        verdict = "ABORTED"
+    else:
+        verdict = "PASS" if not reasons else "FAIL"
+    # measured window actually reached (an aborted run ends early)
+    reached = run.get("measured_s")
+    measured_secs = max(1e-9, float(reached) if reached is not None else scenario.traffic.duration_s - warm)
     summary = {
         "verdict": verdict, "reasons": reasons,
         "emitted": int(n_emit), "decided": int(d_id.size), "missing": missing, "duplicates": int(dup_total),
@@ -334,6 +362,7 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
         # old blob is still exact.)
         "online_store_update_lag_p99_ms": (service.get("stages", {}).get("flink.store_update_lag", {}) or {}).get("p99_median_ms"),
         "knee": knee, "sustainable": sust.get("sustainable"),
+        "measured_s": round(measured_secs, 2), "aborted": abort,
     }
     rep.update({"summary": summary, "stages": overall, "levels": levels, "funnel": funnel, "backlog": backlog,
                 "e2e_p99_by_second": series_p99, "e2e_p50_by_second": series_p50, "tail_attribution": tail,
@@ -345,6 +374,47 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     rep["text"] = render_text(rep)
     _write(run_dir, rep)
     return rep
+
+
+FAIL_KINDS = ("guardrail",)
+
+
+def roc_auc(y: np.ndarray, s: np.ndarray) -> float:
+    """ROC-AUC = P(score of a random fraud > score of a random legit), ties counted half (Mann-Whitney)."""
+    y = np.asarray(y, bool)
+    order = np.argsort(s, kind="mergesort")
+    ranks = np.empty(s.size, np.float64)
+    ss = np.asarray(s)[order]
+    # average ranks for ties
+    _, first, counts = np.unique(ss, return_index=True, return_counts=True)
+    avg = first + (counts - 1) / 2.0 + 1
+    ranks[order] = np.repeat(avg, counts)
+    npos, nneg = int(y.sum()), int((~y).sum())
+    return float((ranks[y].sum() - npos * (npos + 1) / 2) / (npos * nneg))
+
+
+def average_precision(y: np.ndarray, s: np.ndarray) -> float:
+    """PR-AUC as average precision (sum over thresholds of precision x recall increment)."""
+    y = np.asarray(y, bool)
+    order = np.argsort(-np.asarray(s), kind="mergesort")
+    yt, st = y[order], np.asarray(s)[order]
+    last = np.r_[np.flatnonzero(np.diff(st) != 0), yt.size - 1]   # end of each run of tied scores
+    tp = np.cumsum(yt)[last]
+    prec = tp / (last + 1)
+    recall_inc = np.diff(np.r_[0, tp]) / max(1, yt.sum())
+    return float((prec * recall_inc).sum())
+
+
+def _abort_info(run: dict[str, Any]) -> dict[str, Any] | None:
+    """run.json `abort` (reason, kind, phase, after_s); older runs only carry `aborted` (the reason)."""
+    a = run.get("abort")
+    if a and a.get("reason"):
+        return a
+    if run.get("aborted"):
+        r = str(run["aborted"])
+        guard = any(k in r for k in ("schedule lag", "backlog", "error rate"))
+        return {"reason": r, "kind": "guardrail" if guard else "operator", "phase": None}
+    return None
 
 
 def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
@@ -392,6 +462,22 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
     n_legit = max(1, int(legit.sum()))
     res["by_rule"] = {k: {**v, "precision": v["fraud"] / v["hits"], "legit_hit_rate": v["legit"] / n_legit}
                       for k, v in sorted(per_rule.items(), key=lambda kv: -kv[1]["legit"])}
+    # the served model on its own: ranking quality of the score where the model actually answered
+    # (rules-only fallbacks carry no model score and are reported separately)
+    if "path" in d.column_names and "score" in d.column_names and d_id.size:
+        path = np.where(have, d["path"].to_numpy()[order][pos], -1)
+        score = np.where(have, d["score"].to_numpy()[order][pos], np.nan)
+        scored = have & (path == 0)
+        fb = have & (path == 1)
+        y = ev["is_fraud"].to_numpy().astype(bool)
+        model: dict[str, Any] = {"scored": int(scored.sum()), "rules_only_fallback": int(fb.sum()),
+                                 "fallback_recall_flagged": float(flagged[fb & y].mean()) if (fb & y).any() else None}
+        if scored.any() and y[scored].any() and (~y[scored]).any():
+            model["roc_auc"] = roc_auc(y[scored], score[scored])
+            model["pr_auc"] = average_precision(y[scored], score[scored])
+            model["fraud_base_rate"] = float(y[scored].mean())
+        res["model"] = model
+    res["evaluation"] = _evaluation(run_dir, d)
     for t, name in FRAUD_TYPES.items():
         m = fraud & (ftype == t)
         if not m.any():
@@ -411,6 +497,38 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
                                 "approved_before_first_decline_mean": float(np.mean(ttd)),
                                 "usd_approved": float(amt[m][oc == 1].sum() / 100)}
     return res
+
+
+def _evaluation(run_dir: Path, d: pa.Table) -> dict[str, Any]:
+    """Leakage guard: is this run scored by a model that was trained on this very world? Benchmark
+    worlds are deterministic per seed, so training and evaluating on the same seed means the model has
+    seen these customers, cards, devices and campaigns: its detection numbers are in-sample (optimistic)."""
+    if "model_version" not in d.column_names or not d.num_rows:
+        return {"sample": "unknown", "reason": "no model version recorded"}
+    vs = [v for v in d["model_version"].to_pylist() if v]
+    if not vs:
+        return {"sample": "unknown", "reason": "no model version recorded"}
+    version = max(set(vs), key=vs.count)
+    try:
+        man = json.loads((run_dir / "manifest.json").read_text())
+    except (OSError, ValueError):
+        man = {}
+    from ..train.proxy import training_meta
+    meta = training_meta(version)
+    if meta is None:
+        trained = version.startswith("proxy-")
+        return {"sample": "unknown" if trained else "not-trained", "model_version": version,
+                "reason": ("trained elsewhere: no training metadata on this install" if trained
+                           else "hand-set default weights: not fitted to any data")}
+    prov = meta.get("provenance") or []
+    same = [p for p in prov if p.get("world_hash") and p.get("world_hash") == man.get("world_hash")]
+    out = {"model_version": version, "labels": (meta.get("label_stats") or {}).get("labels", "ground-truth"),
+           "trained_on": [{k: p.get(k) for k in ("run_id", "scenario", "seed")} for p in prov]}
+    if same:
+        return {**out, "sample": "in-sample",
+                "reason": f"the model was trained on this world (seed/world hash of {same[0].get('run_id')}): "
+                          "detection is optimistic; evaluate on another seed"}
+    return {**out, "sample": "out-of-sample", "reason": "different world (seed) from every training run"}
 
 
 def _service_stats(run_dir: Path, warmup_s: float) -> dict[str, Any]:
@@ -488,6 +606,13 @@ def render_text(rep: dict[str, Any]) -> str:
     if det and det.get("fraud_events"):
         lines.append(f"detection: recall(flagged) {_f(det['recall_flagged'])}  precision {_f(det['precision_flagged'])}  "
                      f"FPR {_f(det['false_positive_rate'], 4)}  fraud $ approved {det['fraud_usd_approved']:,.0f} / {det['fraud_usd_total']:,.0f}")
+        ev_ = det.get("evaluation") or {}
+        if ev_:
+            lines.append(f"evaluation: {ev_.get('sample')} (model {ev_.get('model_version')}): {ev_.get('reason')}")
+        md = det.get("model") or {}
+        if md.get("roc_auc") is not None:
+            lines.append(f"model alone: ROC-AUC {md['roc_auc']:.4f}  PR-AUC {md['pr_auc']:.4f}  "
+                         f"(scored {md['scored']:,}, rules-only fallbacks {md['rules_only_fallback']:,})")
     return "\n".join(lines)
 
 

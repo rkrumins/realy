@@ -15,6 +15,6 @@ data:
     \ --if-not-exists --topic \"$topic\" --partitions \"$parts\" \\\n    --replication-factor\
     \ \"$RF\" \"${cfg[@]}\"\n}\n\nmk payments.events.raw \"$P\" compression.type=lz4\
     \ retention.ms=21600000\nmk payments.decisions \"$P\" message.timestamp.type=LogAppendTime\
-    \ retention.ms=86400000\nmk payments.labels 4 retention.ms=604800000\nmk payments.features\
-    \ \"$P\" retention.ms=3600000\nmk bench.control 1 cleanup.policy=compact\nmk bench.metrics\
-    \ 3 retention.ms=86400000\n\"$K\" --bootstrap-server \"$B\" --list\n"
+    \ retention.ms=86400000\nmk payments.labels 4 retention.ms=604800000\nmk bench.control\
+    \ 1 cleanup.policy=compact\nmk bench.metrics 3 retention.ms=86400000\n\"$K\" --bootstrap-server\
+    \ \"$B\" --list\n"

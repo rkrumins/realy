@@ -10,4 +10,6 @@ def console(host: str = typer.Option("0.0.0.0", help="bind address"),
     import uvicorn
 
     from .app import create_app
-    uvicorn.run(create_app(), host=host, port=port, log_level="warning", ws_ping_interval=20)
+    # timeout_graceful_shutdown: open WebSockets must not hold up the lifespan shutdown, which aborts the
+    # running run and waits REALY_SHUTDOWN_GRACE_S for its drain + partial report
+    uvicorn.run(create_app(), host=host, port=port, log_level="warning", ws_ping_interval=20, timeout_graceful_shutdown=5)

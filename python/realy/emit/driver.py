@@ -53,7 +53,18 @@ class ShardPlan:
 
 
 # --------------------------------------------------------------------------------------- generator
+def _wait_go(go, stop) -> None:
+    """Wait for the measured phase to start; return early when the run is stopped meanwhile."""
+    if go is None:
+        return
+    while not go.wait(0.2):
+        if stop.is_set():
+            return
+
+
 def generator_main(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None:
+    from ..runner.lifecycle import watch_parent
+    watch_parent()
     try:
         _generator(plan, q, rate_mult, stop, start, go)
     except Exception:  # noqa: BLE001
@@ -120,8 +131,7 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
                         flush()
             t = t1
     q.put(("backfill_done", backfilled))
-    if go is not None:
-        go.wait()
+    _wait_go(go, stop)
     t_start = int(start.value) if start is not None and start.value > 0 else plan.t_start_us
 
     while wall_t < plan.duration_s and not stop.is_set():
@@ -184,6 +194,8 @@ class _Timing:
 
 
 def emitter_main(plan: ShardPlan, q, stop, results, metrics_topic: str = "bench.metrics", start=None, go=None) -> None:
+    from ..runner.lifecycle import watch_parent
+    watch_parent()
     try:
         results.put(("emitter", plan.shard, _emitter(plan, q, stop, metrics_topic, results, start, go)))
     except Exception:  # noqa: BLE001
@@ -224,7 +236,10 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     prime_rate = float(plan.extra.get("prime_tps") or 0.0) if plan.prime else 0.0
     t_bf0 = time.monotonic()
     while not stop.is_set():
-        item = q.get()
+        try:
+            item = q.get(timeout=0.5)
+        except queue_mod.Empty:
+            continue
         if item[0] == "backfill":
             for p_, k_ in zip(item[2], item[3]):
                 if prime_rate and backfilled % 50 == 0:
@@ -249,8 +264,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     producer.flush(120)
     if results is not None:
         results.put(("backfill", plan.shard, backfilled))
-    if go is not None:
-        go.wait()
+    _wait_go(go, stop)
     t0 = int(start.value) if start is not None and start.value > 0 else plan.t_start_us
     ts = plan.time_scale
     sim0 = plan.sim_start_us

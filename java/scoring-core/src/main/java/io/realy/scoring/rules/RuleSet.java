@@ -51,6 +51,18 @@ public final class RuleSet {
         }
     }
 
+    /**
+     * The same rules with score thresholds overridden (live tuning: ScoringConfig.review_threshold /
+     * decline_threshold). A value {@code <= 0} keeps the rule set's own threshold.
+     */
+    public RuleSet withThresholds(float review, float decline) {
+        float r = review > 0 ? review : reviewThreshold;
+        float d = decline > 0 ? decline : declineThreshold;
+        if (r == reviewThreshold && d == declineThreshold) return this;
+        if (r > d) throw new IllegalArgumentException("review threshold " + r + " > decline threshold " + d);
+        return new RuleSet(version + "+t" + r + "/" + d, r, d, rules);
+    }
+
     public static RuleSet bundled(String name) {
         try (InputStream in = RuleSet.class.getClassLoader().getResourceAsStream("realy/rules/" + name + ".yaml")) {
             if (in == null) throw new IllegalArgumentException("rule set " + name + " not on classpath");

@@ -119,7 +119,7 @@ class LatencyDist(_message.Message):
     def __init__(self, fixed: _Optional[_Union[Fixed, _Mapping]] = ..., uniform: _Optional[_Union[Uniform, _Mapping]] = ..., normal: _Optional[_Union[Normal, _Mapping]] = ..., lognormal: _Optional[_Union[LogNormal, _Mapping]] = ..., bimodal: _Optional[_Union[Bimodal, _Mapping]] = ..., empirical: _Optional[_Union[Empirical, _Mapping]] = ..., error_rate: _Optional[float] = ..., timeout_rate: _Optional[float] = ...) -> None: ...
 
 class ModelServerConfig(_message.Message):
-    __slots__ = ("service_time", "per_item_us", "workers", "max_batch", "max_queue_delay_us", "max_queue", "model_version")
+    __slots__ = ("service_time", "per_item_us", "workers", "max_batch", "max_queue_delay_us", "max_queue", "model_version", "weights_path")
     SERVICE_TIME_FIELD_NUMBER: _ClassVar[int]
     PER_ITEM_US_FIELD_NUMBER: _ClassVar[int]
     WORKERS_FIELD_NUMBER: _ClassVar[int]
@@ -127,6 +127,7 @@ class ModelServerConfig(_message.Message):
     MAX_QUEUE_DELAY_US_FIELD_NUMBER: _ClassVar[int]
     MAX_QUEUE_FIELD_NUMBER: _ClassVar[int]
     MODEL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    WEIGHTS_PATH_FIELD_NUMBER: _ClassVar[int]
     service_time: LatencyDist
     per_item_us: float
     workers: int
@@ -134,10 +135,11 @@ class ModelServerConfig(_message.Message):
     max_queue_delay_us: int
     max_queue: int
     model_version: str
-    def __init__(self, service_time: _Optional[_Union[LatencyDist, _Mapping]] = ..., per_item_us: _Optional[float] = ..., workers: _Optional[int] = ..., max_batch: _Optional[int] = ..., max_queue_delay_us: _Optional[int] = ..., max_queue: _Optional[int] = ..., model_version: _Optional[str] = ...) -> None: ...
+    weights_path: str
+    def __init__(self, service_time: _Optional[_Union[LatencyDist, _Mapping]] = ..., per_item_us: _Optional[float] = ..., workers: _Optional[int] = ..., max_batch: _Optional[int] = ..., max_queue_delay_us: _Optional[int] = ..., max_queue: _Optional[int] = ..., model_version: _Optional[str] = ..., weights_path: _Optional[str] = ...) -> None: ...
 
 class ScoringConfig(_message.Message):
-    __slots__ = ("version", "budget_ms", "feature_deadline_ms", "model_deadline_ms", "on_deadline", "feature_lookup_delay", "model_extra_delay", "feature_source", "review_threshold", "decline_threshold", "microbatch_window_us", "microbatch_max", "hedge_after_ms", "feature_sample_permille", "rule_set_version", "rule_set_yaml", "audit_on_failure", "self_inclusion", "echo")
+    __slots__ = ("version", "budget_ms", "feature_deadline_ms", "model_deadline_ms", "on_deadline", "feature_lookup_delay", "model_extra_delay", "feature_source", "review_threshold", "decline_threshold", "microbatch_window_us", "microbatch_max", "hedge_after_ms", "feature_sample_permille", "rule_set_yaml", "audit_on_failure", "self_inclusion", "echo")
     VERSION_FIELD_NUMBER: _ClassVar[int]
     BUDGET_MS_FIELD_NUMBER: _ClassVar[int]
     FEATURE_DEADLINE_MS_FIELD_NUMBER: _ClassVar[int]
@@ -152,7 +154,6 @@ class ScoringConfig(_message.Message):
     MICROBATCH_MAX_FIELD_NUMBER: _ClassVar[int]
     HEDGE_AFTER_MS_FIELD_NUMBER: _ClassVar[int]
     FEATURE_SAMPLE_PERMILLE_FIELD_NUMBER: _ClassVar[int]
-    RULE_SET_VERSION_FIELD_NUMBER: _ClassVar[int]
     RULE_SET_YAML_FIELD_NUMBER: _ClassVar[int]
     AUDIT_ON_FAILURE_FIELD_NUMBER: _ClassVar[int]
     SELF_INCLUSION_FIELD_NUMBER: _ClassVar[int]
@@ -171,12 +172,11 @@ class ScoringConfig(_message.Message):
     microbatch_max: int
     hedge_after_ms: int
     feature_sample_permille: int
-    rule_set_version: str
     rule_set_yaml: str
     audit_on_failure: AuditFailure
     self_inclusion: bool
     echo: bool
-    def __init__(self, version: _Optional[str] = ..., budget_ms: _Optional[int] = ..., feature_deadline_ms: _Optional[int] = ..., model_deadline_ms: _Optional[int] = ..., on_deadline: _Optional[_Union[OnDeadline, str]] = ..., feature_lookup_delay: _Optional[_Union[LatencyDist, _Mapping]] = ..., model_extra_delay: _Optional[_Union[LatencyDist, _Mapping]] = ..., feature_source: _Optional[str] = ..., review_threshold: _Optional[float] = ..., decline_threshold: _Optional[float] = ..., microbatch_window_us: _Optional[int] = ..., microbatch_max: _Optional[int] = ..., hedge_after_ms: _Optional[int] = ..., feature_sample_permille: _Optional[int] = ..., rule_set_version: _Optional[str] = ..., rule_set_yaml: _Optional[str] = ..., audit_on_failure: _Optional[_Union[AuditFailure, str]] = ..., self_inclusion: _Optional[bool] = ..., echo: _Optional[bool] = ...) -> None: ...
+    def __init__(self, version: _Optional[str] = ..., budget_ms: _Optional[int] = ..., feature_deadline_ms: _Optional[int] = ..., model_deadline_ms: _Optional[int] = ..., on_deadline: _Optional[_Union[OnDeadline, str]] = ..., feature_lookup_delay: _Optional[_Union[LatencyDist, _Mapping]] = ..., model_extra_delay: _Optional[_Union[LatencyDist, _Mapping]] = ..., feature_source: _Optional[str] = ..., review_threshold: _Optional[float] = ..., decline_threshold: _Optional[float] = ..., microbatch_window_us: _Optional[int] = ..., microbatch_max: _Optional[int] = ..., hedge_after_ms: _Optional[int] = ..., feature_sample_permille: _Optional[int] = ..., rule_set_yaml: _Optional[str] = ..., audit_on_failure: _Optional[_Union[AuditFailure, str]] = ..., self_inclusion: _Optional[bool] = ..., echo: _Optional[bool] = ...) -> None: ...
 
 class IngressCommand(_message.Message):
     __slots__ = ("kafka_enabled",)

@@ -3,7 +3,11 @@
 -- Identity of a decision is (run_id, event_id): benchmark event ids are deterministic per world+seed and
 -- repeat across runs (production: run_id is empty and event_id is globally unique).
 -- Feature schema version 1: 54 features -> f_* columns (features_raw keeps the exact tensor).
-CREATE TABLE IF NOT EXISTS realy.decisions_queue (
+-- Re-applying this file is safe and upgrades an existing install: the Kafka engine table and its view
+-- hold no data (the consumer group's offsets live in Kafka, so ingestion resumes where it stopped).
+DROP VIEW IF EXISTS realy.decisions_mv;
+DROP TABLE IF EXISTS realy.decisions_queue;
+CREATE TABLE realy.decisions_queue (
   `event_id` UInt64,
   `outcome` Int8,
   `score` Float32,
@@ -46,6 +50,12 @@ CREATE TABLE IF NOT EXISTS realy.decisions_queue (
   `event.credit_limit_usd` UInt32,
   `features.values` Array(Float32),
   `features.missing_bitmap` String,
+  `features.freshness.entity` Array(Int8),
+  `features.freshness.as_of_us` Array(Int64),
+  `features.freshness.updated_at_us` Array(Int64),
+  `features.freshness.found` Array(UInt8),
+  `rule_hits.rule_id` Array(String),
+  `rule_hits.action` Array(Int8),
   `model.model_name` String,
   `model.model_version` String,
   `model.score` Float32,
@@ -163,7 +173,6 @@ CREATE TABLE IF NOT EXISTS realy.decisions (
   `lat_deserialize_us` Int32,
   `lat_shuffle_us` Int32,
   `lat_state_features_us` Int32,
-  `lat_feature_store_write_us` Int32,
   `lat_feature_lookup_us` Int32,
   `lat_feature_assemble_us` Int32,
   `lat_model_call_us` Int32,
@@ -172,17 +181,35 @@ CREATE TABLE IF NOT EXISTS realy.decisions (
   `lat_model_server_compute_us` Int32,
   `lat_rules_us` Int32,
   `lat_policy_us` Int32,
-  `lat_audit_ack_us` Int32,
-  `lat_sink_us` Int32,
   `lat_async_wait_us` Int32,
   hot_path_us Int32,
+  -- broker LogAppendTime of the audit record (payments.decisions): an independent clock for egress
+  appended_at DateTime64(3),
+  -- audit WAL append: decided -> durably appended by the broker (1 ms resolution: LogAppendTime is ms)
+  lat_audit_append_us Int32,
+  rule_ids Array(LowCardinality(String)),          -- every CEL rule that fired, in evaluation order
+  rule_actions Array(LowCardinality(String)),      -- its action (APPROVE = allow-list, REVIEW, DECLINE)
+  fresh_entity Array(LowCardinality(String)),      -- per entity looked up in the online store ...
+  fresh_age_us Array(Int64),                       -- ... age of its stored values when scored (-1 = none)
+  fresh_found Array(UInt8),                        -- ... whether a stored blob existed
   ingested_at DateTime64(6) DEFAULT now64(6)
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMMDD(event_time)
 ORDER BY (customer_id, run_id, event_id, revision)
 TTL toDateTime(ingested_at) + INTERVAL 400 DAY;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS realy.decisions_mv TO realy.decisions AS
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `appended_at` DateTime64(3);
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `lat_audit_append_us` Int32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `rule_ids` Array(LowCardinality(String));
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `rule_actions` Array(LowCardinality(String));
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_entity` Array(LowCardinality(String));
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_age_us` Array(Int64);
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_found` Array(UInt8);
+ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `lat_feature_store_write_us`;
+ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `lat_audit_ack_us`;
+ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `lat_sink_us`;
+
+CREATE MATERIALIZED VIEW realy.decisions_mv TO realy.decisions AS
 SELECT
   event_id, revision,
   `event.customer_id` AS customer_id, `event.card_id` AS card_id, `event.merchant_id` AS merchant_id,
@@ -259,7 +286,6 @@ SELECT
   toInt32(arraySum(arrayFilter((d, s) -> s = 12, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_deserialize_us`,
   toInt32(arraySum(arrayFilter((d, s) -> s = 20, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_shuffle_us`,
   toInt32(arraySum(arrayFilter((d, s) -> s = 21, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_state_features_us`,
-  toInt32(arraySum(arrayFilter((d, s) -> s = 22, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_feature_store_write_us`,
   toInt32(arraySum(arrayFilter((d, s) -> s = 30, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_feature_lookup_us`,
   toInt32(arraySum(arrayFilter((d, s) -> s = 31, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_feature_assemble_us`,
   toInt32(arraySum(arrayFilter((d, s) -> s = 40, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_model_call_us`,
@@ -268,9 +294,14 @@ SELECT
   toInt32(arraySum(arrayFilter((d, s) -> s = 43, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_model_server_compute_us`,
   toInt32(arraySum(arrayFilter((d, s) -> s = 50, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_rules_us`,
   toInt32(arraySum(arrayFilter((d, s) -> s = 51, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_policy_us`,
-  toInt32(arraySum(arrayFilter((d, s) -> s = 60, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_audit_ack_us`,
-  toInt32(arraySum(arrayFilter((d, s) -> s = 61, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_sink_us`,
   toInt32(arraySum(arrayFilter((d, s) -> s = 81, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_async_wait_us`,
   toInt32(arrayFirst((st, s) -> s = 70, `trace.spans.start_us`, `trace.spans.stage`)
-          - arrayFirst((st, s) -> s = 10, `trace.spans.start_us`, `trace.spans.stage`)) AS hot_path_us
+          - arrayFirst((st, s) -> s = 10, `trace.spans.start_us`, `trace.spans.stage`)) AS hot_path_us,
+  assumeNotNull(_timestamp_ms) AS appended_at,
+  toInt32(greatest(0, toUnixTimestamp64Milli(assumeNotNull(_timestamp_ms)) * 1000 - decided_at_us)) AS lat_audit_append_us,
+  `rule_hits.rule_id` AS rule_ids,
+  arrayMap(a -> arrayElement(['OUTCOME_UNSPECIFIED', 'APPROVE', 'REVIEW', 'DECLINE'], toInt32(a) + 1), `rule_hits.action`) AS rule_actions,
+  arrayMap(e -> arrayElement(['UNSPECIFIED', 'CUSTOMER', 'CARD', 'DEVICE', 'IP', 'MERCHANT', 'TERMINAL', 'PAYEE'], toInt32(e) + 1), `features.freshness.entity`) AS fresh_entity,
+  arrayMap(u -> if(u > 0, decided_at_us - u, -1), `features.freshness.updated_at_us`) AS fresh_age_us,
+  `features.freshness.found` AS fresh_found
 FROM realy.decisions_queue WHERE length(_error) = 0;

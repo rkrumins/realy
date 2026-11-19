@@ -87,6 +87,7 @@ Piecewise-linear inverse CDF: quantiles[i] in [0,1] ascending, ms[i] the value a
 | `max_queue_delay_us` | `uint32` | 5 | `0` | dynamic batching: max wait to fill a batch |
 | `max_queue` | `uint32` | 6 | `0` | queued requests beyond this are rejected (0 = unbounded) |
 | `model_version` | `string` | 7 |  |  |
+| `weights_path` | `string` | 8 |  | mock model server: load these proxy weights (hot redeploy); "" = keep |
 
 ### `OnDeadline` (enum)
 
@@ -117,13 +118,12 @@ Piecewise-linear inverse CDF: quantiles[i] in [0,1] ascending, ms[i] the value a
 | `feature_lookup_delay` | `LatencyDist` | 6 | `{}` | injected on top of the real store, per lookup |
 | `model_extra_delay` | `LatencyDist` | 7 | `{}` | injected client-side before the model call |
 | `feature_source` | `string` | 8 | `"redis"` | "redis" \| "mock" |
-| `review_threshold` | `float` | 9 |  |  |
-| `decline_threshold` | `float` | 10 |  |  |
+| `review_threshold` | `float` | 9 |  | > 0 overrides the rule set's thresholds.review (live tuning) |
+| `decline_threshold` | `float` | 10 |  | > 0 overrides the rule set's thresholds.decline |
 | `microbatch_window_us` | `uint32` | 11 | `0` | 0 = one RPC per event |
 | `microbatch_max` | `uint32` | 12 | `0` |  |
-| `hedge_after_ms` | `uint32` | 13 | `0` | 0 = no hedging |
-| `feature_sample_permille` | `uint32` | 14 | `1000` | decisions carrying the full feature vector (default all) |
-| `rule_set_version` | `string` | 15 |  |  |
+| `hedge_after_ms` | `uint32` | 13 | `0` | > 0: a model call unanswered after this sends a duplicate on another |
+| `feature_sample_permille` | `uint32` | 14 | `1000` | channel; the first response wins (tail cut at the cost of extra load) decisions carrying the full feature vector (default all) |
 | `rule_set_yaml` | `string` | 16 |  | full rule set (hot reload) |
 | `audit_on_failure` | `AuditFailure` | 17 | `"SPOOL_LOCAL"` |  |
 | `self_inclusion` | `bool` | 18 | `true` | add current event to online-store aggregates (gateway) |

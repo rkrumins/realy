@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,12 +25,31 @@ def num(v: Any) -> float | None:
     return f if math.isfinite(f) else None
 
 
+HEARTBEAT_FRESH_S = 30.0
+
+
+def run_status(run_dir: Path, man: dict, rep: dict, run: dict) -> tuple[str, str | None]:
+    """(status, live phase). A run without a report is `running` only while its owner's heartbeat is
+    fresh; otherwise its owner died mid-run (`incomplete`), whatever process that was."""
+    if rep:
+        aborted = run.get("aborted") or (rep.get("summary") or {}).get("verdict") == "ABORTED"
+        return ("aborted" if aborted else "done"), None
+    hb = read_json(run_dir / "heartbeat")
+    if hb and time.time() - float(hb.get("ts") or 0) < HEARTBEAT_FRESH_S:
+        return "running", hb.get("phase")
+    if run:
+        return ("aborted" if run.get("aborted") else "incomplete"), None
+    return ("incomplete" if man else "incomplete"), None
+
+
 def run_summary(run_dir: Path) -> dict[str, Any]:
     man = read_json(run_dir / "manifest.json") or {}
     rep = read_json(run_dir / "report.json") or {}
     ver = read_json(run_dir / "verify.json")
     run = read_json(run_dir / "run.json") or {}
     s = rep.get("summary") or {}
+    status, live_phase = run_status(run_dir, man, rep, run)
+    ab = run.get("abort") or {}
     det = rep.get("detection") or {}
     src = (rep.get("resources") or {}).get("sources") or {}
     knee = s.get("knee") or {}
@@ -37,7 +57,9 @@ def run_summary(run_dir: Path) -> dict[str, Any]:
         "run_id": run_dir.name, "scenario": man.get("scenario") or rep.get("scenario"),
         "topology": man.get("topology") or rep.get("topology"),
         "started_at": (man.get("t_start_us") or 0) / 1e6 or (run_dir.stat().st_mtime if run_dir.exists() else 0),
-        "duration_s": man.get("duration_s"), "status": "done" if rep else ("running" if man else "incomplete"),
+        "duration_s": man.get("duration_s"), "status": status, "phase": live_phase,
+        "abort_kind": ab.get("kind"), "abort_phase": ab.get("phase"), "measured_s": s.get("measured_s"),
+        "owner": man.get("owner"),
         "verdict": s.get("verdict"), "reasons": s.get("reasons", []),
         "expected_verdict": s.get("expected_verdict"), "matches_expectation": s.get("matches_expectation"),
         "achieved_tps": s.get("achieved_emit_tps"), "e2e_p50_ms": s.get("e2e_p50_ms"),

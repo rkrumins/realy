@@ -58,6 +58,8 @@ public final class LoadEmitterMain {
         long callTimeoutMs = Long.parseLong(args.getOrDefault("call-timeout-ms", "5000"));
         boolean stream = "stream".equals(args.getOrDefault("mode", "unary"));
         Path out = Path.of(args.get("out"));
+        // cooperative abort: the driver creates this file; emission stops and results cover what was sent
+        Path stopFile = args.containsKey("stop-file") ? Path.of(args.get("stop-file")) : null;
 
         // ---------------------------------------------------------------- load dataset
         byte[][] payloads;
@@ -168,8 +170,19 @@ public final class LoadEmitterMain {
         // ---------------------------------------------------------------- open-loop schedule
         int driver = BenchClock.domain();
         CRC32 crc = new CRC32();
+        int sentN = n;
+        boolean stopped = false;
+        long nextStopCheck = 0;
         for (int i = 0; i < n; i++) {
             long due = t0 + offsets[i];
+            if (stopFile != null && BenchClock.nowUs() >= nextStopCheck) {
+                nextStopCheck = BenchClock.nowUs() + 200_000;
+                if (Files.exists(stopFile)) {
+                    sentN = i;
+                    stopped = true;
+                    break;
+                }
+            }
             long wait;
             while ((wait = due - BenchClock.nowUs()) > 0) {
                 if (wait > 200) LockSupport.parkNanos((wait - 100) * 1000); else Thread.onSpinWait();
@@ -217,9 +230,9 @@ public final class LoadEmitterMain {
         ByteBuffer rec = ByteBuffer.allocate(REC).order(ByteOrder.LITTLE_ENDIAN);
         try (var os = new BufferedOutputStream(new FileOutputStream(out.toFile()), 1 << 20)) {
             ByteBuffer head = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
-            head.put(new byte[] {'R', 'L', 'Y', 'G', 'R', 0, 1, 0}).putLong(n);
+            head.put(new byte[] {'R', 'L', 'Y', 'G', 'R', 0, 1, 0}).putLong(sentN);
             os.write(head.array());
-            for (int i = 0; i < n; i++) {
+            for (int i = 0; i < sentN; i++) {
                 rec.clear();
                 rec.putLong(eventIds[i]).putLong(t0 + offsets[i]).putLong(tSent[i]).putLong(tResp[i])
                         .putLong(tIngest[i]).putLong(tDecision[i]).put(outcome[i]).put(path[i]).put(degraded[i]).put(status[i]);
@@ -228,8 +241,8 @@ public final class LoadEmitterMain {
             }
         }
         int unanswered = outstanding.get();
-        String summary = String.format("{\"emitted\": %d, \"errors\": %d, \"unanswered\": %d, \"mode\": \"%s\"}",
-                n, errors.get(), unanswered, stream ? "stream" : "unary");
+        String summary = String.format("{\"emitted\": %d, \"errors\": %d, \"unanswered\": %d, \"mode\": \"%s\", \"stopped\": %b}",
+                sentN, errors.get(), unanswered, stream ? "stream" : "unary", stopped);
         Files.writeString(Path.of(out + ".json"), summary);
         System.out.println(summary);
         metrics.close();

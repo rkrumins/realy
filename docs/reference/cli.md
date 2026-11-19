@@ -4,6 +4,21 @@
 
 `realy` drives everything the console does, from a shell or CI. In the Docker stack it is on the console container's PATH (`make console-shell`, or `docker compose exec console realy ...`).
 
+## `realy abort`
+
+Abort runs wherever they execute. Two channels: a Redis flag (seen within ~1 s by the run's lease heartbeat) and a bench.control message; either alone is enough.
+
+```
+realy abort RUN_IDS [OPTIONS]
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `RUN_IDS` | argument, optional |  | run ids to abort (any process: console, CLI, bench Job) |
+| `--all` | flag |  | abort the pipeline's lease holder and every run listening on bench.control |
+| `--console` | str |  | console URL: also cancel its queue and pause its schedules (with --all) |
+| `--reason` | str | `aborted by operator (cli)` |  |
+
 ## `realy budget`
 
 Monte Carlo feasibility of the scenario's latency budget (before running anything).
@@ -50,6 +65,18 @@ realy control TARGET [OPTIONS]
 | `--kafka-ingress, --no-kafka-ingress` | flag |  | gateway: enable/disable Kafka ingress |
 | `--abort, --no-abort` | flag |  | abort the run |
 
+## `realy deploy-model`
+
+Hot-swap the mock model server's weights (no restart): retrain -> redeploy -> measure.
+
+```
+realy deploy-model WEIGHTS
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `WEIGHTS` | argument |  | proxy weights JSON (e.g. /models/proxy/versions/<version>.weights.json) |
+
 ## `realy gate`
 
 Fail a run that regressed: verdict, loss, verify, and p99 / knee / detection / CPU-per-event vs a baseline.
@@ -75,6 +102,24 @@ realy gate RUN [OPTIONS]
 | `--require-verify, --no-require-verify` | flag |  |  |
 | `--json` | flag |  |  |
 
+## `realy live-test`
+
+Live acceptance suite against a running stack, through the console API: launch, steer, report accuracy (vs the ClickHouse audit), abort in every phase and from every process, bulk control, guardrails, dead instrument processes, signals and recovery. Exit 0 only if every check passes.
+
+```
+realy live-test ACTION ARGS [OPTIONS]
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `ACTION` | argument, optional |  | run \| fault-start \| fault-check |
+| `ARGS` | argument, optional |  | fault-check: JOB_ID RUN_ID |
+| `--console` | str | `http://localhost:8090` |  |
+| `--case` | list[str] |  | run only these cases (repeatable); default: all |
+| `--expect` | str | `zero-loss` | fault-check: zero-loss \| aborted \| interrupted |
+| `--duration` | float | `90` | fault-start: run duration (s) |
+| `--out` | path |  | write results JSON here |
+
 ## `realy report`
 
 (Re)build the report for a finished run directory.
@@ -86,6 +131,23 @@ realy report RUN_DIR
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `RUN_DIR` | argument |  |  |
+
+## `realy rules-whatif`
+
+Replay rule sets / thresholds over a finished run offline: precision, recall, FPR, $ approved per variant and per rule, against the run's own policy. Tune on a training run, confirm on the evaluation run.
+
+```
+realy rules-whatif RUN_DIR [OPTIONS]
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `RUN_DIR` | argument |  | finished run (served features + scores + ground truth) |
+| `--rules` | list[path] |  | candidate rule set YAML (repeatable) |
+| `--review` | float |  | override the review threshold for every variant |
+| `--decline` | float |  | override the decline threshold for every variant |
+| `--sample-mod` | int | `1` | evaluate events with id % N == 0 only (speed) |
+| `--json` | flag |  |  |
 
 ## `realy run`
 
@@ -101,6 +163,7 @@ realy run SCENARIO [OPTIONS]
 | `--set` | list[str] |  | override, e.g. --set traffic.profile.tps=2000 |
 | `--collectors` | int |  | collector processes (default: 1 per 15k TPS) |
 | `--run-id` | str |  |  |
+| `--wait-lease` | float |  | seconds to wait when another run holds the pipeline lease |
 
 ## `realy scenarios`
 
@@ -144,6 +207,19 @@ realy size [OPTIONS]
 | `--json` | flag |  |  |
 | `--write-overlay` | path |  | write a kustomize overlay (on top of overlays/gke-l4) here |
 
+## `realy status`
+
+Who holds the pipeline right now (lease), and the console's current run and queue.
+
+```
+realy status [OPTIONS]
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `--console` | str |  | console URL, to include its queue |
+| `--json` | flag |  |  |
+
 ## `realy topics`
 
 Create the contract topics (contracts/kafka/topics.yaml).
@@ -158,7 +234,7 @@ realy topics [OPTIONS]
 
 ## `realy train`
 
-Train structural proxy models (MLP->ONNX/Triton + weights JSON, XGBoost->Triton FIL) on synthetic data.
+Train structural proxy models (MLP->ONNX/Triton + weights JSON, XGBoost->Triton FIL) on served features.
 
 ```
 realy train [OPTIONS]
@@ -171,6 +247,9 @@ realy train [OPTIONS]
 | `--trees` | int | `300` |  |
 | `--depth` | int | `6` |  |
 | `--input-dim` | int |  | pad the tensor to the production model width (0 = schema size) |
+| `--labels` | str | `observed` | observed: labels as known at training time (delayed, unreported fraud missing, friendly fraud included) \| ground-truth: the generator's truth |
+| `--label-maturity-days` | float | `30.0` | observed labels: train this many days after the last event |
+| `--deploy, --no-deploy` | flag |  | hot-deploy the new MLP to the mock model server afterwards |
 
 ## `realy verify`
 

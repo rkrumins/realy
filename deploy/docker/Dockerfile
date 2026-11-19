@@ -68,7 +68,8 @@ COPY --from=java-build /src/java/flink-job/build/libs/realy-flink-job.jar /opt/f
 FROM ${JRE_IMAGE} AS jre
 FROM ${PYTHON_IMAGE} AS console
 ARG HTTPS_PROXY
-ARG EXTRAS=control
+# train: `realy train` runs in the console too (retrain -> redeploy -> measure without leaving Docker)
+ARG EXTRAS=control,train
 COPY deploy/docker/build-trust.sh /usr/local/bin/realy-build-trust
 COPY --from=jre /opt/java/openjdk /opt/java/openjdk
 ENV JAVA_HOME=/opt/java/openjdk PATH=/opt/java/openjdk/bin:$PATH \

@@ -8,7 +8,10 @@ topics:
     partitions: 48
     key: customer_id (decimal string)  # keeps all of a customer's activity ordered
     value: realy.payments.v1.TransactionEvent
-    headers: [x-bench-trace (realy.bench.v1.BenchTrace), x-schema]
+    # x-bench-trace: realy.bench.v1.BenchTrace (intended/sent time, clock domain); x-run-id: owning run
+    # (":backfill" / ":prime" suffix for history); x-backfill: history the gateway must not score
+    # (Flink still folds it into state); x-mirrored: a sync decision already made, mirrored for Flink
+    headers: [x-bench-trace, x-run-id, x-backfill, x-mirrored]
     timestamp: CreateTime (event time, ms)
     retention_ms: 21600000     # 6h
     config: { compression.type: lz4, message.timestamp.type: CreateTime }
@@ -24,11 +27,6 @@ topics:
     key: customer_id (decimal string)
     value: realy.payments.v1.FraudLabel
     retention_ms: 604800000
-  payments.features:
-    partitions: 48
-    key: "<entity>:<id>"
-    value: realy.features.v1.FeatureVector (per-entity partial vector, optional changelog)
-    retention_ms: 3600000
   bench.control:
     partitions: 1
     key: "<target>"

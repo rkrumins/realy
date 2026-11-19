@@ -38,7 +38,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * injectable. Without the capacity model a delay-only mock can never saturate — this one does.
  */
 public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInferenceServiceImplBase {
-    private final ProxyModel model;
+    private volatile ProxyModel model;
+    private volatile String weightsPath = "";
     private final StageMetrics metrics;
     private final long seed;
     private volatile ModelServerConfig cfg;
@@ -81,8 +82,28 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
         configure(cfg);
     }
 
+    /**
+     * Apply a (complete) config. A new {@code weights_path} hot-swaps the model: the new weights are
+     * loaded first and swapped in atomically, so in-flight batches finish on the old model and a bad
+     * file leaves the old model serving (the update is rejected).
+     */
     public void configure(ModelServerConfig c) {
-        this.cfg = c;
+        String wp = c.getWeightsPath();
+        if (!wp.isEmpty() && !wp.equals(weightsPath)) {
+            ProxyModel m;
+            try {
+                m = ProxyModel.load(wp);
+            } catch (java.io.IOException | RuntimeException e) {
+                throw new IllegalArgumentException("cannot load model weights " + wp + ": " + e.getMessage(), e);
+            }
+            if (model != null && m.nFeatures != model.nFeatures) {
+                throw new IllegalArgumentException("model " + m.version + " takes " + m.nFeatures + " features, serving "
+                        + model.nFeatures);
+            }
+            model = m;
+            weightsPath = wp;
+        }
+        this.cfg = c.toBuilder().setModelVersion(model.version).setWeightsPath(weightsPath).build();
         this.serviceTime = new LatencyModel(c.getServiceTime());
     }
 

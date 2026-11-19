@@ -72,18 +72,21 @@ class _Cols:
 
 def collector_main(run_id: str, run_dir: str, index: int, ready, drain, expected, results,
                    group: str | None = None, idle_timeout_s: float = 10.0, drain_timeout_s: float = 60.0,
-                   read_committed: bool = False) -> None:
+                   read_committed: bool = False, drain_limit=None) -> None:
+    """`drain_limit` (shared float, seconds) lets the runner shorten the drain of an aborted run."""
+    from ..runner.lifecycle import watch_parent
+    watch_parent()
     try:
         results.put(("collector", index, _collect(run_id, run_dir, index, ready, drain, expected,
                                                   group or f"collector-{run_id}", idle_timeout_s, drain_timeout_s,
-                                                  read_committed)))
+                                                  read_committed, drain_limit)))
     except Exception:  # noqa: BLE001
         traceback.print_exc()
         results.put(("collector", index, {"error": traceback.format_exc()}))
 
 
 def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout_s, drain_timeout_s,
-             read_committed=False) -> dict[str, Any]:
+             read_committed=False, drain_limit=None) -> dict[str, Any]:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -284,7 +287,8 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             exp = expected.value
             if exp >= 0 and unique >= exp:
                 break
-            if time.time() - drain_started > drain_timeout_s or time.time() - last_msg > idle_timeout_s:
+            limit = min(drain_timeout_s, drain_limit.value) if drain_limit is not None and drain_limit.value > 0 else drain_timeout_s
+            if time.time() - drain_started > limit or time.time() - last_msg > idle_timeout_s:
                 break
     flush()
     for w in writes:
@@ -295,6 +299,7 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
     consumer.close()
     mprod.flush(5)
     summary = {"index": index, "received": received, "unique": unique, "duplicates": dups, "foreign": foreign,
-               "finals": finals, "partitions": len(assigned)}
+               "finals": finals, "partitions": len(assigned),
+               "drain_s": round(time.time() - drain_started, 2) if drain_started else None}
     (out_dir / f"collect-{index}.json").write_text(json.dumps(summary, indent=1))
     return summary

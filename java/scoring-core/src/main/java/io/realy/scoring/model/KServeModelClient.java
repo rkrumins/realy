@@ -17,12 +17,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
  * KServe v2 / Triton gRPC client (identical against mock-model-server and real Triton). FP32 input
  * {@code input__0 [B, N]} as raw_input_contents, FP32 output {@code output__0 [B, 1]}. Optional
  * client-side micro-batching coalesces concurrent requests arriving within {@code windowUs}.
+ *
+ * <p>Hedging ({@code hedge_after_ms > 0}): when a call (a row or a whole micro-batch) has not answered
+ * after that long, the identical request is sent once more on the next channel; the first response
+ * wins and the other call is cancelled. It trades a bounded amount of extra model load (only the
+ * slowest calls are duplicated) for a lower tail, and only helps when slowness is per-request
+ * (queueing on one replica, GC, a slow node), not when the whole model tier is saturated.
  */
 public final class KServeModelClient implements ModelClient {
     private final ManagedChannel[] channels;
@@ -34,6 +42,8 @@ public final class KServeModelClient implements ModelClient {
     private final String outputName;
     private volatile int windowUs;
     private volatile int maxBatch;
+    private volatile long hedgeAfterUs;
+    private volatile io.realy.common.StageMetrics metrics;
     private final Object lock = new Object();
     private List<Pending> pending = new ArrayList<>();
     private long pendingDeadlineUs = Long.MAX_VALUE;
@@ -57,6 +67,27 @@ public final class KServeModelClient implements ModelClient {
     public void configureBatching(int windowUs, int maxBatch) {
         this.windowUs = Math.max(0, windowUs);
         this.maxBatch = Math.max(1, maxBatch);
+    }
+
+    public void configureHedging(int hedgeAfterMs) {
+        this.hedgeAfterUs = Math.max(0, hedgeAfterMs) * 1000L;
+    }
+
+    /** Micro-batching + hedging from the live ScoringConfig (hot reload). */
+    public void configure(io.realy.contracts.bench.v1.ScoringConfig c) {
+        configureBatching(c.getMicrobatchWindowUs(), c.getMicrobatchMax());
+        configureHedging(c.getHedgeAfterMs());
+    }
+
+    /** Counters model_hedges (duplicates sent) and model_hedge_wins (the duplicate answered first). */
+    public KServeModelClient metrics(io.realy.common.StageMetrics m) {
+        this.metrics = m;
+        return this;
+    }
+
+    private void count(String counter) {
+        var m = metrics;
+        if (m != null) m.inc(counter);
     }
 
     @Override
@@ -119,10 +150,40 @@ public final class KServeModelClient implements ModelClient {
                 .addRawInputContents(ByteString.copyFrom(buf))
                 .build();
         long sentUs = BenchClock.nowUs();
-        var stub = stubs[Math.floorMod(rr.getAndIncrement(), stubs.length)].withDeadlineAfter(timeoutUs, TimeUnit.MICROSECONDS);
-        Futures.addCallback(stub.modelInfer(req), new FutureCallback<>() {
+        int first = Math.floorMod(rr.getAndIncrement(), stubs.length);
+        AtomicBoolean done = new AtomicBoolean();
+        AtomicInteger outstanding = new AtomicInteger(1);
+        AtomicReferenceArray<com.google.common.util.concurrent.ListenableFuture<ModelInferResponse>> calls =
+                new AtomicReferenceArray<>(2);
+        attempt(req, batch, first, timeoutUs, sentUs, done, outstanding, calls, 0);
+        long hedge = hedgeAfterUs;
+        if (hedge > 0 && hedge < timeoutUs) {
+            io.realy.common.Delays.after(hedge).thenRun(() -> {
+                if (done.get()) return;
+                long left = timeoutUs - (BenchClock.nowUs() - sentUs);
+                if (left <= 1_000) return;              // not worth a duplicate this close to the deadline
+                outstanding.incrementAndGet();
+                count("model_hedges");
+                attempt(req, batch, (first + 1) % stubs.length, left, sentUs, done, outstanding, calls, 1);
+            });
+        }
+    }
+
+    private void attempt(ModelInferRequest req, List<Pending> batch, int channel, long timeoutUs, long sentUs,
+                         AtomicBoolean done, AtomicInteger outstanding,
+                         AtomicReferenceArray<com.google.common.util.concurrent.ListenableFuture<ModelInferResponse>> calls,
+                         int slot) {
+        int b = batch.size();
+        var stub = stubs[channel].withDeadlineAfter(timeoutUs, TimeUnit.MICROSECONDS);
+        var call = stub.modelInfer(req);
+        calls.set(slot, call);
+        Futures.addCallback(call, new FutureCallback<>() {
             @Override
             public void onSuccess(ModelInferResponse resp) {
+                if (!done.compareAndSet(false, true)) return;     // the other attempt answered first
+                var other = calls.get(1 - slot);
+                if (other != null) other.cancel(true);
+                if (slot == 1) count("model_hedge_wins");
                 try {
                     float[] scores = decode(resp, b);
                     long q = param(resp, "queue_us");
@@ -134,12 +195,14 @@ public final class KServeModelClient implements ModelClient {
                                 sentUs - p.enqueuedUs()));
                     }
                 } catch (RuntimeException e) {
-                    onFailure(e);
+                    for (Pending p : batch) p.future().completeExceptionally(e);
                 }
             }
 
             @Override
             public void onFailure(Throwable t) {
+                if (outstanding.decrementAndGet() > 0) return;    // the hedge may still answer
+                if (!done.compareAndSet(false, true)) return;
                 for (Pending p : batch) p.future().completeExceptionally(t);
             }
         }, MoreExecutors.directExecutor());

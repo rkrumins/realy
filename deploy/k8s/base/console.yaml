@@ -27,7 +27,9 @@ spec:
     metadata: { labels: { app: console } }
     spec:
       enableServiceLinks: false
-      terminationGracePeriodSeconds: 30
+      # pod deletion aborts the running run; it drains and writes a partial report within
+      # REALY_SHUTDOWN_GRACE_S, which must stay below this
+      terminationGracePeriodSeconds: 75
       containers:
         - name: console
           image: realy/console:dev
@@ -46,6 +48,9 @@ spec:
             - { name: FLINK_KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
             - name: REALY_CONSOLE_TOKEN
               valueFrom: { secretKeyRef: { name: realy-console, key: token, optional: true } }
+            - { name: REALY_SHUTDOWN_GRACE_S, value: "60" }
+            - name: REALY_OWNER        # names this console in the pipeline lease (who holds the pipeline)
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
           volumeMounts:
             - { name: state, mountPath: /runs, subPath: runs }
             - { name: state, mountPath: /data, subPath: data }

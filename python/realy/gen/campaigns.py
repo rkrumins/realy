@@ -14,8 +14,11 @@ are totals across all generator shards; `Generator.schedule_campaign(split=True)
   counterfeit       pos [2..6], atm [0..3]
   merchant_breach   victims [15], delay_days [0.2..2.0]
   atm_cashout       cards [200], atms [20], duration_min [15], withdrawals [3..6], foreign_prob [0.5]
+                    (probability the cash-out city is abroad for the cards: cross-border unlimited operation)
   app_scam_mule     victims [8], window_h [4]
-  bust_out          purchases [3..6]
+  bust_out          purchases [3..6], span_hours [20], buildup_hours [0], buildup_purchases [6..12]
+                    (build-up: ordinary on-profile purchases that ramp up before the bust; they are
+                    LEGITIMATE events - only the bust is first-party fraud, as charge-offs record it)
   bot_ecom          cards [10], attempts/card [1..2], duration_min [5..30]
 """
 from __future__ import annotations
@@ -306,7 +309,14 @@ class CampaignEngine:
         cid = self.next_campaign_id()
         n_cards = max(1, int(p.get("cards", 200)))
         cards = self.pick_cards(n_cards)
-        city = int(rng.choice(g.n_cities, p=g.city_global_weight))
+        # unlimited operations cash out abroad far more often than at home (cloned cards are shipped to
+        # mule crews in another country); foreign_prob picks the side for the campaign
+        homes = self.c["home_country"][self.cards["customer_row"][cards]]
+        home = int(np.bincount(homes).argmax())
+        abroad = rng.random() < float(p.get("foreign_prob", 0.5))
+        w = g.city_global_weight * ((g.city_country != home) if abroad else (g.city_country == home))
+        w = w if w.sum() > 0 else g.city_global_weight
+        city = int(rng.choice(g.n_cities, p=w / w.sum()))
         n_atms = int(p.get("atms", 20))
         grp = np.full(n_atms, city, np.int64)
         atms = np.unique(self.mi.atm_by_city.sample(grp, rng.random(n_atms)))
@@ -362,7 +372,9 @@ class CampaignEngine:
         limit = max(500.0, float(self.cards["credit_limit_usd"][card]))
         k = _rng_range(rng, p.get("purchases"), (3, 6))
         share = rng.dirichlet(np.full(k, 2.0)) * limit * rng.uniform(0.9, 1.1)
-        t = T + np.sort(rng.uniform(0, 20, k) * HOUR).astype(np.int64)
+        build_h = float(p.get("buildup_hours", 0) or 0)
+        T_bust = T + int(build_h * HOUR)
+        t = T_bust + np.sort(rng.uniform(0, float(p.get("span_hours", 20)), k) * HOUR).astype(np.int64)
         remote = rng.random(k) < 0.6
         on = self.mi.online_in_cats(M.cats(*M.HIGH_RISK_RESALE, "airlines", "travel_agency")).sample(np.zeros(k, np.int64), rng.random(k))
         city = np.full(k, self.c["home_city"][cr], np.int64)
@@ -382,7 +394,27 @@ class CampaignEngine:
         ev.update(dict(device_id=np.where(remote, dev, 0), ip_v4=np.where(remote, c["home_ip"][cr], 0),
                        ip_country_idx=np.where(remote, c["home_country"][cr], -1), ip_asn=np.where(remote, c["home_asn"][cr], 0)))
         ev.update(self.label_cols(k, "bust_out", cid, LS_INVESTIGATION, delay_scale=1.5))
-        return make_chunk(k, **ev)
+        bust = make_chunk(k, **ev)
+        if build_h <= 0:
+            return bust
+        return concat_chunks([self._bust_out_buildup(T, build_h, card, cr, p), bust])
+
+    def _bust_out_buildup(self, T: int, hours: float, card: int, cr: int, p: dict) -> dict:
+        """The account looks like a good customer: on-profile purchases at home, ramping up in
+        frequency (more of them towards the bust), near the customer's usual ticket. Legitimate."""
+        rng = self.rng
+        n = _rng_range(rng, p.get("buildup_purchases"), (6, 12))
+        # stratified quantiles of a density growing linearly in time: ~3/4 of the build-up lands in its second half
+        t = (T + np.sqrt((np.arange(n) + rng.random(n)) / n) * hours * HOUR).astype(np.int64)
+        c = self.c
+        city = np.full(n, c["home_city"][cr], np.int64)
+        mrow = self.mi.pos_by_city.sample(city, rng.random(n))
+        usd = np.exp(rng.normal(np.log(max(5.0, float(c["avg_ticket_usd"][cr]) * 1.3)), 0.4, n))
+        ev = dict(event_time_us=t, payment_type=PT_PURCHASE, channel=CH_POS, entry_mode=EM_CHIP)
+        ev.update(self.card_fields(np.full(n, card)))
+        ev.update(self.merchant_fields(mrow, True))
+        ev.update(self.amounts(usd, self.w.merchants["country"][mrow]))
+        return make_chunk(n, **ev)
 
     def _bot_ecom(self, T: int, p: dict) -> dict:
         rng = self.rng

@@ -46,6 +46,9 @@ COLUMNS: list[tuple[str, str, str]] = [
     ("gateway_cpu_ms_per_event", "Nullable(Float64)", "gateway_cpu_ms_per_event"),
     ("flink_cpu_ms_per_event", "Nullable(Float64)", "flink_cpu_ms_per_event"),
     ("abort_reason", "String", "abort_reason"),
+    ("status", "LowCardinality(String)", "status"),
+    ("abort_kind", "LowCardinality(String)", "abort_kind"),
+    ("measured_s", "Nullable(Float64)", "measured_s"),
     ("git_sha", "LowCardinality(String)", "git_sha"),
     ("images", "String", "images"),
     ("report", "String CODEC(ZSTD(3))", "report"),
@@ -63,7 +66,13 @@ CREATE TABLE IF NOT EXISTS realy.runs (
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(started_at)
 ORDER BY (scenario, run_id);
-"""
+""" + "".join(f"ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS {stmt};\n" for stmt in migrations())
+
+
+def migrations() -> list[str]:
+    """Columns added after the first release: re-applying the DDL upgrades an existing table in place."""
+    added = ("status", "abort_kind", "measured_s")
+    return [f"`{c}` {t}" for c, t, _ in COLUMNS if c in added]
 
 
 def row(run_dir: Path) -> dict[str, Any]:
@@ -112,8 +121,12 @@ def store(run_dir: Path, clickhouse: str | None = None, log=None) -> bool:
     url = clickhouse or os.environ.get("CLICKHOUSE_URL", "http://localhost:8123")
     try:
         import httpx
-        r = httpx.post(url, params={"query": "INSERT INTO realy.runs FORMAT JSONEachRow"},
-                       content=json.dumps(row(run_dir), allow_nan=False), timeout=10)
+        body = json.dumps(row(run_dir), allow_nan=False)
+        r = httpx.post(url, params={"query": "INSERT INTO realy.runs FORMAT JSONEachRow"}, content=body, timeout=10)
+        if r.status_code >= 400 and ("NO_SUCH_COLUMN" in r.text or "Unknown field" in r.text or "UNKNOWN_IDENTIFIER" in r.text):
+            for stmt in migrations():   # a table created by an older release: upgrade it in place, once
+                httpx.post(url, params={"query": f"ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS {stmt}"}, timeout=10)
+            r = httpx.post(url, params={"query": "INSERT INTO realy.runs FORMAT JSONEachRow"}, content=body, timeout=10)
         r.raise_for_status()
         return True
     except Exception as e:  # noqa: BLE001 - history must never fail a run

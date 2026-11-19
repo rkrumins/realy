@@ -1,6 +1,6 @@
 /** Thin typed client for the console API. Every 401 flips the app into the sign-in screen. */
 import type {
-  AuthMe, BudgetCheck, Campaign, ClickHouseEnv, CompareResponse, CustomerResponse, DecisionDetail, DocPage, DocsIndex,
+  AuthMe, BudgetCheck, BulkAbortResult, Campaign, ClickHouseEnv, CompareResponse, CustomerResponse, DecisionDetail, DocPage, DocsIndex,
   EnvResponse, FlinkEnv, Job, KafkaEnv, RedisEnv, RunDetail, RunsResponse, ScenarioListItem, Schedule, SearchRow,
   Status, SummaryResponse, TopologyResponse,
 } from "./types";
@@ -80,6 +80,11 @@ export const api = {
   startRun: (scenario: string, overrides: Record<string, unknown>, verify: boolean) =>
     request<Job>("/api/runs", { method: "POST", json: { scenario, overrides, verify } }),
   abort: (ident: string) => request<{ result: string }>(`/api/runs/${enc(ident)}/abort`, { method: "POST" }),
+  abortMany: (body: { ids?: string[]; all?: boolean; include_queued?: boolean; reason?: string }) =>
+    request<BulkAbortResult>("/api/runs/abort", { method: "POST", json: body }),
+  stopAll: (pauseSchedules = true) =>
+    request<BulkAbortResult>("/api/stop-all", { method: "POST", json: { pause_schedules: pauseSchedules } }),
+  clearQueue: () => request<{ cancelled: string[] }>("/api/queue/clear", { method: "POST" }),
   compare: (a: string, b: string) => request<CompareResponse>(`/api/compare?a=${enc(a)}&b=${enc(b)}`),
   summary: () => request<SummaryResponse>("/api/summary"),
   // live
@@ -93,6 +98,8 @@ export const api = {
   addSchedule: (body: { scenario: string; overrides?: Record<string, unknown>; verify?: boolean; at?: string; every_minutes?: number; count?: number }) =>
     request<Schedule>("/api/schedules", { method: "POST", json: body }),
   deleteSchedule: (id: string) => request<{ deleted: string }>(`/api/schedules/${enc(id)}`, { method: "DELETE" }),
+  pauseSchedule: (id: string) => request<{ paused: string[] }>(`/api/schedules/${enc(id)}/pause`, { method: "POST" }),
+  resumeSchedule: (id: string) => request<{ resumed: string[] }>(`/api/schedules/${enc(id)}/resume`, { method: "POST" }),
   // environment
   env: () => request<EnvResponse>("/api/env"),
   envKafka: () => request<KafkaEnv>("/api/env/kafka"),

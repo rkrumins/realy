@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -33,18 +35,97 @@ def _overrides(sets: list[str]) -> dict:
 def run(scenario: str = typer.Argument(..., help="scenario name (scenarios/<name>.yaml) or path"),
         set_: list[str] = typer.Option([], "--set", help="override, e.g. --set traffic.profile.tps=2000"),
         collectors: Optional[int] = typer.Option(None, help="collector processes (default: 1 per 15k TPS)"),
-        run_id: Optional[str] = typer.Option(None)):
-    """Run a scenario end to end and write runs/<run_id>/report.{json,md,html}."""
-    from .runner.run import run_scenario
+        run_id: Optional[str] = typer.Option(None),
+        wait_lease: float = typer.Option(0.0, help="seconds to wait when another run holds the pipeline lease")):
+    """Run a scenario end to end and write runs/<run_id>/report.{json,md,html}.
+
+    Ctrl-C / SIGTERM abort gracefully: emission stops, decisions in flight drain, and a partial report
+    (verdict ABORTED) is still written. A second Ctrl-C exits at once. Exit codes: 0 PASS (or the
+    scenario's expected verdict), 1 FAIL, 2 ABORTED, 3 pipeline busy (another run holds the lease)."""
+    import signal
+
+    from .runner.lifecycle import PipelineBusy
+    from .runner.run import RUNS_DIR, RunHandle, new_run_id, run_scenario
     from .scenario import load_scenario
     sc = load_scenario(scenario, _overrides(set_))
-    res = run_scenario(sc, collectors=collectors, run_id=run_id)
+    rid = run_id or new_run_id(sc)
+    handle = RunHandle(rid, RUNS_DIR / rid)
+
+    def on_signal(signum, _frame):
+        name = signal.Signals(signum).name
+        if handle.abort_reason:
+            typer.echo(f"\n{name} again: exiting without waiting for the drain", err=True)
+            raise SystemExit(130)
+        typer.echo(f"\n{name}: aborting {rid} (draining, writing a partial report; {name} again to force)", err=True)
+        handle.request_abort(f"{name} received", "signal")
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+    try:
+        res = run_scenario(sc, collectors=collectors, run_id=rid, handle=handle, wait_lease_s=wait_lease)
+    except PipelineBusy as e:
+        typer.echo(f"error: {e}. Wait (--wait-lease SECONDS), or abort it: realy abort {e.holder.get('run_id')}", err=True)
+        raise typer.Exit(3)
     verdict = res.get("report", {}).get("verdict")
     exp = sc.expect.get("verdict")
     typer.echo(f"report: {res['run_dir']}/report.html")
+    if verdict == "ABORTED":
+        raise typer.Exit(2)
     if exp:
         raise typer.Exit(0 if exp == verdict else 1)
     raise typer.Exit(0 if verdict == "PASS" else 1)
+
+
+@app.command()
+def abort(run_ids: list[str] = typer.Argument(None, help="run ids to abort (any process: console, CLI, bench Job)"),
+          all_: bool = typer.Option(False, "--all", help="abort the pipeline's lease holder and every run listening on bench.control"),
+          console: Optional[str] = typer.Option(None, help="console URL: also cancel its queue and pause its schedules (with --all)"),
+          reason: str = typer.Option("aborted by operator (cli)")):
+    """Abort runs wherever they execute. Two channels: a Redis flag (seen within ~1 s by the run's lease
+    heartbeat) and a bench.control message; either alone is enough."""
+    from .runner.lifecycle import holder, request_abort
+    targets = list(run_ids or [])
+    if all_:
+        h = holder()
+        if h and h.get("run_id") not in targets:
+            targets.append(h["run_id"])
+    if not targets and not all_:
+        typer.echo("nothing to abort: give run ids or --all", err=True)
+        raise typer.Exit(1)
+    for rid in targets:
+        ch = request_abort(rid, reason, log=lambda m: typer.echo(m, err=True))
+        typer.echo(f"{rid}: abort requested via {', '.join(k for k, v in ch.items() if v) or 'NO channel (unreachable)'}")
+    if all_:
+        ch = request_abort("", reason)   # wildcard on bench.control: every run listening
+        typer.echo(f"wildcard abort on bench.control: {'published' if ch['kafka'] else 'FAILED'}")
+        if console:
+            import httpx
+            r = httpx.post(console.rstrip("/") + "/api/stop-all", json={"reason": reason}, timeout=10)
+            typer.echo(f"console stop-all: HTTP {r.status_code} {r.text[:300]}")
+
+
+@app.command()
+def status(console: Optional[str] = typer.Option(None, help="console URL, to include its queue"),
+           as_json: bool = typer.Option(False, "--json")):
+    """Who holds the pipeline right now (lease), and the console's current run and queue."""
+    from .runner.lifecycle import holder, pipeline
+    out: dict = {"pipeline": pipeline(), "lease": holder()}
+    if console:
+        import httpx
+        try:
+            out["console"] = httpx.get(console.rstrip("/") + "/api/active", timeout=5).json()
+        except Exception as e:  # noqa: BLE001
+            out["console"] = {"error": str(e)}
+    if as_json:
+        typer.echo(json.dumps(out, indent=1, default=str))
+        return
+    h = out["lease"]
+    typer.echo(f"pipeline '{out['pipeline']}': " + (f"BUSY - run {h['run_id']} ({h.get('scenario')}, phase "
+               f"{h.get('phase')}, owner {h.get('owner')}, lease expires in {h.get('expires_in_s')} s)" if h else "free"))
+    c = out.get("console") or {}
+    if c and "error" not in c:
+        cur = c.get("local")
+        typer.echo(f"console: {'running ' + cur['run_id'] + ' (' + cur['phase'] + ')' if cur else 'idle'}; "
+                   f"{len(c.get('queue') or [])} queued")
 
 
 @app.command()
@@ -145,12 +226,45 @@ def gate(run: str = typer.Argument(..., help="candidate run dir / id"),
 def train(run: list[Path] = typer.Option(..., "--run", help="finished run dir(s) to train on (served features + labels)"),
           hidden: str = typer.Option("64,32", help="MLP hidden layer sizes"),
           trees: int = 300, depth: int = 6,
-          input_dim: int = typer.Option(0, help="pad the tensor to the production model width (0 = schema size)")):
-    """Train structural proxy models (MLP->ONNX/Triton + weights JSON, XGBoost->Triton FIL) on synthetic data."""
+          input_dim: int = typer.Option(0, help="pad the tensor to the production model width (0 = schema size)"),
+          labels: str = typer.Option("observed", help="observed: labels as known at training time (delayed, "
+                                     "unreported fraud missing, friendly fraud included) | ground-truth: the generator's truth"),
+          label_maturity_days: float = typer.Option(30.0, help="observed labels: train this many days after the last event"),
+          deploy: bool = typer.Option(False, help="hot-deploy the new MLP to the mock model server afterwards")):
+    """Train structural proxy models (MLP->ONNX/Triton + weights JSON, XGBoost->Triton FIL) on served features.
+
+    Evaluate the result on a run of ANOTHER world (different seed): reports flag runs scored by a model
+    trained on their own world as in-sample."""
     from .train.proxy import train as do_train
     meta = do_train(run, hidden=tuple(int(x) for x in hidden.split(",") if x), trees=trees, depth=depth,
-                    input_dim=input_dim or None)
-    typer.echo(json.dumps({k: meta[k] for k in ("version", "rows", "fraud_rate", "input_dim", "metrics", "parity", "files")}, indent=1))
+                    input_dim=input_dim or None, labels=labels, maturity_days=label_maturity_days)
+    typer.echo(json.dumps({k: meta.get(k) for k in ("version", "rows", "fraud_rate", "label_stats", "input_dim", "metrics",
+                                                    "parity", "weights_path")}, indent=1))
+    if deploy:
+        _deploy_model(meta["weights_path"])
+
+
+def _deploy_model(weights_path: str) -> None:
+    import httpx
+
+    from .common import control as ctl
+    body = {"weights_path": weights_path}
+    url = os.environ.get("MODEL_ADMIN", "http://localhost:8002").rstrip("/") + "/admin/config"
+    r = httpx.get(url, timeout=5)
+    r.raise_for_status()
+    cfg = {**r.json(), **body}
+    r = httpx.put(url, content=json.dumps(cfg), timeout=10)
+    if r.status_code >= 300:
+        typer.echo(f"model server rejected {weights_path}: HTTP {r.status_code} {r.text[:300]}", err=True)
+        raise typer.Exit(1)
+    ctl.publish([ctl.control_message("", "model", model_server=cfg)])     # every other replica
+    typer.echo(f"deployed {weights_path}: model server now serves {r.json().get('model_version')}")
+
+
+@app.command("deploy-model")
+def deploy_model(weights: Path = typer.Argument(..., help="proxy weights JSON (e.g. /models/proxy/versions/<version>.weights.json)")):
+    """Hot-swap the mock model server's weights (no restart): retrain -> redeploy -> measure."""
+    _deploy_model(str(weights))
 
 
 @app.command()
@@ -194,6 +308,51 @@ def control(target: str = typer.Argument(..., help="gateway | model | emitter | 
         msgs.append(ctl.control_message(run_id, target, phase=6))
     ctl.publish(msgs)
     typer.echo(f"published {len(msgs)} control message(s)")
+
+
+@app.command("rules-whatif")
+def rules_whatif(run_dir: Path = typer.Argument(..., help="finished run (served features + scores + ground truth)"),
+                 rules: list[Path] = typer.Option([], "--rules", help="candidate rule set YAML (repeatable)"),
+                 review: Optional[float] = typer.Option(None, help="override the review threshold for every variant"),
+                 decline: Optional[float] = typer.Option(None, help="override the decline threshold for every variant"),
+                 sample_mod: int = typer.Option(1, help="evaluate events with id % N == 0 only (speed)"),
+                 as_json: bool = typer.Option(False, "--json")):
+    """Replay rule sets / thresholds over a finished run offline: precision, recall, FPR, $ approved per
+    variant and per rule, against the run's own policy. Tune on a training run, confirm on the evaluation run."""
+    from .report.whatif import evaluate, load, render
+    from .scenario import Scenario
+    sc = Scenario.model_validate(json.loads((run_dir / "scenario.json").read_text()))
+    data = load(run_dir, sample_mod)
+    rows = [(f"as run ({sc.rules})", evaluate(data, sc.scoring_config()["rule_set_yaml"], review, decline))]
+    for r in rules:
+        rows.append((r.stem, evaluate(data, r.read_text(), review, decline)))
+    typer.echo(json.dumps(dict(rows), indent=1) if as_json else render(rows))
+
+
+@app.command("live-test")
+def live_test(action: str = typer.Argument("run", help="run | fault-start | fault-check"),
+              args: list[str] = typer.Argument(None, help="fault-check: JOB_ID RUN_ID"),
+              console: str = typer.Option(os.environ.get("REALY_CONSOLE_URL", "http://localhost:8090")),
+              case: list[str] = typer.Option([], help="run only these cases (repeatable); default: all"),
+              expect: str = typer.Option("zero-loss", help="fault-check: zero-loss | aborted | interrupted"),
+              duration: float = typer.Option(90, help="fault-start: run duration (s)"),
+              out: Optional[Path] = typer.Option(None, help="write results JSON here")):
+    """Live acceptance suite against a running stack, through the console API: launch, steer, report
+    accuracy (vs the ClickHouse audit), abort in every phase and from every process, bulk control,
+    guardrails, dead instrument processes, signals and recovery. Exit 0 only if every check passes."""
+    from .acceptance.live import Suite
+    s = Suite(console=console)
+    if action == "fault-start":
+        typer.echo(s.fault_start(duration))
+        return
+    if action == "fault-check":
+        ok = s.fault_check(args[0], args[1], expect)
+    else:
+        ok = s.run_cases(case or None)
+    typer.echo(s.render())
+    if out or action == "run":
+        s.save(out or s.runs_dir / f"live-test-{time.strftime('%Y%m%d-%H%M%S')}.json")
+    raise typer.Exit(0 if ok else 1)
 
 
 @app.command()

@@ -20,13 +20,16 @@ The console UI is a client of this API; scripts and CI can use it too. Live Open
 
 | Method | Path | Query | Body | Description |
 |---|---|---|---|---|
+| `GET` | `/api/active` |  |  | Every run in flight that this console can see: its own, the pipeline lease holder (any process), and run ids with fresh live metrics on bench.metrics. |
 | `GET` | `/api/compare` | `a, b` |  | Compare |
 | `GET` | `/api/health` |  |  | Health |
 | `GET` | `/api/live/history` | `?run_id, ?seconds` |  | Live History |
 | `POST` | `/api/live/model` |  | JSON | Live Model |
 | `POST` | `/api/live/rate` |  | RateRequest | Live Rate |
 | `POST` | `/api/live/scoring` |  | JSON | Live Scoring |
-| `POST` | `/api/runs/{ident}/abort` |  |  | Abort Run |
+| `POST` | `/api/queue/clear` | `?reason` |  | Clear Queue |
+| `POST` | `/api/runs/abort` |  | BulkAbortRequest | Abort several runs at once: explicit ids, and/or `all` (running + queued). With `all`, a run another process holds the pipeline lease for is aborted too. |
+| `POST` | `/api/runs/{ident}/abort` | `?reason` |  | Abort Run |
 | `GET` | `/api/runs/{run_id}/report.html` |  |  | Get Report Html |
 | `GET` | `/api/runs/{run_id}` |  |  | Get Run |
 | `GET` | `/api/runs` | `?limit` |  | List Runs |
@@ -36,10 +39,15 @@ The console UI is a client of this API; scripts and CI can use it too. Live Open
 | `GET` | `/api/scenarios/{name}` |  |  | Get Scenario |
 | `PUT` | `/api/scenarios/{name}` |  | ScenarioText | Put Scenario |
 | `GET` | `/api/scenarios` |  |  | List Scenarios |
+| `POST` | `/api/schedules/pause-all` |  |  | Pause All |
+| `POST` | `/api/schedules/resume-all` |  |  | Resume All |
+| `POST` | `/api/schedules/{sid}/pause` |  |  | Pause Schedule |
+| `POST` | `/api/schedules/{sid}/resume` |  |  | Resume Schedule |
 | `DELETE` | `/api/schedules/{sid}` |  |  | Delete Schedule |
 | `GET` | `/api/schedules` |  |  | List Schedules |
 | `POST` | `/api/schedules` |  | ScheduleRequest | Add Schedule |
 | `GET` | `/api/status` |  |  | Status |
+| `POST` | `/api/stop-all` |  | JSON | Everything stops: schedules paused (so nothing new is enqueued), queue cancelled, the running run aborted, and a wildcard abort on bench.control reaches any run in any other process. |
 | `GET` | `/api/summary` | `?limit` |  | Summary |
 
 ## docs

@@ -29,6 +29,8 @@ public final class ScoringConfigHolder {
 
     private static Active compile(ScoringConfig c) {
         RuleSet rules = c.getRuleSetYaml().isBlank() ? RuleSet.bundled("baseline") : RuleSet.parse(c.getRuleSetYaml());
+        // live threshold tuning without shipping a whole rule set (0 = keep the rule set's thresholds)
+        rules = rules.withThresholds(c.getReviewThreshold(), c.getDeclineThreshold());
         return new Active(c, rules, new LatencyModel(c.getFeatureLookupDelay()), new LatencyModel(c.getModelExtraDelay()));
     }
 
@@ -49,7 +51,9 @@ public final class ScoringConfigHolder {
     public synchronized void set(ScoringConfig c) {
         Active a = compile(c);
         active = a;
-        LOG.info("scoring config {} active (rules {}, budget {} ms)", c.getVersion(), a.rules().version, c.getBudgetMs());
+        LOG.info("scoring config {} active (rules {}, thresholds review {} / decline {}, budget {} ms, hedge {} ms)",
+                c.getVersion(), a.rules().version, a.rules().reviewThreshold, a.rules().declineThreshold, c.getBudgetMs(),
+                c.getHedgeAfterMs());
         listener.accept(a);
     }
 }

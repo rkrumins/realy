@@ -26,20 +26,41 @@ import pyarrow.parquet as pq
 from ..features import load_schema
 from ..scenario import REPO_ROOT
 
-MODELS = REPO_ROOT / "models"
+import os
+
+MODELS = Path(os.environ.get("REALY_MODELS") or REPO_ROOT / "models")
 
 
-def load_training_set(run_dirs: list[Path]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Served feature vectors + labels from finished runs. Returns X, y, fraud_type."""
-    Xs, ys, ts = [], [], []
+LABEL_MODES = ("observed", "ground-truth")
+
+
+def load_training_set(run_dirs: list[Path], labels: str = "observed", maturity_days: float = 30.0,
+                      log=print) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    """Served feature vectors + labels from finished runs. Returns X, y, true fraud_type, label stats.
+
+    labels="observed" uses what the institution would KNOW when it trains, `maturity_days` after the
+    last event of the training window: a row is fraud only if a fraud label was published
+    (chargeback / customer report / investigation) and arrived by then. Never-reported fraud trains as
+    legitimate; a friendly-fraud chargeback on a legitimate purchase trains as fraud. That is what
+    a production model learns from. labels="ground-truth" uses the generator's truth (`is_fraud`):
+    an upper bound no real institution has.
+    """
+    if labels not in LABEL_MODES:
+        raise ValueError(f"labels must be one of {LABEL_MODES}")
+    Xs, ys, ts, truth = [], [], [], []
     seen_ids: set[int] = set()
+    have_observed = True
     for rd in run_dirs:
         feats = [pq.read_table(f) for f in sorted(glob.glob(str(rd / "features-*.parquet")))]
-        evs = [pq.read_table(f, columns=["event_id", "is_fraud", "fraud_type"]) for f in sorted(glob.glob(str(rd / "events-*.parquet")))]
+        cols = ["event_id", "is_fraud", "fraud_type", "event_time_us", "label_delay_us", "label_is_fraud", "backfill"]
+        evs = []
+        for f in sorted(glob.glob(str(rd / "events-*.parquet"))):
+            names = pq.read_schema(f).names
+            evs.append(pq.read_table(f, columns=[c for c in cols if c in names]))
         if not feats or not evs:
             continue
         f = pa.concat_tables(feats)
-        e = pa.concat_tables(evs)
+        e = pa.concat_tables(evs, promote_options="permissive")
         fid = f["event_id"].to_numpy()
         eid = e["event_id"].to_numpy()
         order = np.argsort(eid)
@@ -52,20 +73,55 @@ def load_training_set(run_dirs: list[Path]) -> tuple[np.ndarray, np.ndarray, np.
         ids = fid[ok]
         fresh = np.asarray([int(i) not in seen_ids for i in ids.tolist()], bool)
         seen_ids.update(int(i) for i in ids[fresh].tolist())
+        y_true = e["is_fraud"].to_numpy()[idx][fresh].astype(np.int32)
+        if "label_delay_us" in e.column_names:
+            et = e["event_time_us"].to_numpy()
+            delay = e["label_delay_us"].to_numpy()
+            cut = int(et.max()) + int(maturity_days * 86_400e6)        # the day the model is trained
+            known = (delay >= 0) & (et + delay <= cut)
+            y_obs = (known & e["label_is_fraud"].to_numpy())[idx][fresh].astype(np.int32)
+        else:
+            have_observed = False
+            y_obs = y_true
         Xs.append(X[fresh])
-        ys.append(e["is_fraud"].to_numpy()[idx][fresh].astype(np.int32))
+        truth.append(y_true)
+        ys.append(y_obs if labels == "observed" else y_true)
         ts.append(e["fraud_type"].to_numpy()[idx][fresh])
     if not Xs:
         raise ValueError("no training data: runs need features-*.parquet and events-*.parquet")
-    return np.concatenate(Xs), np.concatenate(ys), np.concatenate(ts)
+    y, yt = np.concatenate(ys), np.concatenate(truth)
+    if labels == "observed" and not have_observed:
+        log("warn: these runs predate observed-label columns: training on ground truth instead")
+    stats = {"labels": labels if have_observed else "ground-truth", "label_maturity_days": maturity_days,
+             "rows": int(y.size), "true_fraud": int(yt.sum()), "labelled_fraud": int(y.sum()),
+             # how far the training labels are from the truth: the noise a production model lives with
+             "true_fraud_labelled": float((y & yt).sum() / max(1, yt.sum())),
+             "labelled_fraud_actually_legit": float((y & (1 - yt)).sum() / max(1, y.sum()))}
+    return np.concatenate(Xs), y, np.concatenate(ts), {**stats, "_truth": yt}
 
 
 def _dedupe(run_dirs: list[Path]) -> list[Path]:
     return list(dict.fromkeys(Path(r) for r in run_dirs))
 
 
+def _provenance(run_dirs: list[Path]) -> list[dict[str, Any]]:
+    """What each training run was: lets a report tell whether it scores the data the model learnt from."""
+    out = []
+    for rd in run_dirs:
+        rd = Path(rd)
+        try:
+            man = json.loads((rd / "manifest.json").read_text())
+            sc = json.loads((rd / "scenario.json").read_text())
+        except (OSError, ValueError):
+            man, sc = {}, {}
+        out.append({"run_id": rd.name, "scenario": man.get("scenario"), "seed": sc.get("seed"),
+                    "world_hash": man.get("world_hash"), "world": sc.get("world")})
+    return out
+
+
 def train(run_dirs: list[Path], hidden: tuple[int, ...] = (64, 32), trees: int = 300, depth: int = 6,
-          input_dim: int | None = None, seed: int = 42, out: Path = MODELS, log=print) -> dict[str, Any]:
+          input_dim: int | None = None, seed: int = 42, out: Path = MODELS, log=print,
+          labels: str = "observed", maturity_days: float = 30.0) -> dict[str, Any]:
     from sklearn.metrics import average_precision_score, roc_auc_score
     from sklearn.model_selection import train_test_split
     from sklearn.neural_network import MLPClassifier
@@ -73,13 +129,18 @@ def train(run_dirs: list[Path], hidden: tuple[int, ...] = (64, 32), trees: int =
     from sklearn.preprocessing import StandardScaler
 
     schema = load_schema()
-    X, y, _ = load_training_set(run_dirs)
+    X, y, _, lstats = load_training_set(run_dirs, labels, maturity_days, log)
+    y_truth = lstats.pop("_truth")
+    log(f"labels: {lstats['labels']} (maturity {maturity_days:g} d): {lstats['labelled_fraud']:,} labelled fraud vs "
+        f"{lstats['true_fraud']:,} true; {lstats['true_fraud_labelled']:.1%} of true fraud labelled, "
+        f"{lstats['labelled_fraud_actually_legit']:.1%} of fraud labels are legit purchases (friendly fraud)")
     n_feat = X.shape[1]
     dim = max(input_dim or n_feat, n_feat)
     if dim > n_feat:
         X = np.pad(X, ((0, 0), (0, dim - n_feat)))
     log(f"training set: {X.shape[0]:,} served vectors x {dim} features, fraud rate {y.mean():.3%}")
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.25, random_state=seed, stratify=y if y.sum() >= 4 else None)
+    Xtr, Xte, ytr, yte, _, yte_truth = train_test_split(X, y, y_truth, test_size=0.25, random_state=seed,
+                                                       stratify=y if y.sum() >= 4 else None)
     # class imbalance: oversample fraud in the training split (MLPClassifier has no class_weight)
     pos = np.flatnonzero(ytr == 1)
     if pos.size:
@@ -100,9 +161,15 @@ def train(run_dirs: list[Path], hidden: tuple[int, ...] = (64, 32), trees: int =
     p_gb = gbdt.predict_proba(Xte)[:, 1]
     metrics = {}
     for name, p in (("fraud_mlp", p_mlp), ("fraud_gbdt", p_gb)):
+        # holdout of the TRAINING world: in-sample by construction (same customers, cards, campaigns).
+        # The honest number is an out-of-sample run (another seed / world) scored by the served model.
         metrics[name] = {"roc_auc": float(roc_auc_score(yte, p)) if yte.any() else None,
-                         "pr_auc": float(average_precision_score(yte, p)) if yte.any() else None}
-    version = f"proxy-{X.shape[0]}-{seed}"
+                         "pr_auc": float(average_precision_score(yte, p)) if yte.any() else None,
+                         "roc_auc_vs_truth": float(roc_auc_score(yte_truth, p)) if yte_truth.any() else None,
+                         "pr_auc_vs_truth": float(average_precision_score(yte_truth, p)) if yte_truth.any() else None,
+                         "evaluated_on": "random holdout of the training runs (in-sample world)"}
+    tag = "obs" if lstats["labels"] == "observed" else "gt"
+    version = f"proxy-{tag}-{X.shape[0]}-{seed}"
     out = Path(out)
     files = export_mlp(mlp, dim, n_feat, version, out, schema.names)
     files += export_gbdt(gbdt, dim, version, out)
@@ -116,10 +183,39 @@ def train(run_dirs: list[Path], hidden: tuple[int, ...] = (64, 32), trees: int =
               "onnx_vs_sklearn_max_abs": float(np.abs(o_scores - p_mlp[:2000]).max())}
     meta = {"version": version, "rows": int(X.shape[0]), "fraud_rate": float(y.mean()), "input_dim": dim,
             "features": n_feat, "hidden": list(hidden), "trees": trees, "depth": depth, "metrics": metrics,
-            "parity": parity, "files": [str(f.relative_to(REPO_ROOT)) for f in files],
-            "runs": [str(Path(r).name) for r in run_dirs]}
+            "parity": parity, "files": [_rel(f) for f in files], "label_stats": lstats,
+            "runs": [str(Path(r).name) for r in run_dirs], "provenance": _provenance(run_dirs)}
     (out / "proxy" / "training.json").write_text(json.dumps(meta, indent=1))
+    # versioned copies: several trained models can be kept, compared and (re)deployed by version
+    vdir = out / "proxy" / "versions"
+    vdir.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy(out / "proxy" / "fraud_mlp.weights.json", vdir / f"{version}.weights.json")
+    (vdir / f"{version}.training.json").write_text(json.dumps(meta, indent=1))
+    meta["weights_path"] = str(vdir / f"{version}.weights.json")
     return meta
+
+
+def _rel(p: Path) -> str:
+    try:
+        return str(Path(p).relative_to(REPO_ROOT))
+    except ValueError:
+        return str(p)
+
+
+def training_meta(model_version: str | None, models: Path | None = None) -> dict[str, Any] | None:
+    """Training metadata (incl. provenance) of a served model version, if this install trained it."""
+    if not model_version:
+        return None
+    base = Path(models or MODELS) / "proxy"
+    for p in (base / "versions" / f"{model_version}.training.json", base / "training.json"):
+        try:
+            meta = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if meta.get("version") == model_version:
+            return meta
+    return None
 
 
 def export_mlp(pipe, dim: int, n_feat: int, version: str, out: Path, names: list[str]) -> list[Path]:

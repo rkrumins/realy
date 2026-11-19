@@ -7,14 +7,28 @@ from typing import Any
 
 from .report import STEP_LABEL, STEP_ORDER, _f
 
+# A report of a run that measured nothing (aborted while preparing, nothing emitted) has a minimal
+# summary; renderers fill the rest so every report renders.
+SUMMARY_DEFAULTS: dict[str, Any] = {
+    "reasons": [], "emitted": 0, "decided": 0, "missing": 0, "duplicates": 0, "unknown": 0,
+    "achieved_emit_tps": 0.0, "e2e_p50_ms": None, "e2e_p99_ms": None, "e2e_p999_ms": None,
+    "hot_path_p99_ms": None, "within_budget": 0.0, "schedule_lag_p99_ms": None, "degraded_fraction": 0.0,
+    "outcomes": {}, "knee": None, "finals_after_provisional": 0,
+}
+
+
+def _summary(rep: dict[str, Any]) -> dict[str, Any]:
+    return {**SUMMARY_DEFAULTS, **{k: v for k, v in (rep.get("summary") or {}).items() if v is not None or k not in SUMMARY_DEFAULTS}}
+
 
 def render_markdown(rep: dict[str, Any]) -> str:
-    s = rep["summary"]
+    s = _summary(rep)
     out = [f"# {rep['run_id']} — {s['verdict']}", "",
            f"Topology `{rep['topology']}` · scenario `{rep['scenario']}` · budget e2e p99 ≤ {rep['budget']['e2e_p99_ms']} ms, "
            f"hot path p99 ≤ {rep['budget']['hot_path_p99_ms']} ms", ""]
     if s["reasons"]:
-        out += ["**Why it failed:**", *[f"- {r}" for r in s["reasons"]], ""]
+        out += [f"**{'Why it stopped' if s['verdict'] == 'ABORTED' else 'Why it failed'}:**",
+                *[f"- {r}" for r in s["reasons"]], ""]
     out += ["| metric | value |", "|---|---|",
             f"| events emitted / decided | {s['emitted']:,} / {s['decided']:,} |",
             f"| missing / duplicates / unknown | {s['missing']} / {s['duplicates']} / {s['unknown']} |",
@@ -28,14 +42,14 @@ def render_markdown(rep: dict[str, Any]) -> str:
             f"| outcomes | {s['outcomes']} |", "",
             "## Latency by step (ms)", "", "| step | p50 | p90 | p99 | p99.9 | max |", "|---|---|---|---|---|---|"]
     for k in STEP_ORDER:
-        st = rep["stages"].get(k)
+        st = (rep.get("stages") or {}).get(k)
         if st and st.get("count"):
             out.append(f"| {STEP_LABEL.get(k, k)} | {st['p50']:.2f} | {st['p90']:.2f} | {st['p99']:.2f} | {st['p999']:.2f} | {st['max']:.2f} |")
     if rep.get("levels"):
         out += ["", "## Latency vs throughput", "",
                 "| target TPS | emitted | decided | e2e p50 | e2e p99 | hot p99 | feature p99 | model p99 | publish lag p99 | within budget |",
                 "|---|---|---|---|---|---|---|---|---|---|"]
-        for lv in rep["levels"]:
+        for lv in rep.get("levels") or []:
             st = lv["stages"]
             g = lambda k, q="p99": _f(st.get(k, {}).get(q))  # noqa: E731
             out.append(f"| {lv['target_tps']:.0f} | {lv['emitted_tps']:.0f} | {lv['decided_tps']:.0f} | {g('e2e', 'p50')} | {g('e2e')} | "
@@ -51,8 +65,19 @@ def render_markdown(rep: dict[str, Any]) -> str:
             out.append(f"| {k} | {v:.2f} | {t['share'][k]:.0%} |")
     det = rep.get("detection")
     if det and det.get("fraud_events"):
-        out += ["", "## Detection (ground truth)", "",
-                f"recall (review+decline) {_f(det['recall_flagged'])}, recall (decline) {_f(det['recall_declined'])}, "
+        ev_ = det.get("evaluation") or {}
+        md = det.get("model") or {}
+        out += ["", "## Detection (ground truth)", ""]
+        if ev_:
+            warn = "**IN-SAMPLE:** " if ev_.get("sample") == "in-sample" else ""
+            out += [f"{warn}evaluation `{ev_.get('sample')}` · model `{ev_.get('model_version', '?')}`"
+                    + (f" · trained with {ev_['labels']} labels" if ev_.get("labels") else "")
+                    + f" · {ev_.get('reason', '')}", ""]
+        if md:
+            out += [f"model alone (decisions it scored: {md.get('scored', 0):,}): ROC-AUC {_f(md.get('roc_auc'), 4)}, "
+                    f"PR-AUC {_f(md.get('pr_auc'), 4)} at a fraud base rate of {_f(md.get('fraud_base_rate'), 4)}; "
+                    f"rules-only fallbacks {md.get('rules_only_fallback', 0):,} (recall {_f(md.get('fallback_recall_flagged'))})", ""]
+        out += [f"recall (review+decline) {_f(det['recall_flagged'])}, recall (decline) {_f(det['recall_declined'])}, "
                 f"precision {_f(det['precision_flagged'])}, FPR {_f(det['false_positive_rate'], 4)}, "
                 f"fraud $ approved {det['fraud_usd_approved']:,.0f} of {det['fraud_usd_total']:,.0f}", "",
                 "| typology | events | campaigns | recall flagged | recall declined | approved before 1st decline | $ approved |",
@@ -109,7 +134,7 @@ def _svg_series(series: dict[str, list[float | None]], width: int = 760, height:
 
 
 def render_html(rep: dict[str, Any]) -> str:
-    s = rep["summary"]
+    s = _summary(rep)
     md = render_markdown(rep)
     body = []
     for line in md.splitlines():
@@ -151,7 +176,7 @@ def render_html(rep: dict[str, Any]) -> str:
             {k: f[k] for k in ("emitted", "acked", "decided", "collected") if k in f}, y_label="events/s"))
     if rep.get("backlog"):
         charts.append("<h2>Backlog (emitted − collected)</h2>" + _svg_series({"backlog": rep["backlog"]}, y_label="events"))
-    badge = "pass" if s["verdict"] == "PASS" else "fail"
+    badge = {"PASS": "pass", "ABORTED": "aborted"}.get(s["verdict"], "fail")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{html.escape(rep['run_id'])}</title>
 <style>
@@ -161,7 +186,7 @@ body{{background:var(--bg);color:var(--fg);font:14px/1.5 ui-sans-serif,system-ui
 h1{{font-size:22px}} h2{{font-size:16px;margin-top:28px}} .tw{{overflow-x:auto}}
 table{{border-collapse:collapse;font-variant-numeric:tabular-nums;width:100%}} th,td{{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left;white-space:nowrap}}
 th{{color:var(--muted);font-weight:600}} .badge{{display:inline-block;padding:2px 10px;border-radius:12px;color:#fff;font-weight:700}}
-.pass{{background:var(--good)}} .fail{{background:var(--bad)}} .chart{{width:100%;height:auto}} .grid{{stroke:var(--line)}}
+.pass{{background:var(--good)}} .fail{{background:var(--bad)}} .aborted{{background:#b7791f}} .chart{{width:100%;height:auto}} .grid{{stroke:var(--line)}}
 .tick{{fill:var(--muted);font-size:10px}} .budget{{stroke:var(--bad);stroke-dasharray:4 3}} .legend{{font-size:12px;color:var(--muted)}}
 .lg::before{{content:"";display:inline-block;width:10px;height:3px;background:var(--lc);margin-right:4px;vertical-align:middle}} .lg{{margin-right:12px}}
 </style></head><body><span class="badge {badge}">{s['verdict']}</span>

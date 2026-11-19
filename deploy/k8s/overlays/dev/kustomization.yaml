@@ -56,7 +56,7 @@ patches:
       - { op: replace, path: /spec/flinkConfiguration/execution.checkpointing.savepoint-dir, value: "file:///tmp/savepoints" }
   - target: { kind: Job, name: bench-run }
     patch: |-
-      - { op: replace, path: /spec/template/spec/containers/0/args, value: ["run", "smoke"] }
+      - { op: replace, path: /spec/template/spec/containers/0/args, value: ["run", "smoke", "--wait-lease", "600"] }
       - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "2", memory: 4Gi } } }
   - target: { kind: Deployment, name: console }
     patch: |-

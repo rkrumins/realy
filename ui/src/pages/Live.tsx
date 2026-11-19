@@ -7,6 +7,7 @@ import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { TimeChart } from "@/components/charts";
 import { EmptyState, Kpi, PageHeader, TopologyBadge } from "@/components/common";
+import { PipelineBanner, StopAllButton } from "@/components/run-controls";
 import { DistributionEditor } from "@/components/editors";
 import { DecisionFeed, LogConsole } from "@/components/feeds";
 import { TopologyMap, useTopology } from "@/components/Topology";
@@ -236,6 +237,7 @@ export default function Live() {
           <Segmented value={win} onChange={setWin} options={WINDOWS.map((w) => ({ ...w }))} />
           <Button variant="secondary" onClick={() => setDrawer(true)} data-testid="open-controls"><SlidersHorizontal />Controls</Button>
           {!cur && runId && <Button variant="outline" onClick={() => nav(`/runs/${encodeURIComponent(runId)}`)}><FileBarChart2 />Report</Button>}
+          {(cur || status?.lease) && <StopAllButton />}
           {!cur && <Button variant="gradient" onClick={() => nav("/launch")}><Rocket />Launch</Button>}
         </>} />
 
@@ -251,8 +253,9 @@ export default function Live() {
           </div>
         </div>
       )}
+      <PipelineBanner status={status} />
       {cur?.abort_reason && (
-        <div className="mb-4 flex items-center gap-2 rounded-xl border border-warn/30 bg-warn/10 px-4 py-2.5 text-[13px] text-warn"><AlertTriangle className="size-4" />Abort requested: {cur.abort_reason}</div>
+        <div className="mb-4 flex items-center gap-2 rounded-xl border border-warn/30 bg-warn/10 px-4 py-2.5 text-[13px] text-warn"><AlertTriangle className="size-4" />Abort requested{cur.abort_kind ? ` (${cur.abort_kind})` : ""}: {cur.abort_reason} · draining in-flight decisions and writing a partial report</div>
       )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">

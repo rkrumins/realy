@@ -1,6 +1,6 @@
 /** API types (python/realy/control/app.py + the new console endpoints). u64 ids are strings. */
 
-export type Verdict = "PASS" | "FAIL" | "ERROR" | null | undefined;
+export type Verdict = "PASS" | "FAIL" | "ABORTED" | "ERROR" | null | undefined;
 export type Topology = "gateway-kafka" | "gateway-grpc" | "flink-inline" | "echo-kafka";
 export const TOPOLOGIES: Topology[] = ["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"];
 
@@ -25,6 +25,7 @@ export interface CurrentRun {
   scenario: string;
   phase: string;
   abort_reason: string | null;
+  abort_kind?: string | null;
   started_at: number | null;
   rate_multiplier: number;
   base_tps: number | null;
@@ -51,11 +52,30 @@ export interface Job {
   schedule_id: string | null;
 }
 
+/** The pipeline lease holder: whichever process (console, CLI, bench Job) owns the pipeline now. */
+export interface LeaseHolder {
+  run_id: string;
+  scenario?: string;
+  topology?: string;
+  owner?: string;
+  phase?: string;
+  started_at?: number;
+  expires_in_s?: number | null;
+}
+
 export interface Status {
   current: CurrentRun | null;
   queue: Job[];
+  blocked_by?: LeaseHolder | null;
+  lease?: LeaseHolder | null;
   kafka?: boolean;
   kafka_error?: string | null;
+}
+
+export interface BulkAbortResult {
+  results: Record<string, { result: string; channels?: Record<string, boolean> }>;
+  count?: number;
+  schedules_paused?: string[];
 }
 
 export interface RunSummary {
@@ -78,6 +98,10 @@ export interface RunSummary {
   missing: number | null;
   duplicates: number | null;
   abort_reason: string | null;
+  abort_kind?: string | null;
+  abort_phase?: string | null;
+  measured_s?: number | null;
+  owner?: string | null;
   verify_passed: boolean | null;
   has_html: boolean;
   job_id?: string;
@@ -89,6 +113,8 @@ export interface RunsResponse {
   jobs: Job[];
   history: RunSummary[];
   current: CurrentRun | null;
+  lease?: LeaseHolder | null;
+  blocked_by?: LeaseHolder | null;
 }
 
 export interface StageStats {

@@ -6,10 +6,12 @@ API (JSON):
   scenarios   GET /api/scenarios · GET|PUT /api/scenarios/{name} · POST /api/scenarios/validate
               POST /api/scenarios/{name}/budget
   runs        POST /api/runs · GET /api/runs · GET /api/runs/{id} · GET /api/runs/{id}/report.html
-              POST /api/runs/{id}/abort · GET /api/compare?a=&b=
+              POST /api/runs/{id}/abort · POST /api/runs/abort (bulk) · POST /api/stop-all
+              GET /api/active · POST /api/queue/clear · GET /api/compare?a=&b=
   live        WS /api/live · GET /api/live/history · GET /api/status
               POST /api/live/rate · POST /api/live/scoring · POST /api/live/model
   schedules   POST /api/schedules · GET /api/schedules · DELETE /api/schedules/{id}
+              POST /api/schedules/{id}/pause|resume · POST /api/schedules/pause-all|resume-all
   overview    GET /api/summary · GET /api/health
   auth        GET /api/auth/me · POST /api/auth/login · POST /api/auth/logout   (REALY_CONSOLE_TOKEN)
   env         GET /api/env · GET /api/env/{kafka,flink,redis,clickhouse}
@@ -66,6 +68,18 @@ class ScheduleRequest(BaseModel):
     count: int | None = None         # number of runs (default 1 for one-shot, unlimited for repeating)
 
 
+class BulkAbortRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)     # job ids or run ids (this console's or any other's)
+    all: bool = False                                 # the running run + (include_queued) the whole queue
+    include_queued: bool = True
+    reason: str = "aborted by operator"
+
+
+class StopAllRequest(BaseModel):
+    reason: str = "stop all (operator)"
+    pause_schedules: bool = True
+
+
 class RateRequest(BaseModel):
     tps: float = Field(gt=0)
 
@@ -92,9 +106,6 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
     runs_dir.mkdir(parents=True, exist_ok=True)
     store = Store(runs_dir / "console.db")
     hub = Hub(kafka=kafka)
-    worker = RunWorker(store, runs_dir, scenario_dir, run_fn=run_fn, verify_fn=verify_fn, log_sink=hub.add_log)
-    scheduler = Scheduler(store, worker)
-    summary_cache: dict[str, tuple[float, dict]] = {}
 
     def publish(msgs: list) -> None:
         if publish_fn is not None:
@@ -103,19 +114,44 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         from ..common import control
         control.publish(msgs)
 
+    def remote_abort(run_id: str, reason: str) -> dict[str, Any]:
+        """Abort a run in ANY process: Redis flag (polled by the run's lease heartbeat) and a
+        bench.control message (its metrics monitor). Either channel alone is enough."""
+        out: dict[str, Any] = {"redis": False, "kafka": False}
+        if kafka:   # tests run without infrastructure
+            from ..runner.lifecycle import request_abort
+            out["redis"] = request_abort(run_id, reason, publish=False)["redis"]
+        try:
+            from ..common.control import control_message
+            publish([control_message(run_id, "*", phase=6)])
+            out["kafka"] = True
+        except Exception as e:  # noqa: BLE001
+            out["kafka_error"] = str(e)[:200]
+        return out
+
+    worker = RunWorker(store, runs_dir, scenario_dir, run_fn=run_fn, verify_fn=verify_fn, log_sink=hub.add_log,
+                       remote_abort=remote_abort)
+    scheduler = Scheduler(store, worker)
+    summary_cache: dict[str, tuple[float, dict]] = {}
+
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         hub.bind_loop(asyncio.get_running_loop())
         task = None
         if background:
             hub.start()
+            recovered = worker.recover()
+            if recovered:
+                hub.add_log("", f"[console] recovered {len(recovered)} run(s) interrupted by a console restart: "
+                                + ", ".join(recovered))
             worker.start()
             scheduler.start()
 
             async def status_ticker() -> None:
                 while True:
                     await asyncio.sleep(1.0)
-                    hub.publish({"type": "status", **worker.status(), "kafka": hub.connected})
+                    lease = await asyncio.to_thread(_lease_holder)
+                    hub.publish({"type": "status", **worker.status(), "kafka": hub.connected, "lease": lease})
             task = asyncio.create_task(status_ticker())
         yield
         if task:
@@ -253,13 +289,15 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                 h["status"] = j["status"] if j["status"] in ("running", "aborted", "failed") else h["status"]
                 h["abort_reason"] = h["abort_reason"] or j.get("abort_reason")
                 h["verify_requested"] = j["verify"]
-        cur = worker.status()["current"]
+        st = worker.status()
+        cur = st["current"]
         if cur:
             for h in history:
                 if h["run_id"] == cur["run_id"]:
                     h["status"] = "running"
                     h["phase"] = cur["phase"]
-        return {"queue": store.queued(), "jobs": jobs[:50], "history": history, "current": cur}
+        return {"queue": store.queued(), "jobs": jobs[:50], "history": history, "current": cur,
+                "blocked_by": st["blocked_by"], "lease": _lease_holder()}
 
     @app.get("/api/summary")
     def summary(limit: int = 12) -> dict[str, Any]:
@@ -292,19 +330,85 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             raise HTTPException(404, "report not built yet")
         return FileResponse(p, media_type="text/html")
 
-    @app.post("/api/runs/{ident}/abort")
-    def abort_run(ident: str) -> dict[str, Any]:
-        result = worker.abort(ident)
-        if result == "not-running-here" or result == "abort-signalled":
+    lease_cache: dict[str, Any] = {"at": 0.0, "value": None}
+
+    def _lease_holder() -> dict[str, Any] | None:
+        """Cached for 2 s: /api/status and /api/runs poll every second and must stay fast when Redis is slow."""
+        if not kafka:
+            return None
+        now = time.time()
+        if now - lease_cache["at"] < 2.0:
+            return lease_cache["value"]
+        from ..runner.lifecycle import holder
+        lease_cache["at"] = now          # set first: concurrent requests during a slow lookup reuse the old value
+        lease_cache["value"] = holder()
+        return lease_cache["value"]
+
+    def _abort_one(ident: str, reason: str) -> dict[str, Any]:
+        result = worker.abort(ident, reason)
+        out: dict[str, Any] = {"result": result}
+        if result == "not-running-here":
+            # not this console's: a run in another process (CLI, bench Job, another console)
             job = store.job(ident)
             run_id = (job or {}).get("run_id") or ident
-            try:
-                from ..common.control import control_message
-                publish([control_message(run_id, "*", phase=6)])
-            except Exception as e:  # noqa: BLE001
-                if result == "not-running-here":
-                    raise HTTPException(502, f"could not publish abort: {e}") from e
-        return {"result": result}
+            ch = remote_abort(run_id, reason)
+            out["channels"] = ch
+            if not (ch.get("redis") or ch.get("kafka")):
+                out["result"] = "unreachable"
+        return out
+
+    @app.post("/api/runs/abort")
+    def abort_many(body: BulkAbortRequest) -> dict[str, Any]:
+        """Abort several runs at once: explicit ids, and/or `all` (running + queued). With `all`, a run
+        another process holds the pipeline lease for is aborted too."""
+        if not body.ids and not body.all:
+            raise HTTPException(400, "give ids or all=true")
+        res = {k: {"result": v} for k, v in worker.abort_many([], body.all, body.include_queued, body.reason).items()}
+        for ident in body.ids:
+            if ident not in res:
+                res[ident] = _abort_one(ident, body.reason)
+        if body.all:
+            h = _lease_holder()
+            if h and h.get("run_id") and h["run_id"] not in res:
+                res[h["run_id"]] = {"result": "remote-abort", "channels": remote_abort(h["run_id"], body.reason)}
+        return {"results": res, "count": len(res)}
+
+    @app.post("/api/stop-all")
+    def stop_all(body: StopAllRequest | None = None) -> dict[str, Any]:
+        """Everything stops: schedules paused (so nothing new is enqueued), queue cancelled, the running
+        run aborted, and a wildcard abort on bench.control reaches any run in any other process."""
+        body = body or StopAllRequest()
+        paused = store.set_schedules_enabled(False) if body.pause_schedules else []
+        res = {k: {"result": v} for k, v in worker.abort_many([], True, True, body.reason).items()}
+        h = _lease_holder()
+        if h and h.get("run_id") and h["run_id"] not in res:
+            res[h["run_id"]] = {"result": "remote-abort", "channels": remote_abort(h["run_id"], body.reason)}
+        try:
+            from ..common.control import control_message
+            publish([control_message("", "*", phase=6)])
+            wildcard = True
+        except Exception:  # noqa: BLE001
+            wildcard = False
+        hub.add_log(_current_run_id(), f"[console] STOP ALL: {len(res)} run(s)/job(s), {len(paused)} schedule(s) paused")
+        return {"results": res, "schedules_paused": paused, "wildcard_published": wildcard}
+
+    @app.post("/api/queue/clear")
+    def clear_queue(reason: str = "queue cleared by operator") -> dict[str, Any]:
+        out = {j["id"]: worker.abort(j["id"], reason) for j in store.queued()}
+        return {"cancelled": [k for k, v in out.items() if v == "cancelled"]}
+
+    @app.get("/api/active")
+    def active_runs() -> dict[str, Any]:
+        """Every run in flight that this console can see: its own, the pipeline lease holder (any
+        process), and run ids with fresh live metrics on bench.metrics."""
+        st = worker.status()
+        seen = hub.active_runs() if hasattr(hub, "active_runs") else {}
+        return {"local": st["current"], "queue": st["queue"], "blocked_by": st["blocked_by"],
+                "lease": _lease_holder(), "live": seen}
+
+    @app.post("/api/runs/{ident}/abort")
+    def abort_run(ident: str, reason: str = "aborted by operator") -> dict[str, Any]:
+        return _abort_one(ident, reason)
 
     @app.get("/api/compare")
     def compare(a: str, b: str) -> dict[str, Any]:
@@ -365,7 +469,7 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:
-        return {**worker.status(), "kafka": hub.connected, "kafka_error": hub.last_error}
+        return {**worker.status(), "kafka": hub.connected, "kafka_error": hub.last_error, "lease": _lease_holder()}
 
     @app.get("/api/live/history")
     def live_history(run_id: str | None = None, seconds: int = 300) -> dict[str, Any]:
@@ -406,6 +510,26 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
     @app.get("/api/schedules")
     def list_schedules() -> list[dict[str, Any]]:
         return store.schedules()
+
+    @app.post("/api/schedules/pause-all")
+    def pause_all() -> dict[str, Any]:
+        return {"paused": store.set_schedules_enabled(False)}
+
+    @app.post("/api/schedules/resume-all")
+    def resume_all() -> dict[str, Any]:
+        return {"resumed": store.set_schedules_enabled(True)}
+
+    @app.post("/api/schedules/{sid}/pause")
+    def pause_schedule(sid: str) -> dict[str, Any]:
+        if store.schedule(sid) is None:
+            raise HTTPException(404, "no such schedule")
+        return {"paused": store.set_schedules_enabled(False, sid)}
+
+    @app.post("/api/schedules/{sid}/resume")
+    def resume_schedule(sid: str) -> dict[str, Any]:
+        if store.schedule(sid) is None:
+            raise HTTPException(404, "no such schedule")
+        return {"resumed": store.set_schedules_enabled(True, sid)}
 
     @app.delete("/api/schedules/{sid}")
     def delete_schedule(sid: str) -> dict[str, Any]:

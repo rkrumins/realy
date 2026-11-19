@@ -41,6 +41,7 @@ message ModelServerConfig {
   uint32 max_queue_delay_us = 5;    // dynamic batching: max wait to fill a batch
   uint32 max_queue = 6;             // queued requests beyond this are rejected (0 = unbounded)
   string model_version = 7;
+  string weights_path = 8;          // mock model server: load these proxy weights (hot redeploy); "" = keep
 }
 
 enum OnDeadline {
@@ -64,13 +65,15 @@ message ScoringConfig {
   LatencyDist feature_lookup_delay = 6; // injected on top of the real store, per lookup
   LatencyDist model_extra_delay = 7;    // injected client-side before the model call
   string feature_source = 8;            // "redis" | "mock"
-  float review_threshold = 9;
-  float decline_threshold = 10;
+  float review_threshold = 9;           // > 0 overrides the rule set's thresholds.review (live tuning)
+  float decline_threshold = 10;         // > 0 overrides the rule set's thresholds.decline
   uint32 microbatch_window_us = 11;     // 0 = one RPC per event
   uint32 microbatch_max = 12;
-  uint32 hedge_after_ms = 13;           // 0 = no hedging
+  uint32 hedge_after_ms = 13;           // > 0: a model call unanswered after this sends a duplicate on another
+                                        // channel; the first response wins (tail cut at the cost of extra load)
   uint32 feature_sample_permille = 14;  // decisions carrying the full feature vector (default all)
-  string rule_set_version = 15;
+  reserved 15;                          // was rule_set_version: the version comes from rule_set_yaml
+  reserved "rule_set_version";
   string rule_set_yaml = 16;            // full rule set (hot reload)
   AuditFailure audit_on_failure = 17;
   bool self_inclusion = 18;             // add current event to online-store aggregates (gateway)

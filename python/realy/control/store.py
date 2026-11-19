@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   scenario TEXT NOT NULL,
   overrides TEXT NOT NULL DEFAULT '{}',
   verify INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL,              -- queued | running | done | failed | aborted | cancelled
+  status TEXT NOT NULL,              -- queued | running | done | failed | aborted | cancelled | interrupted
   created_at REAL NOT NULL,
   started_at REAL,
   finished_at REAL,
@@ -49,9 +49,12 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._lock:
             self._db.executescript(SCHEMA)
-            # a console restart cannot resume a run that was in flight in the previous process
-            self._db.execute("UPDATE jobs SET status='failed', error='console restarted during run' "
-                             "WHERE status='running'")
+            # a console restart cannot resume a run that was in flight in the previous process: mark it
+            # interrupted (the worker's recover() stops any survivor and finishes its run directory)
+            cur = self._db.execute("SELECT * FROM jobs WHERE status = 'running'")
+            self.interrupted = [self._job(dict(r)) for r in cur.fetchall()]
+            self._db.execute("UPDATE jobs SET status='interrupted', abort_reason='console restarted during run', "
+                             "finished_at=? WHERE status='running'", (time.time(),))
             self._db.commit()
 
     def _exec(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
@@ -122,6 +125,15 @@ class Store:
     def due_schedules(self, now: float) -> list[dict[str, Any]]:
         return [self._job(r) for r in self._exec(
             "SELECT * FROM schedules WHERE enabled = 1 AND next_at <= ? ORDER BY next_at", (now,))]
+
+    def set_schedules_enabled(self, enabled: bool, sid: str | None = None) -> list[str]:
+        cond = " AND (remaining IS NULL OR remaining > 0)" if enabled else ""   # never revive a finished one-shot
+        rows = self._exec("SELECT id FROM schedules WHERE enabled = ?" + cond + (" AND id = ?" if sid else ""),
+                          (int(not enabled), sid) if sid else (int(not enabled),))
+        ids = [r["id"] for r in rows]
+        for i in ids:
+            self._exec("UPDATE schedules SET enabled = ? WHERE id = ?", (int(enabled), i))
+        return ids
 
     def update_schedule(self, sid: str, **fields: Any) -> None:
         cols = ", ".join(f"{k} = ?" for k in fields)

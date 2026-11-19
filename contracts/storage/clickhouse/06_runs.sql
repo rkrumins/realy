@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS realy.runs (
   `gateway_cpu_ms_per_event` Nullable(Float64),
   `flink_cpu_ms_per_event` Nullable(Float64),
   `abort_reason` String,
+  `status` LowCardinality(String),
+  `abort_kind` LowCardinality(String),
+  `measured_s` Nullable(Float64),
   `git_sha` LowCardinality(String),
   `images` String,
   `report` String CODEC(ZSTD(3)),
@@ -38,3 +41,6 @@ CREATE TABLE IF NOT EXISTS realy.runs (
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(started_at)
 ORDER BY (scenario, run_id);
+ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS `status` LowCardinality(String);
+ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS `abort_kind` LowCardinality(String);
+ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS `measured_s` Nullable(Float64);

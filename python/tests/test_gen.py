@@ -208,6 +208,37 @@ def test_bust_out_utilisation(world):
     assert (sums / (limit * 100.0)).max() > 0.8
 
 
+def test_bust_out_buildup_is_legit_and_ramps(world):
+    c, _ = _campaign_stream(world, "bust_out", {"buildup_hours": 6, "span_hours": 2, "buildup_purchases": [10, 10]},
+                            batches=600)
+    f = c["is_fraud"] & (c["fraud_type"] == 8)
+    card = c["card_id"][f][0]
+    sel = c["card_id"] == card
+    t_bust = c["event_time_us"][f].min()
+    build = sel & ~c["is_fraud"] & (c["event_time_us"] < t_bust)
+    assert build.sum() >= 10                                   # on-profile history before the bust ...
+    bt = np.sort(c["event_time_us"][build])
+    half = bt[0] + (t_bust - bt[0]) / 2
+    assert (bt >= half).sum() > (bt < half).sum()              # ... ramping up towards it
+    assert (c["amount_usd_minor"][build].mean() < c["amount_usd_minor"][f].mean() / 3)   # bust tickets dwarf it
+
+
+def test_atm_cashout_cross_border(world):
+    from realy.world.geo import geo
+    g = geo()
+    home_of = {}
+    for fp, expect in ((1.0, True), (0.0, False)):
+        c, _ = _campaign_stream(world, "atm_cashout", {"cards": 60, "foreign_prob": fp})
+        f = c["is_fraud"] & (c["fraud_type"] == 6)
+        mc = c["merchant_country"][f]
+        # the cards' home countries (majority) vs where the ATMs are
+        rows = c["customer_id"][f].astype(np.int64) - 1
+        home = g.countries[int(np.bincount(world.customers["home_country"][rows]).argmax())]
+        abroad = float((mc != home).mean())
+        home_of[fp] = abroad
+        assert (abroad > 0.5) == expect, (fp, abroad)
+
+
 def test_merchant_breach_and_labels(world):
     sc = Scenario(name="t", seed=5, world=SPEC, fraud={"background_per_1k": 0.0, "unreported_fraction": 0.0,
                                                        "chargeback_delay_days": (1.0, 2.0)})

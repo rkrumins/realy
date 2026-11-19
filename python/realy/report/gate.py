@@ -46,7 +46,7 @@ def load_baseline(ident: str | Path) -> dict[str, Any]:
 def save_baseline(run_dir: Path, path: Path) -> Path:
     s = run_summary(run_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    keep = {k: v for k, v in s.items() if k not in ("reasons", "has_html", "status")}
+    keep = {k: v for k, v in s.items() if k not in ("reasons", "has_html", "status", "phase", "owner")}
     path.write_text(json.dumps({"scenario": s["scenario"], "saved_from": s["run_id"], "summary": keep}, indent=1) + "\n")
     return path
 
@@ -62,7 +62,7 @@ def gate(candidate: Path, baseline: dict[str, Any] | None, th: Thresholds | None
                        "candidate": cand, "baseline": base, "detail": detail})
 
     # ---------------------------------------------------------------- absolute
-    if c["status"] != "done":
+    if c["status"] not in ("done", "aborted"):
         add("report", False, c["status"], detail="run has no report")
     exp = c.get("expected_verdict")
     if exp:

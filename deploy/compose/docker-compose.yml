@@ -110,6 +110,10 @@ services:
       # trained proxy (realy train); empty -> bundled hand-set default weights
       MODEL_WEIGHTS: ${MODEL_WEIGHTS:-/models/proxy/fraud_mlp.weights.json}
       JAVA_OPTS: "-XX:+UseZGC -XX:+ZGenerational -Xmx1g"
+    # shared with the console: `realy train` writes versioned weights here and `realy deploy-model`
+    # hot-swaps them in (ModelServerConfig.weights_path) - retrain -> redeploy -> measure, no rebuild.
+    # Seeded from the image's bundled weights the first time the volume is created.
+    volumes: ["realy-models:/models"]
     depends_on: { kafka: { condition: service_healthy } }
 
   gateway:
@@ -189,9 +193,16 @@ services:
       GRAFANA_URL: ${GRAFANA_URL:-http://localhost:3000}
       PROMETHEUS_URL: ${PROMETHEUS_URL:-http://localhost:9090}
       REALY_CONSOLE_TOKEN: ${REALY_CONSOLE_TOKEN:-}
+      REALY_OWNER: console
+      REALY_MODELS: /models
+      # on `docker compose stop/down` the running run is aborted and given this long to drain and
+      # write its partial report (stop_grace_period below must be longer)
+      REALY_SHUTDOWN_GRACE_S: "60"
+    stop_grace_period: 75s
     volumes:
       - realy-runs:/runs
       - realy-data:/data
+      - realy-models:/models
     shm_size: 1g
     depends_on:
       kafka-init: { condition: service_completed_successfully }
@@ -224,3 +235,4 @@ volumes:
   flink-checkpoints: {}
   realy-runs: {}
   realy-data: {}
+  realy-models: {}

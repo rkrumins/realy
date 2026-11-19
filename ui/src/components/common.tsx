@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, CircleDashed, Inbox, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, Inbox, Loader2, OctagonX, XCircle } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/cn";
 import type { Verdict } from "@/lib/types";
@@ -42,12 +42,13 @@ export function Kpi({ label, value, sub, tone, icon, className, spark, title }: 
 export function VerdictBadge({ verdict, size = "default", expected }: { verdict: Verdict | string; size?: "default" | "lg"; expected?: boolean }) {
   if (!verdict) return <Badge tone="neutral"><CircleDashed />pending</Badge>;
   const pass = verdict === "PASS";
+  const aborted = verdict === "ABORTED";
   const lg = size === "lg";
   return (
     <Tooltip content={expected ? "matches the scenario's expected verdict" : undefined}>
       <span>
-        <Badge tone={pass ? "pass" : "fail"} className={cn(lg && "px-3 py-1 text-[13px] [&_svg]:size-4", "font-semibold tracking-wide")}>
-          {pass ? <CheckCircle2 /> : <XCircle />}
+        <Badge tone={pass ? "pass" : aborted ? "warn" : "fail"} className={cn(lg && "px-3 py-1 text-[13px] [&_svg]:size-4", "font-semibold tracking-wide")}>
+          {pass ? <CheckCircle2 /> : aborted ? <OctagonX /> : <XCircle />}
           {verdict}
           {expected && <span className="font-normal opacity-80">· expected</span>}
         </Badge>
@@ -58,6 +59,7 @@ export function VerdictBadge({ verdict, size = "default", expected }: { verdict:
 
 const STATUS_TONE: Record<string, "pass" | "fail" | "warn" | "info" | "neutral" | "accent"> = {
   done: "pass", running: "accent", queued: "info", aborted: "warn", failed: "fail", cancelled: "neutral", incomplete: "neutral",
+  interrupted: "warn",
 };
 
 export function StatusBadge({ status, phase }: { status: string; phase?: string }) {

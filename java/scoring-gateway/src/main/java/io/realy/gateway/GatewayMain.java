@@ -42,10 +42,11 @@ public final class GatewayMain {
                 : new RedisOnlineStore(Env.str("REDIS_URI", "redis://localhost:6379"), Env.integer("REDIS_CONNECTIONS", 4));
         KServeModelClient model = new KServeModelClient(Env.str("MODEL_TARGET", "localhost:8001"),
                 Env.str("MODEL_NAME", "fraud_mlp"), Env.integer("MODEL_INPUT_DIM", schema.size()), Env.integer("MODEL_CHANNELS", 4));
-        model.configureBatching(holder.get().cfg().getMicrobatchWindowUs(), holder.get().cfg().getMicrobatchMax());
-        holder.onChange(a -> model.configureBatching(a.cfg().getMicrobatchWindowUs(), a.cfg().getMicrobatchMax()));
+        model.configure(holder.get().cfg());
+        holder.onChange(a -> model.configure(a.cfg()));
 
         StageMetrics metrics = new StageMetrics("gateway", instance).startPublishing();
+        model.metrics(metrics);
         var orchestrator = new ScoringOrchestrator(schema, store, model, holder, instance, Env.lng("RUN_SEED", 42))
                 .metrics(metrics);
         var sink = new DecisionSink("gateway-" + instance);

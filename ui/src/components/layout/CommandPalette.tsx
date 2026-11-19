@@ -54,6 +54,18 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   }}>
                   <OctagonX />Abort current run
                 </Command.Item>
+                <Command.Item className={itemCls} value="stop all abort everything cancel queue pause schedules"
+                  onSelect={async () => {
+                    onOpenChange(false);
+                    try {
+                      const r = await api.stopAll(true);
+                      toast.success(`Stop all: ${Object.keys(r.results ?? {}).length} run(s)/job(s), ${r.schedules_paused?.length ?? 0} schedule(s) paused`);
+                    } catch (e) {
+                      toast.error(`Stop all failed: ${(e as Error).message}`);
+                    }
+                  }}>
+                  <OctagonX />Stop all (abort run, cancel queue, pause schedules)
+                </Command.Item>
               </Command.Group>
             )}
             <Command.Group heading="Go to" className={groupCls}>

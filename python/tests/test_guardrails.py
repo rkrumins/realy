@@ -87,7 +87,7 @@ def test_prime_wait_uses_group_lag_then_falls_back(monkeypatch):
     # group never committed offsets: fall back to the decision counter
     monkeypatch.setattr(kafka_mod, "wait_group_caught_up", lambda *a, **k: -1)
     seen = {}
-    monkeypatch.setattr(run_mod, "_wait_gateway_scored", lambda admin, target, t: seen.setdefault("target", target) > 0)
+    monkeypatch.setattr(run_mod, "_wait_gateway_scored", lambda admin, target, t, stop=None: seen.setdefault("target", target) > 0)
     assert run_mod.wait_gateway_primed(ep, 1_000, 15_000, 900, lambda _: None)
     assert seen["target"] == 1_000 + int(15_000 * 0.99)
     assert not run_mod.wait_gateway_primed(ep, None, 15_000, 900, lambda _: None)

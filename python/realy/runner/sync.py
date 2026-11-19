@@ -12,6 +12,7 @@ import json
 import os
 import struct
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -81,16 +82,38 @@ def compile_run_dataset(world, sc: Scenario, run_dir: Path, time_scale: float, s
 
 
 def run_emitter(run_dir: Path, run_id: str, t_start_us: int, time_scale: float, sim0: int, target: str,
-                mode: str = "unary", channels: int = 4, deadline_ms: int = 0, log=print) -> dict:
+                mode: str = "unary", channels: int = 4, deadline_ms: int = 0, log=print, stop=None) -> dict:
+    """Run the Java open-loop gRPC emitter. When `stop` (an Event) is set, the emitter is asked to stop
+    through its stop file: it ends emission, drains in-flight calls and writes results for the events
+    it sent, so an aborted sync run still gets an accurate partial report."""
     if not EMITTER.exists():
         raise FileNotFoundError(f"{EMITTER} not built (cd java && ./gradlew :load-emitter:installDist)")
     out = run_dir / "grpc-0.bin"
     cmd = [str(EMITTER), "--dataset", str(run_dir / "dataset.bin"), "--target", target, "--run-id", run_id,
            "--start-at-us", str(t_start_us), "--time-scale", repr(time_scale), "--sim-start-us", str(sim0),
-           "--channels", str(channels), "--mode", mode, "--deadline-ms", str(deadline_ms), "--out", str(out)]
+           "--channels", str(channels), "--mode", mode, "--deadline-ms", str(deadline_ms), "--out", str(out),
+           "--stop-file", str(run_dir / "emitter.stop")]
     env = dict(os.environ, HOSTNAME="0", JAVA_OPTS=os.environ.get("EMITTER_JAVA_OPTS", "-XX:+UseZGC -XX:+ZGenerational -Xmx3g"))
     with (run_dir / "emitter.log").open("w") as lf:
-        rc = subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, env=env).returncode
+        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, env=env)
+        stop_sent_at = None
+        while True:
+            try:
+                rc = proc.wait(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if stop is not None and stop.is_set() and stop_sent_at is None:
+                (run_dir / "emitter.stop").touch()
+                stop_sent_at = time.time()
+            if stop_sent_at is not None and time.time() - stop_sent_at > 30:   # drain + write took too long
+                proc.terminate()
+                try:
+                    rc = proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    rc = proc.wait()
+                break
     if rc != 0:
         raise RuntimeError(f"load emitter exited {rc}; see {run_dir / 'emitter.log'}")
     return convert_results(run_dir)

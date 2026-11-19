@@ -14,6 +14,8 @@ spec:
     spec:
       restartPolicy: Never
       enableServiceLinks: false
+      # `kubectl delete job` sends SIGTERM: the driver aborts, drains and writes a partial report
+      terminationGracePeriodSeconds: 90
       # shares the console's ReadWriteOnce PVC: must run on the console's node
       affinity:
         podAffinity:
@@ -23,7 +25,8 @@ spec:
       containers:
         - name: driver
           image: realy/console:dev
-          args: ["run", "step-ramp"]
+          # waits (up to 10 min) while the console or another Job holds the pipeline lease
+          args: ["run", "step-ramp", "--wait-lease", "600"]
           env:
             - { name: KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
             - { name: REDIS_URI, value: redis://redis:6379 }
@@ -33,6 +36,8 @@ spec:
             - { name: CLICKHOUSE_URL, value: http://clickhouse:8123 }
             - { name: FLINK_REST, value: "" }
             - { name: FLINK_KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+            - name: REALY_OWNER
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
           volumeMounts:
             - { name: state, mountPath: /runs, subPath: runs }
             - { name: state, mountPath: /data, subPath: data }

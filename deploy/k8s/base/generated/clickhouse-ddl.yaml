@@ -52,12 +52,15 @@ data:
     \ do not edit by hand.\n\n-- Identity of a decision is (run_id, event_id): benchmark\
     \ event ids are deterministic per world+seed and\n-- repeat across runs (production:\
     \ run_id is empty and event_id is globally unique).\n-- Feature schema version\
-    \ 1: 54 features -> f_* columns (features_raw keeps the exact tensor).\nCREATE\
-    \ TABLE IF NOT EXISTS realy.decisions_queue (\n  `event_id` UInt64,\n  `outcome`\
-    \ Int8,\n  `score` Float32,\n  `reason_codes` Array(String),\n  `policy_version`\
-    \ String,\n  `rule_set_version` String,\n  `path` Int8,\n  `degraded` UInt8,\n\
-    \  `ingress_mode` Int8,\n  `instance_id` String,\n  `decided_at_us` Int64,\n \
-    \ `revision` UInt32,\n  `feature_schema_version` UInt32,\n  `event.event_time_us`\
+    \ 1: 54 features -> f_* columns (features_raw keeps the exact tensor).\n-- Re-applying\
+    \ this file is safe and upgrades an existing install: the Kafka engine table and\
+    \ its view\n-- hold no data (the consumer group's offsets live in Kafka, so ingestion\
+    \ resumes where it stopped).\nDROP VIEW IF EXISTS realy.decisions_mv;\nDROP TABLE\
+    \ IF EXISTS realy.decisions_queue;\nCREATE TABLE realy.decisions_queue (\n  `event_id`\
+    \ UInt64,\n  `outcome` Int8,\n  `score` Float32,\n  `reason_codes` Array(String),\n\
+    \  `policy_version` String,\n  `rule_set_version` String,\n  `path` Int8,\n  `degraded`\
+    \ UInt8,\n  `ingress_mode` Int8,\n  `instance_id` String,\n  `decided_at_us` Int64,\n\
+    \  `revision` UInt32,\n  `feature_schema_version` UInt32,\n  `event.event_time_us`\
     \ Int64,\n  `event.payment_type` Int8,\n  `event.customer_id` UInt64,\n  `event.account_id`\
     \ UInt64,\n  `event.card_id` UInt64,\n  `event.card_type` Int8,\n  `event.amount_minor`\
     \ Int64,\n  `event.currency` String,\n  `event.amount_usd_minor` Int64,\n  `event.merchant_id`\
@@ -67,7 +70,10 @@ data:
     \ UInt64,\n  `event.ip_v4` UInt32,\n  `event.ip_country` String,\n  `event.ip_asn`\
     \ UInt32,\n  `event.payee_id` UInt64,\n  `event.cvv_match` UInt8,\n  `event.avs_match`\
     \ UInt8,\n  `event.recurring` UInt8,\n  `event.credit_limit_usd` UInt32,\n  `features.values`\
-    \ Array(Float32),\n  `features.missing_bitmap` String,\n  `model.model_name` String,\n\
+    \ Array(Float32),\n  `features.missing_bitmap` String,\n  `features.freshness.entity`\
+    \ Array(Int8),\n  `features.freshness.as_of_us` Array(Int64),\n  `features.freshness.updated_at_us`\
+    \ Array(Int64),\n  `features.freshness.found` Array(UInt8),\n  `rule_hits.rule_id`\
+    \ Array(String),\n  `rule_hits.action` Array(Int8),\n  `model.model_name` String,\n\
     \  `model.model_version` String,\n  `model.score` Float32,\n  `model.input_hash`\
     \ UInt64,\n  `model.timed_out` UInt8,\n  `model.errored` UInt8,\n  `model.batch_size`\
     \ UInt32,\n  `trace.run_id` String,\n  `trace.gen_id` UInt32,\n  `trace.seq` UInt64,\n\
@@ -115,26 +121,43 @@ data:
     \ Float32,\n  run_id LowCardinality(String),\n  gen_id UInt32,\n  seq UInt64,\n\
     \  t_intended_us Int64 CODEC(Delta, ZSTD),\n  t_sent_us Int64 CODEC(Delta, ZSTD),\n\
     \  `lat_queue_wait_us` Int32,\n  `lat_deserialize_us` Int32,\n  `lat_shuffle_us`\
-    \ Int32,\n  `lat_state_features_us` Int32,\n  `lat_feature_store_write_us` Int32,\n\
-    \  `lat_feature_lookup_us` Int32,\n  `lat_feature_assemble_us` Int32,\n  `lat_model_call_us`\
-    \ Int32,\n  `lat_model_batch_wait_us` Int32,\n  `lat_model_server_queue_us` Int32,\n\
-    \  `lat_model_server_compute_us` Int32,\n  `lat_rules_us` Int32,\n  `lat_policy_us`\
-    \ Int32,\n  `lat_audit_ack_us` Int32,\n  `lat_sink_us` Int32,\n  `lat_async_wait_us`\
-    \ Int32,\n  hot_path_us Int32,\n  ingested_at DateTime64(6) DEFAULT now64(6)\n\
-    ) ENGINE = ReplacingMergeTree(ingested_at)\nPARTITION BY toYYYYMMDD(event_time)\n\
-    ORDER BY (customer_id, run_id, event_id, revision)\nTTL toDateTime(ingested_at)\
-    \ + INTERVAL 400 DAY;\n\nCREATE MATERIALIZED VIEW IF NOT EXISTS realy.decisions_mv\
-    \ TO realy.decisions AS\nSELECT\n  event_id, revision,\n  `event.customer_id`\
-    \ AS customer_id, `event.card_id` AS card_id, `event.merchant_id` AS merchant_id,\n\
-    \  `event.payee_id` AS payee_id, `event.device_id` AS device_id,\n  fromUnixTimestamp64Micro(`event.event_time_us`)\
-    \ AS event_time,\n  fromUnixTimestamp64Micro(decided_at_us) AS decided_at,\n \
-    \ arrayElement(['UNSPECIFIED', 'CARD_PURCHASE', 'ATM_WITHDRAWAL', 'TRANSFER',\
-    \ 'CARD_REFUND'], toInt32(`event.payment_type`) + 1) AS payment_type,\n  arrayElement(['UNSPECIFIED',\
-    \ 'POS', 'ECOM', 'ATM', 'MOTO', 'IN_APP', 'ONLINE_BANKING'], toInt32(`event.channel`)\
-    \ + 1) AS channel,\n  arrayElement(['UNSPECIFIED', 'CHIP', 'CONTACTLESS', 'MAGSTRIPE',\
-    \ 'MANUAL', 'WALLET_TOKEN', 'ECOM_3DS', 'ECOM_NON_3DS', 'CREDENTIAL_ON_FILE',\
-    \ 'BANK_APP'], toInt32(`event.entry_mode`) + 1) AS entry_mode,\n  `event.mcc`\
-    \ AS mcc, `event.merchant_country` AS merchant_country, `event.amount_usd_minor`\
+    \ Int32,\n  `lat_state_features_us` Int32,\n  `lat_feature_lookup_us` Int32,\n\
+    \  `lat_feature_assemble_us` Int32,\n  `lat_model_call_us` Int32,\n  `lat_model_batch_wait_us`\
+    \ Int32,\n  `lat_model_server_queue_us` Int32,\n  `lat_model_server_compute_us`\
+    \ Int32,\n  `lat_rules_us` Int32,\n  `lat_policy_us` Int32,\n  `lat_async_wait_us`\
+    \ Int32,\n  hot_path_us Int32,\n  -- broker LogAppendTime of the audit record\
+    \ (payments.decisions): an independent clock for egress\n  appended_at DateTime64(3),\n\
+    \  -- audit WAL append: decided -> durably appended by the broker (1 ms resolution:\
+    \ LogAppendTime is ms)\n  lat_audit_append_us Int32,\n  rule_ids Array(LowCardinality(String)),\
+    \          -- every CEL rule that fired, in evaluation order\n  rule_actions Array(LowCardinality(String)),\
+    \      -- its action (APPROVE = allow-list, REVIEW, DECLINE)\n  fresh_entity Array(LowCardinality(String)),\
+    \      -- per entity looked up in the online store ...\n  fresh_age_us Array(Int64),\
+    \                       -- ... age of its stored values when scored (-1 = none)\n\
+    \  fresh_found Array(UInt8),                        -- ... whether a stored blob\
+    \ existed\n  ingested_at DateTime64(6) DEFAULT now64(6)\n) ENGINE = ReplacingMergeTree(ingested_at)\n\
+    PARTITION BY toYYYYMMDD(event_time)\nORDER BY (customer_id, run_id, event_id,\
+    \ revision)\nTTL toDateTime(ingested_at) + INTERVAL 400 DAY;\n\nALTER TABLE realy.decisions\
+    \ ADD COLUMN IF NOT EXISTS `appended_at` DateTime64(3);\nALTER TABLE realy.decisions\
+    \ ADD COLUMN IF NOT EXISTS `lat_audit_append_us` Int32;\nALTER TABLE realy.decisions\
+    \ ADD COLUMN IF NOT EXISTS `rule_ids` Array(LowCardinality(String));\nALTER TABLE\
+    \ realy.decisions ADD COLUMN IF NOT EXISTS `rule_actions` Array(LowCardinality(String));\n\
+    ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_entity` Array(LowCardinality(String));\n\
+    ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_age_us` Array(Int64);\n\
+    ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_found` Array(UInt8);\n\
+    ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `lat_feature_store_write_us`;\n\
+    ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `lat_audit_ack_us`;\nALTER TABLE\
+    \ realy.decisions DROP COLUMN IF EXISTS `lat_sink_us`;\n\nCREATE MATERIALIZED\
+    \ VIEW realy.decisions_mv TO realy.decisions AS\nSELECT\n  event_id, revision,\n\
+    \  `event.customer_id` AS customer_id, `event.card_id` AS card_id, `event.merchant_id`\
+    \ AS merchant_id,\n  `event.payee_id` AS payee_id, `event.device_id` AS device_id,\n\
+    \  fromUnixTimestamp64Micro(`event.event_time_us`) AS event_time,\n  fromUnixTimestamp64Micro(decided_at_us)\
+    \ AS decided_at,\n  arrayElement(['UNSPECIFIED', 'CARD_PURCHASE', 'ATM_WITHDRAWAL',\
+    \ 'TRANSFER', 'CARD_REFUND'], toInt32(`event.payment_type`) + 1) AS payment_type,\n\
+    \  arrayElement(['UNSPECIFIED', 'POS', 'ECOM', 'ATM', 'MOTO', 'IN_APP', 'ONLINE_BANKING'],\
+    \ toInt32(`event.channel`) + 1) AS channel,\n  arrayElement(['UNSPECIFIED', 'CHIP',\
+    \ 'CONTACTLESS', 'MAGSTRIPE', 'MANUAL', 'WALLET_TOKEN', 'ECOM_3DS', 'ECOM_NON_3DS',\
+    \ 'CREDENTIAL_ON_FILE', 'BANK_APP'], toInt32(`event.entry_mode`) + 1) AS entry_mode,\n\
+    \  `event.mcc` AS mcc, `event.merchant_country` AS merchant_country, `event.amount_usd_minor`\
     \ AS amount_usd_minor,\n  arrayElement(['OUTCOME_UNSPECIFIED', 'APPROVE', 'REVIEW',\
     \ 'DECLINE'], toInt32(outcome) + 1) AS outcome, score, reason_codes,\n  arrayElement(['FULL',\
     \ 'RULES_ONLY_FALLBACK', 'PROVISIONAL', 'FINAL_AFTER_PROVISIONAL', 'ECHO'], toInt32(path)\
@@ -183,26 +206,30 @@ data:
     \ AS `lat_deserialize_us`,\n  toInt32(arraySum(arrayFilter((d, s) -> s = 20, `trace.spans.dur_us`,\
     \ `trace.spans.stage`))) AS `lat_shuffle_us`,\n  toInt32(arraySum(arrayFilter((d,\
     \ s) -> s = 21, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_state_features_us`,\n\
-    \  toInt32(arraySum(arrayFilter((d, s) -> s = 22, `trace.spans.dur_us`, `trace.spans.stage`)))\
-    \ AS `lat_feature_store_write_us`,\n  toInt32(arraySum(arrayFilter((d, s) -> s\
-    \ = 30, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_feature_lookup_us`,\n\
-    \  toInt32(arraySum(arrayFilter((d, s) -> s = 31, `trace.spans.dur_us`, `trace.spans.stage`)))\
-    \ AS `lat_feature_assemble_us`,\n  toInt32(arraySum(arrayFilter((d, s) -> s =\
-    \ 40, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_model_call_us`,\n \
-    \ toInt32(arraySum(arrayFilter((d, s) -> s = 41, `trace.spans.dur_us`, `trace.spans.stage`)))\
-    \ AS `lat_model_batch_wait_us`,\n  toInt32(arraySum(arrayFilter((d, s) -> s =\
-    \ 42, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_model_server_queue_us`,\n\
+    \  toInt32(arraySum(arrayFilter((d, s) -> s = 30, `trace.spans.dur_us`, `trace.spans.stage`)))\
+    \ AS `lat_feature_lookup_us`,\n  toInt32(arraySum(arrayFilter((d, s) -> s = 31,\
+    \ `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_feature_assemble_us`,\n\
+    \  toInt32(arraySum(arrayFilter((d, s) -> s = 40, `trace.spans.dur_us`, `trace.spans.stage`)))\
+    \ AS `lat_model_call_us`,\n  toInt32(arraySum(arrayFilter((d, s) -> s = 41, `trace.spans.dur_us`,\
+    \ `trace.spans.stage`))) AS `lat_model_batch_wait_us`,\n  toInt32(arraySum(arrayFilter((d,\
+    \ s) -> s = 42, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_model_server_queue_us`,\n\
     \  toInt32(arraySum(arrayFilter((d, s) -> s = 43, `trace.spans.dur_us`, `trace.spans.stage`)))\
     \ AS `lat_model_server_compute_us`,\n  toInt32(arraySum(arrayFilter((d, s) ->\
     \ s = 50, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_rules_us`,\n  toInt32(arraySum(arrayFilter((d,\
     \ s) -> s = 51, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_policy_us`,\n\
-    \  toInt32(arraySum(arrayFilter((d, s) -> s = 60, `trace.spans.dur_us`, `trace.spans.stage`)))\
-    \ AS `lat_audit_ack_us`,\n  toInt32(arraySum(arrayFilter((d, s) -> s = 61, `trace.spans.dur_us`,\
-    \ `trace.spans.stage`))) AS `lat_sink_us`,\n  toInt32(arraySum(arrayFilter((d,\
-    \ s) -> s = 81, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_async_wait_us`,\n\
-    \  toInt32(arrayFirst((st, s) -> s = 70, `trace.spans.start_us`, `trace.spans.stage`)\n\
-    \          - arrayFirst((st, s) -> s = 10, `trace.spans.start_us`, `trace.spans.stage`))\
-    \ AS hot_path_us\nFROM realy.decisions_queue WHERE length(_error) = 0;\n"
+    \  toInt32(arraySum(arrayFilter((d, s) -> s = 81, `trace.spans.dur_us`, `trace.spans.stage`)))\
+    \ AS `lat_async_wait_us`,\n  toInt32(arrayFirst((st, s) -> s = 70, `trace.spans.start_us`,\
+    \ `trace.spans.stage`)\n          - arrayFirst((st, s) -> s = 10, `trace.spans.start_us`,\
+    \ `trace.spans.stage`)) AS hot_path_us,\n  assumeNotNull(_timestamp_ms) AS appended_at,\n\
+    \  toInt32(greatest(0, toUnixTimestamp64Milli(assumeNotNull(_timestamp_ms)) *\
+    \ 1000 - decided_at_us)) AS lat_audit_append_us,\n  `rule_hits.rule_id` AS rule_ids,\n\
+    \  arrayMap(a -> arrayElement(['OUTCOME_UNSPECIFIED', 'APPROVE', 'REVIEW', 'DECLINE'],\
+    \ toInt32(a) + 1), `rule_hits.action`) AS rule_actions,\n  arrayMap(e -> arrayElement(['UNSPECIFIED',\
+    \ 'CUSTOMER', 'CARD', 'DEVICE', 'IP', 'MERCHANT', 'TERMINAL', 'PAYEE'], toInt32(e)\
+    \ + 1), `features.freshness.entity`) AS fresh_entity,\n  arrayMap(u -> if(u >\
+    \ 0, decided_at_us - u, -1), `features.freshness.updated_at_us`) AS fresh_age_us,\n\
+    \  `features.freshness.found` AS fresh_found\nFROM realy.decisions_queue WHERE\
+    \ length(_error) = 0;\n"
   04_labels.sql: "-- GENERATED by `python -m realy.codegen` from contracts/ \u2014\
     \ do not edit by hand.\n\nCREATE TABLE IF NOT EXISTS realy.labels_queue (\n  event_id\
     \ UInt64, label_time_us Int64, event_time_us Int64, is_fraud UInt8, fraud_type\
@@ -228,40 +255,54 @@ data:
   05_views.sql: "-- GENERATED by `python -m realy.codegen` from contracts/ \u2014\
     \ do not edit by hand.\n\n-- Point-in-time correct training set: features exactly\
     \ as served at decision time + delayed labels.\nCREATE OR REPLACE VIEW realy.v_training_dataset\
-    \ AS\nSELECT d.run_id, d.event_id, d.event_time, d.customer_id, d.card_id, d.amount_usd_minor,\
-    \ d.payment_type, d.channel,\n       d.outcome, d.score, d.model_version, d.feature_schema_version,\
-    \ d.f_cust_count_1h, d.f_cust_count_24h, d.f_cust_amount_sum_24h, d.f_cust_amount_avg_30d,\
-    \ d.f_cust_distinct_countries_24h, d.f_cust_device_novel, d.f_cust_payee_novel,\
-    \ d.f_cust_ip_country_novel, d.f_cust_transfer_count_1h, d.f_cust_transfer_sum_24h,\
-    \ d.f_card_count_1m, d.f_card_count_5m, d.f_card_count_1h, d.f_card_count_24h,\
-    \ d.f_card_amount_sum_1h, d.f_card_amount_sum_24h, d.f_card_amount_max_7d, d.f_card_small_cnp_count_10m,\
-    \ d.f_card_distinct_merchants_10m, d.f_card_distinct_merchants_24h, d.f_card_contactless_count_30m,\
-    \ d.f_card_contactless_sum_30m, d.f_card_atm_count_1h, d.f_card_atm_sum_24h, d.f_card_geo_speed_kmh,\
-    \ d.f_card_secs_since_last, d.f_dev_count_5m, d.f_dev_distinct_cards_1h, d.f_dev_distinct_customers_24h,\
-    \ d.f_ip_count_5m, d.f_ip_distinct_cards_1h, d.f_merch_count_1m, d.f_merch_small_cnp_count_5m,\
+    \ AS\n-- label_time / label_delay_s say WHEN the label became known: a model trained\
+    \ at time T may only use\n-- rows whose label_time <= T (realy train --labels\
+    \ observed applies exactly this cut).\nSELECT d.run_id, d.event_id, d.event_time,\
+    \ d.customer_id, d.card_id, d.amount_usd_minor, d.payment_type, d.channel,\n \
+    \      d.outcome, d.score, d.model_version, d.feature_schema_version, d.path,\
+    \ d.rule_ids, d.rule_actions, d.f_cust_count_1h, d.f_cust_count_24h, d.f_cust_amount_sum_24h,\
+    \ d.f_cust_amount_avg_30d, d.f_cust_distinct_countries_24h, d.f_cust_device_novel,\
+    \ d.f_cust_payee_novel, d.f_cust_ip_country_novel, d.f_cust_transfer_count_1h,\
+    \ d.f_cust_transfer_sum_24h, d.f_card_count_1m, d.f_card_count_5m, d.f_card_count_1h,\
+    \ d.f_card_count_24h, d.f_card_amount_sum_1h, d.f_card_amount_sum_24h, d.f_card_amount_max_7d,\
+    \ d.f_card_small_cnp_count_10m, d.f_card_distinct_merchants_10m, d.f_card_distinct_merchants_24h,\
+    \ d.f_card_contactless_count_30m, d.f_card_contactless_sum_30m, d.f_card_atm_count_1h,\
+    \ d.f_card_atm_sum_24h, d.f_card_geo_speed_kmh, d.f_card_secs_since_last, d.f_dev_count_5m,\
+    \ d.f_dev_distinct_cards_1h, d.f_dev_distinct_customers_24h, d.f_ip_count_5m,\
+    \ d.f_ip_distinct_cards_1h, d.f_merch_count_1m, d.f_merch_small_cnp_count_5m,\
     \ d.f_merch_amount_sum_1h, d.f_term_count_5m, d.f_term_atm_sum_1h, d.f_payee_inbound_count_1h,\
     \ d.f_payee_inbound_sum_24h, d.f_payee_distinct_senders_24h, d.f_cust_tenure_days,\
     \ d.f_cust_segment, d.f_cust_avg_ticket_usd, d.f_merch_risk_tier, d.f_merch_fraud_rate_30d,\
     \ d.f_amount_usd, d.f_is_cnp, d.f_is_contactless, d.f_is_atm, d.f_is_transfer,\
     \ d.f_is_foreign, d.f_dist_from_home_km, d.f_amount_to_avg_ratio, d.f_local_hour,\
     \ d.f_credit_utilisation_24h,\n       ifNull(l.is_fraud, 0) AS label_is_fraud,\
-    \ ifNull(l.fraud_type, 'NONE') AS label_fraud_type, l.label_time\nFROM (SELECT\
-    \ * FROM realy.decisions FINAL WHERE revision = 0) AS d\nLEFT JOIN (SELECT * FROM\
-    \ realy.labels FINAL) AS l ON l.run_id = d.run_id AND l.event_id = d.event_id;\n\
-    \n-- Audit completeness: transactions that never received a decision.\nCREATE\
-    \ OR REPLACE VIEW realy.v_audit_gaps AS\nSELECT e.run_id, e.event_id, e.customer_id,\
-    \ e.event_time_us, e.ingested_at\nFROM realy.events_raw AS e\nLEFT ANTI JOIN (SELECT\
-    \ DISTINCT run_id, event_id FROM realy.decisions) AS d ON d.run_id = e.run_id\
-    \ AND d.event_id = e.event_id;\n\n-- Per-second latency/throughput from the audit\
-    \ log (independent second measurement).\nCREATE OR REPLACE VIEW realy.v_latency_by_second\
-    \ AS\nSELECT run_id, toStartOfSecond(decided_at) AS second, count() AS decisions,\n\
-    \       quantileExact(0.5)(hot_path_us) / 1000 AS hot_p50_ms, quantileExact(0.99)(hot_path_us)\
-    \ / 1000 AS hot_p99_ms,\n       quantileExact(0.99)(lat_feature_lookup_us) / 1000\
-    \ AS feature_p99_ms, quantileExact(0.99)(lat_model_call_us) / 1000 AS model_p99_ms,\n\
-    \       quantileExact(0.99)(dateDiff('microsecond', decided_at, ingested_at))\
-    \ / 1000 AS audit_visibility_p99_ms,\n       countIf(degraded = 1) AS degraded,\
-    \ countIf(outcome = 'DECLINE') AS declines\nFROM realy.decisions GROUP BY run_id,\
-    \ second;\n"
+    \ ifNull(l.fraud_type, 'NONE') AS label_fraud_type, l.label_time,\n       if(l.event_id\
+    \ = 0, NULL, dateDiff('second', d.event_time, l.label_time)) AS label_delay_s,\
+    \ l.source AS label_source\nFROM (SELECT * FROM realy.decisions FINAL WHERE revision\
+    \ = 0) AS d\nLEFT JOIN (SELECT * FROM realy.labels FINAL) AS l ON l.run_id = d.run_id\
+    \ AND l.event_id = d.event_id;\n\n-- Rule effectiveness against ground truth:\
+    \ fires, precision, share of legitimate traffic hit.\nCREATE OR REPLACE VIEW realy.v_rule_performance\
+    \ AS\nSELECT d.run_id, rule_id, any(rule_action) AS action, count() AS fires,\n\
+    \       countIf(ifNull(l.is_fraud, 0) = 1) AS fraud_fires, countIf(ifNull(l.is_fraud,\
+    \ 0) = 1) / count() AS precision\nFROM (SELECT run_id, event_id, rule_ids, rule_actions\
+    \ FROM realy.decisions FINAL WHERE revision = 0) AS d\nARRAY JOIN d.rule_ids AS\
+    \ rule_id, d.rule_actions AS rule_action\nLEFT JOIN (SELECT run_id, event_id,\
+    \ is_fraud FROM realy.labels FINAL) AS l ON l.run_id = d.run_id AND l.event_id\
+    \ = d.event_id\nGROUP BY d.run_id, rule_id;\n\n-- Audit completeness: transactions\
+    \ that never received a decision.\nCREATE OR REPLACE VIEW realy.v_audit_gaps AS\n\
+    SELECT e.run_id, e.event_id, e.customer_id, e.event_time_us, e.ingested_at\nFROM\
+    \ realy.events_raw AS e\nLEFT ANTI JOIN (SELECT DISTINCT run_id, event_id FROM\
+    \ realy.decisions) AS d ON d.run_id = e.run_id AND d.event_id = e.event_id;\n\n\
+    -- Per-second latency/throughput from the audit log (independent second measurement).\n\
+    CREATE OR REPLACE VIEW realy.v_latency_by_second AS\nSELECT run_id, toStartOfSecond(decided_at)\
+    \ AS second, count() AS decisions,\n       quantileExact(0.5)(hot_path_us) / 1000\
+    \ AS hot_p50_ms, quantileExact(0.99)(hot_path_us) / 1000 AS hot_p99_ms,\n    \
+    \   quantileExact(0.99)(lat_feature_lookup_us) / 1000 AS feature_p99_ms, quantileExact(0.99)(lat_model_call_us)\
+    \ / 1000 AS model_p99_ms,\n       quantileExact(0.99)(lat_audit_append_us) / 1000\
+    \ AS audit_append_p99_ms,\n       quantileExact(0.99)(dateDiff('microsecond',\
+    \ decided_at, ingested_at)) / 1000 AS audit_visibility_p99_ms,\n       countIf(degraded\
+    \ = 1) AS degraded, countIf(outcome = 'DECLINE') AS declines\nFROM realy.decisions\
+    \ GROUP BY run_id, second;\n"
   06_runs.sql: "-- GENERATED by `python -m realy.codegen` from contracts/ \u2014 do\
     \ not edit by hand.\n\n-- One row per benchmark run (written by the driver after\
     \ the report and after `realy verify`; the\n-- newest row per run wins). Source\
@@ -278,7 +319,11 @@ data:
     \ Nullable(Float64),\n  `false_positive_rate` Nullable(Float64),\n  `verify_passed`\
     \ Nullable(UInt8),\n  `exact_set_agreement` Nullable(Float64),\n  `gateway_cpu_ms_per_event`\
     \ Nullable(Float64),\n  `flink_cpu_ms_per_event` Nullable(Float64),\n  `abort_reason`\
-    \ String,\n  `git_sha` LowCardinality(String),\n  `images` String,\n  `report`\
-    \ String CODEC(ZSTD(3)),\n  `ingested_at` DateTime64(6) DEFAULT now64(6)\n) ENGINE\
-    \ = ReplacingMergeTree(ingested_at)\nPARTITION BY toYYYYMM(started_at)\nORDER\
-    \ BY (scenario, run_id);\n"
+    \ String,\n  `status` LowCardinality(String),\n  `abort_kind` LowCardinality(String),\n\
+    \  `measured_s` Nullable(Float64),\n  `git_sha` LowCardinality(String),\n  `images`\
+    \ String,\n  `report` String CODEC(ZSTD(3)),\n  `ingested_at` DateTime64(6) DEFAULT\
+    \ now64(6)\n) ENGINE = ReplacingMergeTree(ingested_at)\nPARTITION BY toYYYYMM(started_at)\n\
+    ORDER BY (scenario, run_id);\nALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS\
+    \ `status` LowCardinality(String);\nALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS\
+    \ `abort_kind` LowCardinality(String);\nALTER TABLE realy.runs ADD COLUMN IF NOT\
+    \ EXISTS `measured_s` Nullable(Float64);\n"

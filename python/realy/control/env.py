@@ -14,8 +14,7 @@ from fastapi import APIRouter
 
 router = APIRouter(prefix="/api/env", tags=["environment"])
 TIMEOUT = float(os.environ.get("REALY_ENV_TIMEOUT_S", "2.5"))
-RELEVANT_TOPICS = ("payments.events.raw", "payments.decisions", "payments.labels", "payments.features",
-                   "bench.control", "bench.metrics")
+RELEVANT_TOPICS = ("payments.events.raw", "payments.decisions", "payments.labels", "bench.control", "bench.metrics")
 
 
 def _url(var: str, default: str) -> str:
@@ -98,7 +97,9 @@ def _service(base: str) -> dict[str, Any]:
 
 def probe_gateway() -> dict[str, Any]:
     cfg = _service(endpoints()["gateway"])
-    return {"version": cfg.get("rule_set_version") or cfg.get("version"),
+    import re
+    m = re.search(r"^version:\s*(\S+)", cfg.get("rule_set_yaml") or "", re.M)
+    return {"version": (m.group(1) if m else None) or cfg.get("version"),
             "details": {"config_version": cfg.get("version"), "budget_ms": cfg.get("budget_ms"),
                         "feature_source": cfg.get("feature_source"), "echo": cfg.get("echo", False)}}
 

@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, GitCompareArrows, History, ListOrdered, Rocket, Search, ShieldCheck, ShieldX, Trash2, X } from "lucide-react";
+import { CalendarClock, GitCompareArrows, History, ListOrdered, OctagonX, Pause, Play, Rocket, Search, ShieldCheck, ShieldX, Trash2, X } from "lucide-react";
 import * as React from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { EmptyState, ErrorState, PageHeader, StatusBadge, TopologyBadge, topologyLabel, VerdictBadge } from "@/components/common";
+import { PipelineBanner, StopAllButton } from "@/components/run-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -66,14 +67,18 @@ function HistoryTable({ rows, selected, toggle }: { rows: RunSummary[]; selected
   );
 }
 
-function JobRow({ j, onAbort }: { j: Job; onAbort?: () => void }) {
+function JobRow({ j, onAbort, selected, onSelect, phase }: {
+  j: Job; onAbort?: () => void; selected?: boolean; onSelect?: () => void; phase?: string;
+}) {
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-[13px]">
-      <StatusBadge status={j.status} />
+    <li className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-[13px]", selected && "bg-accent/6")} data-testid={`job-${j.id}`}>
+      {onSelect && <Checkbox checked={!!selected} onCheckedChange={onSelect} />}
+      <StatusBadge status={j.status} phase={phase} />
       <span className="font-mono text-fg">{j.scenario}</span>
       {j.run_id && <span className="font-mono text-[11.5px] text-subtle">{j.run_id}</span>}
       {Object.keys(j.overrides || {}).length > 0 && <span className="truncate font-mono text-[11px] text-subtle">{JSON.stringify(j.overrides)}</span>}
       {j.error && <span className="text-[12px] text-fail">{j.error}</span>}
+      {!j.error && j.abort_reason && j.status !== "queued" && <span className="text-[12px] text-warn">{j.abort_reason}</span>}
       <span className="ml-auto text-[12px] text-subtle">{j.finished_at ? `finished ${fmtAgo(j.finished_at)}` : j.started_at ? `started ${fmtAgo(j.started_at)}` : `queued ${fmtAgo(j.created_at)}`}</span>
       {onAbort && <Button size="sm" variant="ghost" onClick={onAbort}><X />{j.status === "running" ? "Abort" : "Cancel"}</Button>}
     </li>
@@ -102,6 +107,27 @@ export default function Runs() {
     mutationFn: (id: string) => api.deleteSchedule(id),
     onSuccess: () => { toast.success("Schedule deleted"); qc.invalidateQueries({ queryKey: ["schedules"] }); },
   });
+  const togglePause = useMutation({
+    mutationFn: async (s: Schedule): Promise<unknown> => (s.enabled ? api.pauseSchedule(s.id) : api.resumeSchedule(s.id)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["schedules"] }),
+    onError: (e) => toast.error("Schedule change failed", { description: (e as Error).message }),
+  });
+  const [jobSel, setJobSel] = React.useState<string[]>([]);
+  const toggleJob = (id: string) => setJobSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  const abortSel = useMutation({
+    mutationFn: (ids: string[]) => api.abortMany({ ids, reason: "aborted by operator (selection)" }),
+    onSuccess: (r) => {
+      const v = Object.values(r.results) as { result: string }[];
+      toast.success(`${v.length} job(s): ${[...new Set(v.map((x) => x.result))].join(", ")}`);
+      setJobSel([]);
+      qc.invalidateQueries({ queryKey: ["runs"] });
+    },
+    onError: (e) => toast.error("Abort failed", { description: (e as Error).message }),
+  });
+  const clearQueue = useMutation({
+    mutationFn: () => api.clearQueue(),
+    onSuccess: (r) => { toast.success(`${r.cancelled.length} queued job(s) cancelled`); qc.invalidateQueries({ queryKey: ["runs"] }); },
+  });
 
   const history = (runs.data?.history ?? []).filter((r) =>
     (!q || `${r.run_id} ${r.scenario}`.toLowerCase().includes(q.toLowerCase()))
@@ -110,6 +136,9 @@ export default function Runs() {
   const queue = runs.data?.queue ?? [];
   const jobs = runs.data?.jobs ?? [];
   const running = jobs.filter((j) => j.status === "running");
+  const live = runs.data?.current;
+  const active = new Set([...running, ...queue].map((j) => j.id));
+  const sel = jobSel.filter((id) => active.has(id));
 
   return (
     <>
@@ -119,8 +148,10 @@ export default function Runs() {
           <Button variant="secondary" disabled={selected.length !== 2} onClick={() => nav(`/compare?a=${encodeURIComponent(selected[0])}&b=${encodeURIComponent(selected[1])}`)}>
             <GitCompareArrows />Compare{selected.length ? ` (${selected.length}/2)` : ""}
           </Button>
+          <StopAllButton />
           <Button variant="gradient" onClick={() => nav("/launch")}><Rocket />New run</Button>
         </>} />
+      <PipelineBanner status={runs.data ? { current: runs.data.current, lease: runs.data.lease, blocked_by: runs.data.blocked_by } : null} />
       <Tabs value={tab} onValueChange={(t) => setParams((p) => { p.set("tab", t); return p; }, { replace: true })}>
         <TabsList>
           <TabsTrigger value="history"><History className="size-3.5" />History <span className="text-subtle">{runs.data?.history.length ?? ""}</span></TabsTrigger>
@@ -135,7 +166,8 @@ export default function Runs() {
               <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search run id or scenario…" className="pl-9" />
             </div>
             <Select className="w-36" value={verdict} onChange={setVerdict} ariaLabel="Verdict filter" options={[
-              { value: "", label: "any verdict" }, { value: "PASS", label: "PASS" }, { value: "FAIL", label: "FAIL" }, { value: "none", label: "no verdict" },
+              { value: "", label: "any verdict" }, { value: "PASS", label: "PASS" }, { value: "FAIL", label: "FAIL" },
+              { value: "ABORTED", label: "ABORTED" }, { value: "none", label: "no verdict" },
             ]} />
             <Select className="w-44" value={topology} onChange={setTopology} ariaLabel="Topology filter"
               options={[{ value: "", label: "any topology" }, ...TOPOLOGIES.map((t) => ({ value: t, label: topologyLabel(t) }))]} />
@@ -152,11 +184,23 @@ export default function Runs() {
 
         <TabsContent value="queue" className="mt-4 space-y-4">
           <Card>
-            <div className="border-b border-border px-5 py-3 text-[13px] font-semibold">Running and queued</div>
+            <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-2.5">
+              <span className="text-[13px] font-semibold">Running and queued</span>
+              <span className="text-[12px] text-subtle">one run at a time per pipeline; the rest wait their turn</span>
+              <div className="ml-auto flex gap-2">
+                <Button size="sm" variant="outline" disabled={!sel.length || abortSel.isPending} onClick={() => abortSel.mutate(sel)} data-testid="abort-selected">
+                  <OctagonX />Abort / cancel selected{sel.length ? ` (${sel.length})` : ""}
+                </Button>
+                <Button size="sm" variant="ghost" disabled={!queue.length || clearQueue.isPending} onClick={() => clearQueue.mutate()} data-testid="clear-queue">
+                  <X />Cancel all queued
+                </Button>
+              </div>
+            </div>
             {running.length + queue.length === 0 ? <div className="px-5 py-6 text-[13px] text-subtle">Nothing running or queued.</div> : (
               <ul className="divide-y divide-border">
-                {running.map((j) => <JobRow key={j.id} j={j} onAbort={() => abort.mutate(j.id)} />)}
-                {queue.map((j) => <JobRow key={j.id} j={j} onAbort={() => abort.mutate(j.id)} />)}
+                {running.map((j) => <JobRow key={j.id} j={j} phase={live?.job_id === j.id ? live.phase : undefined}
+                  selected={sel.includes(j.id)} onSelect={() => toggleJob(j.id)} onAbort={() => abort.mutate(j.id)} />)}
+                {queue.map((j) => <JobRow key={j.id} j={j} selected={sel.includes(j.id)} onSelect={() => toggleJob(j.id)} onAbort={() => abort.mutate(j.id)} />)}
               </ul>
             )}
           </Card>
@@ -178,18 +222,24 @@ export default function Runs() {
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[720px] text-[13px]">
                   <thead className="border-b border-border bg-surface-2/40">
-                    <tr><th className={cn(th, "pl-5")}>Scenario</th><th className={th}>Next run</th><th className={th}>Repeat</th><th className={th}>Remaining</th><th className={th}>Overrides</th><th className={th}>Last job</th><th /></tr>
+                    <tr><th className={cn(th, "pl-5")}>Scenario</th><th className={th}>State</th><th className={th}>Next run</th><th className={th}>Repeat</th><th className={th}>Remaining</th><th className={th}>Overrides</th><th className={th}>Last job</th><th /></tr>
                   </thead>
                   <tbody>
                     {schedules.data.map((s: Schedule) => (
                       <tr key={s.id} className="border-b border-border last:border-0">
                         <td className="px-3 py-2.5 pl-5 font-mono">{s.scenario}</td>
+                        <td className="px-3 py-2.5">{s.enabled ? <Badge tone="pass">active</Badge> : <Badge tone="neutral">paused</Badge>}</td>
                         <td className="px-3 py-2.5 num">{fmtTime(s.next_at)}</td>
                         <td className="px-3 py-2.5">{s.every_minutes ? `every ${fmtDuration(s.every_minutes * 60)}` : "once"}</td>
                         <td className="px-3 py-2.5 num">{s.remaining ?? "∞"}</td>
                         <td className="max-w-[240px] truncate px-3 py-2.5 font-mono text-[11.5px] text-subtle">{typeof s.overrides === "string" ? s.overrides : JSON.stringify(s.overrides)}</td>
                         <td className="px-3 py-2.5 font-mono text-[11.5px] text-subtle">{s.last_job ?? "—"}</td>
-                        <td className="px-3 py-2.5 pr-5 text-right"><Button size="icon-sm" variant="ghost" aria-label="Delete schedule" onClick={() => del.mutate(s.id)}><Trash2 /></Button></td>
+                        <td className="px-3 py-2.5 pr-5 text-right whitespace-nowrap">
+                          <Button size="icon-sm" variant="ghost" aria-label={s.enabled ? "Pause schedule" : "Resume schedule"} onClick={() => togglePause.mutate(s)}>
+                            {s.enabled ? <Pause /> : <Play />}
+                          </Button>
+                          <Button size="icon-sm" variant="ghost" aria-label="Delete schedule" onClick={() => del.mutate(s.id)}><Trash2 /></Button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
