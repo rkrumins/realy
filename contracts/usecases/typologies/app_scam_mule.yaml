@@ -1,0 +1,16 @@
+id: 7
+name: app_scam_mule
+title: APP scam into a mule account
+description: >-
+  Victims are talked into sending money themselves, from their own device, to one mule account.
+pattern: app_scam_mule
+mix_weight: 0.12
+labels: {source: customer_report, delay_scale: 0.3}
+roles: [victim_transfer]
+challenge: {pass: 0.85, fail: 0.0, abandon: 0.15}
+auth: {three_ds_authenticated: 0.95, pin_verified: 0.85, cryptogram_valid: 0.999, scheme_score: {mean: 15, sd: 10}} # the victim pays: genuine signals
+signals: [payee_distinct_senders_24h, payee_inbound_sum_24h, cust_payee_novel, is_transfer, amount_usd]
+rules: [MULE_FAN_IN, APP_SCAM_NEW_PAYEE]
+params:
+  victims: {default: 8, help: "victims paying the same mule (at least 6)"}
+  window_h: {default: 4, help: "hours over which the victims pay"}

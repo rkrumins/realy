@@ -1,0 +1,17 @@
+id: 2
+name: account_takeover
+title: Account takeover
+description: >-
+  Credentials phished or stuffed, then used from the fraudster's device and network for resaleable
+  goods, often followed by a transfer to a mule.
+pattern: account_takeover
+mix_weight: 0.15
+labels: {source: customer_report, delay_scale: 1.0}
+roles: [takeover_purchase, transfer_out]
+challenge: {pass: 0.35, fail: 0.65, abandon: 0.0}
+auth: {three_ds_authenticated: 0.40, pin_verified: 0.0, cryptogram_valid: 0.0, scheme_score: {mean: 35, sd: 20}}   # phished credentials pass 3DS sometimes; looks like the customer
+signals: [cust_device_novel, cust_ip_country_novel, amount_to_avg_ratio, dist_from_home_km, local_hour, cust_payee_novel]
+rules: [ATO_NEW_DEVICE_HIGH_AMOUNT]
+params:
+  purchases: {default: [1, 4], help: "purchases at high-risk online merchants"}
+  transfer_prob: {default: 0.5, help: "probability the takeover ends with a transfer to a mule"}

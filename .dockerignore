@@ -1,0 +1,18 @@
+# Keep the build context small and hermetic: everything is rebuilt inside the images.
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+runs
+data
+**/node_modules
+ui/dist
+python/realy/control/static
+java/.gradle
+java/**/build
+java/build
+**/*.spool
+deploy/k8s
+docs/img/*.gif

@@ -1,0 +1,102 @@
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      e2e:
+        description: run the docker-compose end-to-end smoke
+        type: boolean
+        default: false
+
+jobs:
+  java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21", cache: gradle }
+      - name: build + test (incl. Flink MiniCluster on RocksDB)
+        working-directory: java
+        run: ./gradlew test installDist :flink-job:shadowJar
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13", cache: pip }
+      - run: pip install -e "python[control,train,dev]"
+      - name: generated files are in sync (stubs, ClickHouse DDL, K8s manifests, reference docs)
+        run: |
+          PYTHON=python scripts/gen-proto-python.sh
+          python -m realy.codegen && python -m realy.k8s && python -m realy.docsgen
+          git diff --exit-code -- python contracts deploy/k8s/base/generated deploy/k8s/components/*/generated docs/reference
+      - name: tests
+        working-directory: python
+        run: python -m pytest -q
+      - name: budget feasibility of all scenarios
+        run: for s in scenarios/*.yaml; do pulsebench budget "$(basename "$s" .yaml)" || true; done
+
+  ui:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: ui } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: ui/package-lock.json }
+      - run: npm ci
+      - run: npm run build          # tsc --noEmit + vite build
+      - run: npm test               # vitest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build every image from source with Docker alone
+        run: docker compose -f deploy/compose/docker-compose.yml build
+
+  k8s:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24" }
+      - run: |
+          go install sigs.k8s.io/kustomize/kustomize/v5@v5.7.1
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+      - run: make k8s-validate
+
+  e2e:
+    if: github.event_name == 'workflow_dispatch' && inputs.e2e
+    needs: [java, python, ui]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: build + start the whole stack (Docker only)
+        run: make up
+      - name: smoke (zero loss, budget) + exact verification on the Flink-inline topology, inside the console container
+        run: |
+          C="docker compose -f deploy/compose/docker-compose.yml exec -T console"
+          until curl -sf localhost:8090/api/health; do sleep 3; done
+          $C pulsebench run smoke --set traffic.duration_s=45
+          $C pulsebench run flink-inline-smoke --set traffic.duration_s=45
+          $C sh -c 'pulsebench verify "$(ls -td /runs/flink-inline-smoke-*/ | head -1)"'
+      - name: regression gate against the committed baselines
+        # Hosted runners are noisy and differ from the machine the baselines came from: latency gets a
+        # wide allowance here, while loss, verify, verdict and detection stay strict. Nightly gating on
+        # dedicated nodes uses the defaults (docs/production.md).
+        run: |
+          D="docker compose -f deploy/compose/docker-compose.yml"
+          $D cp baselines console:/tmp/baselines
+          for s in smoke flink-inline-smoke; do
+            $D exec -T console sh -c "pulsebench gate \$(ls -td /runs/$s-*/ | head -1) --baseline /tmp/baselines/$s.json \
+              --p99-regress 2.0 --min-delta-ms 100 --within-drop 0.05 --cpu-regress 3.0"
+          done
+      - if: always()
+        run: docker compose -f deploy/compose/docker-compose.yml cp console:/runs ./runs || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: runs, path: "runs/*/report.*" }

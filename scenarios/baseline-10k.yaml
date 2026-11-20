@@ -1,0 +1,15 @@
+name: baseline-10k
+description: The target - 10,000 TPS sustained for 10 min through the async gateway with realistic dependencies; run on the gke-l4 overlay (a 4-vCPU dev box cannot host it).
+seed: 42
+world: { customers: 2000000, merchants: 100000, payees: 200000 }
+traffic: { profile: { kind: constant, tps: 10000 }, duration_s: 600, warmup_s: 60, generators: 4, backfill_days: 1 }
+topology: gateway-kafka
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server: { service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }, workers: 512 }
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100 }
+guardrails: { max_consumer_lag: 5000000 }

@@ -1,0 +1,45 @@
+name: fraud-train
+description: >-
+  Training data for the proxy models - seed 7, its own world (no customer, card, device, merchant or
+  campaign is shared with fraud-eval). Same typology mix at other times, so the model learns
+  patterns, not the evaluation's actors. Train on it with `realy train --run <this run>` (observed
+  labels by default), then measure on fraud-eval.
+seed: 7
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 500 }
+  duration_s: 600
+  warmup_s: 30
+  backfill_days: 1
+topology: gateway-kafka
+flink_state: fresh
+# Multi-day typologies are compressed to fit the window (1 wall-s ~ 74 sim-s at 500 TPS on this world):
+# their signatures (velocity, utilisation, fan-in, novelty) are what the windows measure, not the calendar.
+fraud:
+  background_per_1k: 0.6
+  campaigns:
+    - { kind: card_testing,     at_s: 50,  count: 6 }
+    - { kind: card_testing,     at_s: 300, count: 1, params: { cards: 40, spread_min: 5 } }   # wave on one merchant
+    - { kind: account_takeover, at_s: 70,  count: 12 }
+    - { kind: account_takeover, at_s: 420, count: 12 }
+    - { kind: lost_stolen,      at_s: 80,  count: 10 }
+    - { kind: lost_stolen,      at_s: 400, count: 10 }
+    - { kind: counterfeit,      at_s: 100, count: 8 }
+    - { kind: counterfeit,      at_s: 450, count: 8 }
+    - { kind: merchant_breach,  at_s: 120, count: 2, params: { victims: 15, delay_days: [0.03, 0.1] } }
+    - { kind: atm_cashout,      at_s: 200, count: 1, params: { cards: 120, atms: 12, foreign_prob: 1.0 } }
+    - { kind: atm_cashout,      at_s: 480, count: 1, params: { cards: 80, atms: 8, foreign_prob: 0.0 } }
+    - { kind: app_scam_mule,    at_s: 140, count: 3, params: { victims: 8, window_h: 2 } }
+    - { kind: bust_out,         at_s: 90,  count: 6, params: { buildup_hours: 4, span_hours: 2 } }
+    - { kind: bot_ecom,         at_s: 260, count: 3, params: { cards: 12 } }
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  self_inclusion: true
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }

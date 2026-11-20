@@ -1,0 +1,17 @@
+# docker compose up -d --build      -> http://localhost:8090
+services:
+  console:
+    build: { context: ., target: service }
+    image: operator-console:dev
+    ports: ["8090:8090"]
+    environment:
+      APP_TOKEN: ${APP_TOKEN:-}                    # set to require a token (sign-in screen + Bearer)
+      APP_DEPENDENCIES: ${APP_DEPENDENCIES:-}      # name=url,... probed on the Environment page
+      # on `docker compose stop` the running job is aborted and given this long to save a partial
+      # result (stop_grace_period below must be longer)
+      APP_SHUTDOWN_GRACE_S: "20"
+    stop_grace_period: 30s
+    volumes: ["console-data:/data"]
+
+volumes:
+  console-data:

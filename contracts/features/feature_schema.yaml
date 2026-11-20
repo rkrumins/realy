@@ -1,0 +1,129 @@
+# Canonical feature schema (feature DSL).
+#
+# Single source of truth for:
+#   * the Flink feature job (per-entity keyed aggregators)      java/flink-job
+#   * the online-store layout (one binary blob per entity)       contracts/storage/redis.md
+#   * the model input tensor (order of `features` = tensor index) mock-model-server / Triton
+#   * ClickHouse decision columns (generated DDL)                 contracts/storage/clickhouse
+#   * the Python reference implementation used for verification   python/realy/features
+#
+# Semantics (identical in Java and Python):
+#   - Event time (`event.event_time_us`) drives all windows.
+#   - Windows are bucketed: bucket index k = floor(t / granularity). A window of W covers the
+#     n = W / granularity most recent buckets ending at the current event's bucket: (k-n, k].
+#   - count/sum/max/avg/distinct include the current event if it matches the filter
+#     ("update, then read").
+#   - novel/time_since_last/geo_speed_kmh compare with *previous* matching events, then update.
+#   - Features are computed for every event that has the entity, whether or not the filter
+#     matches (a non-matching event just reads the window).
+#   - Events without the entity (key == 0) get the feature `default` and are flagged missing.
+#   - Per-key processing order = Kafka partition order. Customer and card features are therefore
+#     fully deterministic (Kafka key = customer_id). Features of entities shared across customers
+#     (device, ip, merchant, terminal, payee) depend on cross-partition arrival order, exactly as in
+#     production; the verifier reports their agreement rate rather than requiring an exact match.
+schema_version: 2
+
+entities:
+  customer: { key: customer_id }
+  card:     { key: card_id }
+  device:   { key: device_id }
+  ip:       { key: ip_v4 }
+  merchant: { key: merchant_id }
+  terminal: { key: terminal_id }
+  payee:    { key: payee_id }
+
+# Named, deduplicated CEL predicates over `event`. Enum fields are exposed by name (string), all
+# integer fields as CEL `int`, so compare with plain integer literals (no `u` suffix).
+# Evaluated once per event; aggregators reference them by name.
+filters:
+  purchase:     "event.payment_type == 'CARD_PURCHASE'"
+  cnp_small:    "event.payment_type == 'CARD_PURCHASE' && !event.card_present && event.amount_usd_minor < 200"
+  contactless:  "event.entry_mode == 'CONTACTLESS'"
+  atm:          "event.payment_type == 'ATM_WITHDRAWAL'"
+  card_present: "event.card_present"
+  transfer:     "event.payment_type == 'TRANSFER'"
+  has_device:   "event.device_id != 0"
+  has_ip:       "event.ip_v4 != 0"
+  cvv_fail:     "event.payment_type == 'CARD_PURCHASE' && !event.card_present && !event.cvv_match"
+
+# Profile attributes: stored in the online store with the profile features, available to derived
+# functions, but not part of the model tensor.
+profile_attributes:
+  customer: [home_lat, home_lon, home_country_idx, tz_offset_min]
+  merchant: []
+
+# Country table shared by generator and derived functions (index = position).
+countries: [US, GB, DE, FR, ES, IT, NL, PL, SE, IE, CA, MX, BR, IN, JP, AU, SG, AE, NG, ZA, TR, RO, UA, CN]
+
+features:
+  # ---------------------------------------------------------------- customer (stream)
+  - { name: cust_count_1h,            source: stream, entity: customer, agg: count, window: 1h,  granularity: 1m }
+  - { name: cust_count_24h,           source: stream, entity: customer, agg: count, window: 24h, granularity: 30m }
+  - { name: cust_amount_sum_24h,      source: stream, entity: customer, agg: sum,   value: amount_usd_minor, window: 24h, granularity: 30m }
+  - { name: cust_amount_avg_30d,      source: stream, entity: customer, agg: avg,   value: amount_usd_minor, filter: purchase, window: 30d, granularity: 1d }
+  - { name: cust_distinct_countries_24h, source: stream, entity: customer, agg: distinct, value: merchant_country, filter: purchase, window: 24h, granularity: 30m }
+  - { name: cust_device_novel,        source: stream, entity: customer, agg: novel, value: device_id,  filter: has_device, window: 90d,  granularity: 1d }
+  - { name: cust_payee_novel,         source: stream, entity: customer, agg: novel, value: payee_id,   filter: transfer,   window: 180d, granularity: 1d }
+  - { name: cust_ip_country_novel,    source: stream, entity: customer, agg: novel, value: ip_country, filter: has_ip,     window: 90d,  granularity: 1d }
+  - { name: cust_transfer_count_1h,   source: stream, entity: customer, agg: count, filter: transfer, window: 1h,  granularity: 1m }
+  - { name: cust_transfer_sum_24h,    source: stream, entity: customer, agg: sum,   value: amount_usd_minor, filter: transfer, window: 24h, granularity: 30m }
+  # ---------------------------------------------------------------- card (stream)
+  - { name: card_count_1m,            source: stream, entity: card, agg: count, window: 1m,  granularity: 5s }
+  - { name: card_count_5m,            source: stream, entity: card, agg: count, window: 5m,  granularity: 10s }
+  - { name: card_count_1h,            source: stream, entity: card, agg: count, window: 1h,  granularity: 1m }
+  - { name: card_count_24h,           source: stream, entity: card, agg: count, window: 24h, granularity: 30m }
+  - { name: card_amount_sum_1h,       source: stream, entity: card, agg: sum, value: amount_usd_minor, window: 1h,  granularity: 1m }
+  - { name: card_amount_sum_24h,      source: stream, entity: card, agg: sum, value: amount_usd_minor, window: 24h, granularity: 30m }
+  - { name: card_amount_max_7d,       source: stream, entity: card, agg: max, value: amount_usd_minor, window: 7d,  granularity: 4h }
+  - { name: card_small_cnp_count_10m, source: stream, entity: card, agg: count, filter: cnp_small, window: 10m, granularity: 10s }
+  - { name: card_distinct_merchants_10m, source: stream, entity: card, agg: distinct, value: merchant_id, filter: purchase, window: 10m, granularity: 10s }
+  - { name: card_distinct_merchants_24h, source: stream, entity: card, agg: distinct, value: merchant_id, filter: purchase, window: 24h, granularity: 30m }
+  - { name: card_contactless_count_30m, source: stream, entity: card, agg: count, filter: contactless, window: 30m, granularity: 30s }
+  - { name: card_contactless_sum_30m, source: stream, entity: card, agg: sum, value: amount_usd_minor, filter: contactless, window: 30m, granularity: 30s }
+  - { name: card_atm_count_1h,        source: stream, entity: card, agg: count, filter: atm, window: 1h,  granularity: 1m }
+  - { name: card_atm_sum_24h,         source: stream, entity: card, agg: sum, value: amount_usd_minor, filter: atm, window: 24h, granularity: 30m }
+  - { name: card_geo_speed_kmh,       source: stream, entity: card, agg: geo_speed_kmh, filter: card_present, window: 24h, granularity: 1m, default: 0 }
+  - { name: card_secs_since_last,     source: stream, entity: card, agg: time_since_last, window: 7d, granularity: 4h, default: 604800 }
+  # ---------------------------------------------------------------- device / ip (stream)
+  - { name: dev_count_5m,             source: stream, entity: device, agg: count, window: 5m, granularity: 10s }
+  - { name: dev_distinct_cards_1h,    source: stream, entity: device, agg: distinct, value: card_id, window: 1h, granularity: 1m }
+  - { name: dev_distinct_customers_24h, source: stream, entity: device, agg: distinct, value: customer_id, window: 24h, granularity: 30m }
+  - { name: ip_count_5m,              source: stream, entity: ip, agg: count, window: 5m, granularity: 10s }
+  - { name: ip_distinct_cards_1h,     source: stream, entity: ip, agg: distinct, value: card_id, window: 1h, granularity: 1m }
+  # ---------------------------------------------------------------- merchant / terminal / payee (stream)
+  - { name: merch_count_1m,           source: stream, entity: merchant, agg: count, window: 1m, granularity: 5s }
+  - { name: merch_small_cnp_count_5m, source: stream, entity: merchant, agg: count, filter: cnp_small, window: 5m, granularity: 10s }
+  - { name: merch_amount_sum_1h,      source: stream, entity: merchant, agg: sum, value: amount_usd_minor, window: 1h, granularity: 1m }
+  - { name: term_count_5m,            source: stream, entity: terminal, agg: count, window: 5m, granularity: 10s }
+  - { name: term_atm_sum_1h,          source: stream, entity: terminal, agg: sum, value: amount_usd_minor, filter: atm, window: 1h, granularity: 1m }
+  - { name: payee_inbound_count_1h,   source: stream, entity: payee, agg: count, filter: transfer, window: 1h, granularity: 1m }
+  - { name: payee_inbound_sum_24h,    source: stream, entity: payee, agg: sum, value: amount_usd_minor, filter: transfer, window: 24h, granularity: 30m }
+  - { name: payee_distinct_senders_24h, source: stream, entity: payee, agg: distinct, value: customer_id, filter: transfer, window: 24h, granularity: 30m }
+  # ---------------------------------------------------------------- profile (online store, seeded from world)
+  - { name: cust_tenure_days,         source: profile, entity: customer, field: tenure_days, default: 0 }
+  - { name: cust_segment,             source: profile, entity: customer, field: segment, default: 1 }
+  - { name: cust_avg_ticket_usd,      source: profile, entity: customer, field: avg_ticket_usd, default: 40 }
+  - { name: merch_risk_tier,          source: profile, entity: merchant, field: risk_tier, default: 1 }
+  - { name: merch_fraud_rate_30d,     source: profile, entity: merchant, field: fraud_rate_30d, default: 0.001 }
+  # ---------------------------------------------------------------- derived (scoring time, fixed function library)
+  - { name: amount_usd,               source: derived, fn: amount_usd }
+  - { name: is_cnp,                   source: derived, fn: is_cnp }
+  - { name: is_contactless,           source: derived, fn: is_contactless }
+  - { name: is_atm,                   source: derived, fn: is_atm }
+  - { name: is_transfer,              source: derived, fn: is_transfer }
+  - { name: is_foreign,               source: derived, fn: is_foreign }
+  - { name: dist_from_home_km,        source: derived, fn: dist_from_home_km }
+  - { name: amount_to_avg_ratio,      source: derived, fn: amount_to_avg_ratio }
+  - { name: local_hour,               source: derived, fn: local_hour }
+  - { name: credit_utilisation_24h,   source: derived, fn: credit_utilisation_24h }
+  # ---------------------------------------------------------------- schema v2: authorisation signals
+  # Appended (never inserted): a v1 vector (54 values) is an exact prefix of a v2 one, so feature logs,
+  # ClickHouse f_* columns and models of earlier runs keep their meaning. Models bind inputs by name.
+  - { name: cvv_mismatch,             source: derived, expr: "event.payment_type == 'CARD_PURCHASE' && !event.card_present && !event.cvv_match ? 1.0 : 0.0" }
+  - { name: avs_mismatch,             source: derived, expr: "event.payment_type == 'CARD_PURCHASE' && !event.card_present && !event.avs_match ? 1.0 : 0.0" }
+  - { name: three_ds_authenticated,   source: derived, expr: "event.three_ds == 'THREE_DS_AUTHENTICATED' ? 1.0 : 0.0" }
+  - { name: pin_verified,             source: derived, expr: "event.pin_verified ? 1.0 : 0.0" }
+  - { name: cryptogram_missing,       source: derived, expr: "event.card_present && event.payment_type != 'TRANSFER' && !event.cryptogram_valid ? 1.0 : 0.0" }
+  - { name: scheme_score,             source: derived, expr: "double(event.scheme_score)" }
+  - { name: card_cvv_fail_count_1h,   source: stream, entity: card, agg: count, filter: cvv_fail, window: 1h, granularity: 1m }
+  - { name: merch_cvv_fail_count_5m,  source: stream, entity: merchant, agg: count, filter: cvv_fail, window: 5m, granularity: 10s }

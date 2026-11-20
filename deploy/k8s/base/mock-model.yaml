@@ -1,0 +1,40 @@
+# KServe-v2-compatible mock model server with a capacity model (workers / dynamic batching / queue
+# limit). Same protocol as Triton, so the gateway and Flink switch between them by MODEL_TARGET only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-model
+  labels: { app: mock-model }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: mock-model } }
+  template:
+    metadata:
+      labels: { app: mock-model }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8002", prometheus.io/path: /metrics }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: mock-model
+          image: realy/mock-model-server:dev
+          ports:
+            - { name: grpc, containerPort: 8001 }
+            - { name: admin, containerPort: 8002 }
+          env:
+            - { name: KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+            - { name: MODEL_WEIGHTS, value: /models/proxy/fraud_mlp.weights.json }
+            - { name: MODEL_SERVER_CONFIG, value: '{"service_time":{"uniform":{"min_ms":30,"max_ms":100}},"workers":0}' }
+            - { name: HOSTNAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+          resources:
+            requests: { cpu: "2", memory: 2Gi }
+            limits: { cpu: "2", memory: 2Gi }
+          readinessProbe: { tcpSocket: { port: 8001 }, periodSeconds: 3 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mock-model }
+spec:
+  selector: { app: mock-model }
+  ports:
+    - { name: grpc, port: 8001, targetPort: 8001, appProtocol: kubernetes.io/h2c }
+    - { name: admin, port: 8002, targetPort: 8002 }

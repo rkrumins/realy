@@ -1,0 +1,22 @@
+# Shared application pieces for every target. Kafka + Flink come from a component chosen by the overlay:
+#   components/standalone  - plain StatefulSet/Deployments, no operators (overlays/local)
+#   components/operators   - Strimzi Kafka + Flink Kubernetes Operator (overlays/dev, overlays/gke-l4)
+# Either way Kafka is reachable as `realy-kafka-bootstrap:9092`, so nothing here differs between them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: realy
+resources:
+  - namespace.yaml
+  - redis.yaml
+  - generated/contract-protos.yaml
+  - generated/clickhouse-ddl.yaml
+  - generated/clickhouse-config.yaml
+  - clickhouse.yaml
+  - mock-model.yaml
+  - gateway.yaml
+  - console.yaml
+patches:
+  - path: generated/clickhouse-protos-volume.patch.yaml
+labels:
+  - pairs: { app.kubernetes.io/part-of: realy }
+    includeSelectors: false

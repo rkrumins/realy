@@ -1,0 +1,66 @@
+# Stateless scoring gateway (sync gRPC/HTTP + async Kafka ingress). Guaranteed QoS (requests == limits)
+# so CPU throttling never shows up as tail latency; ZGC for sub-ms pauses; spread across nodes/zones.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  labels: { app: gateway }
+spec:
+  replicas: 6
+  selector: { matchLabels: { app: gateway } }
+  template:
+    metadata:
+      labels: { app: gateway }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8080", prometheus.io/path: /metrics }
+    spec:
+      enableServiceLinks: false
+      topologySpreadConstraints:
+        - { maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway,
+            labelSelector: { matchLabels: { app: gateway } } }
+      containers:
+        - name: gateway
+          image: realy/scoring-gateway:dev
+          ports: [{ name: grpc, containerPort: 8080 }]
+          env:
+            - { name: KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+            - { name: REDIS_URI, value: redis://redis:6379 }
+            - { name: MODEL_TARGET, value: mock-model:8001 }   # gke-l4 overlay -> Triton (KServe)
+            - { name: MODEL_NAME, value: fraud_mlp }
+            - { name: INGRESS_KAFKA, value: "false" }           # toggled per run via bench.control
+            - { name: KAFKA_CONSUMERS, value: "4" }
+            - { name: MAX_INFLIGHT, value: "8192" }
+            - { name: MIRROR_TO_KAFKA, value: "true" }
+            - { name: JAVA_OPTS, value: "-XX:+UseZGC -XX:+ZGenerational -XX:MaxRAMPercentage=70 -XX:+AlwaysPreTouch" }
+            - { name: HOSTNAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+          resources:
+            requests: { cpu: "4", memory: 6Gi }
+            limits: { cpu: "4", memory: 6Gi }
+          readinessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 3 }
+          livenessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 10, failureThreshold: 6 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gateway }
+spec:
+  selector: { app: gateway }
+  ports: [{ name: grpc, port: 8080, targetPort: 8080, appProtocol: kubernetes.io/h2c }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: gateway }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: gateway }
+  minReplicas: 6
+  maxReplicas: 24
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 55 } }  # headroom keeps p99 flat
+  behavior:
+    scaleDown: { stabilizationWindowSeconds: 600 }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: gateway }
+spec:
+  minAvailable: 80%
+  selector: { matchLabels: { app: gateway } }

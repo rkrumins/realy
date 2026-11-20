@@ -1,0 +1,77 @@
+# Baseline fraud policy v3 (no step-up), kept for comparisons; scenarios use `rules: baseline` (baseline-v5).
+# Baseline fraud policy. Rules are CEL expressions evaluated by the Java scoring core (dev.cel:cel)
+# and re-evaluated by the Python verifier (common-expression-language) with identical bindings:
+#   f      map<string, double>  every feature in contracts/features/feature_schema.yaml
+#   event  map<string, dyn>     TransactionEvent fields; enums by name, integers as int
+# Feature values are doubles: compare with double literals (3.0, not 3).
+#
+# Precedence: DECLINE rule > ALLOW rule > score >= decline > REVIEW rule > score >= review > APPROVE
+# On the rules-only fallback path (model/feature deadline), score is ignored and the decision is
+# flagged degraded.
+version: baseline-v3
+thresholds:
+  review: 0.55
+  decline: 0.90
+rules:
+  - id: CARD_TESTING
+    when: "f.card_small_cnp_count_10m >= 3.0"
+    action: DECLINE
+    reason: ">=3 small card-not-present authorisations on the card in 10 minutes"
+  - id: CARD_TESTING_MERCHANT
+    when: "f.merch_small_cnp_count_5m >= 25.0 && event.amount_usd_minor < 200"
+    action: REVIEW
+    reason: "merchant is receiving a burst of small CNP authorisations"
+  - id: VELOCITY_CARD_5M
+    when: "f.card_count_5m > 6.0"
+    action: REVIEW
+    reason: "more than 6 transactions on the card in 5 minutes"
+  - id: VELOCITY_CARD_10M_DISTINCT
+    when: "f.card_distinct_merchants_10m >= 5.0"
+    action: REVIEW
+    reason: "card used at 5+ distinct merchants in 10 minutes"
+  - id: IMPOSSIBLE_TRAVEL
+    when: "event.card_present && f.card_geo_speed_kmh > 900.0"
+    action: DECLINE
+    reason: "card-present transactions implying travel faster than 900 km/h"
+  - id: MAGSTRIPE_FOREIGN
+    when: "event.entry_mode == 'MAGSTRIPE' && f.is_foreign > 0.5"
+    action: REVIEW
+    reason: "magstripe fallback abroad (counterfeit indicator)"
+  - id: CONTACTLESS_SPLIT
+    when: "f.card_contactless_count_30m >= 4.0 && f.card_contactless_sum_30m > 20000.0"
+    action: REVIEW
+    reason: "repeated contactless payments just under the CVM limit"
+  - id: ATO_NEW_DEVICE_HIGH_AMOUNT
+    when: "f.cust_device_novel > 0.5 && f.amount_usd > 300.0 && f.is_cnp > 0.5"
+    action: REVIEW
+    reason: "high-value remote purchase from a device never seen for this customer"
+  # v3: ATO_NEW_DEVICE_NEW_COUNTRY removed (it was DECLINE in v1, REVIEW in v2). Replayed with
+  # `pulsebench rules-whatif`, tuned on fraud-train (seed 7) and confirmed on fraud-eval (seed 1337):
+  # precision 0.036 over 9,618 fires on the evaluation world, 3.15% of all legitimate customers sent to
+  # review. Removing it: review rate (FPR) 4.13% -> 1.79%, flagged recall 0.919 -> 0.915, fraud $ approved
+  # +$3.7k of $2.86M. New device + new IP country stays a model input (the model weighs it with the
+  # amount, the merchant and the hour); ATO_NEW_DEVICE_HIGH_AMOUNT keeps the remote high-value case.
+  - id: ATM_VELOCITY
+    when: "f.card_atm_count_1h >= 3.0"
+    action: DECLINE
+    reason: "3+ ATM withdrawals on the card within an hour"
+  - id: ATM_TERMINAL_CASHOUT
+    when: "f.is_atm > 0.5 && f.term_atm_sum_1h > 500000.0"
+    action: REVIEW
+    reason: "terminal dispensed > $5,000 within an hour"
+  - id: APP_SCAM_NEW_PAYEE
+    when: "f.is_transfer > 0.5 && f.cust_payee_novel > 0.5 && f.amount_usd > 1000.0"
+    action: REVIEW
+    reason: "large transfer to a payee never paid before"
+  - id: MULE_FAN_IN
+    when: "f.is_transfer > 0.5 && f.payee_distinct_senders_24h >= 6.0"
+    action: DECLINE
+    reason: "payee received transfers from 6+ distinct senders in 24h (mule pattern)"
+  - id: BOT_DEVICE_MANY_CARDS
+    when: "f.dev_distinct_cards_1h >= 4.0"
+    action: DECLINE
+    reason: "device used with 4+ distinct cards in an hour"
+  - id: BUST_OUT_UTILISATION
+    when: "f.credit_utilisation_24h > 0.8 && f.amount_to_avg_ratio > 8.0"
+    action: REVIEW
+    reason: "credit line nearly exhausted in 24h with outsized ticket"

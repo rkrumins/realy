@@ -1,0 +1,17 @@
+# Self-contained local cluster (kind / k3d / minikube / Docker Desktop) with Kafka and Flink in the same
+# cluster: 3-broker KRaft Kafka (RF 3, min ISR 2), Flink session cluster driven by the console, no
+# operators or CRDs, images imported from the local Docker daemon.
+#   make k8s-local            build, cluster, import images, apply, wait      (deploy/k8s/local-up.sh)
+#   make k8s-test             in-cluster acceptance test incl. broker failover  (deploy/k8s/test.sh)
+# Requests ~3.5 CPU / 11 GiB: give the node (Docker Desktop / kind VM) 6 CPU and 12+ GiB;
+# overlays/local-1broker (REALY_KAFKA_BROKERS=1) requests ~9 GiB.
+# Console: NodePort 30090 (local-up.sh maps it to http://localhost:8090), Flink UI: NodePort 30081.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: realy
+resources:
+  - ../../base
+components:
+  - ../../components/standalone
+  - ../../components/kafka-3-brokers
+  - ../../components/local-sizing

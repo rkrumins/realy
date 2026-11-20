@@ -1,0 +1,16 @@
+id: 9
+name: bot_ecom
+title: Bot e-commerce attack
+description: >-
+  Scripted checkouts cycle many stolen cards through one merchant from one device.
+pattern: bot_ecom
+mix_weight: 0.12
+labels: {source: chargeback, delay_scale: 1.0}
+roles: [bot_checkout]
+challenge: {pass: 0.02, fail: 0.98, abandon: 0.0}
+auth: {three_ds_authenticated: 0.02, pin_verified: 0.0, cryptogram_valid: 0.0, scheme_score: {mean: 68, sd: 16}}    # scripted checkout with stolen cards
+signals: [dev_distinct_cards_1h, ip_distinct_cards_1h, merch_count_1m]
+rules: [BOT_DEVICE_MANY_CARDS]
+params:
+  cards: {default: 10, help: "stolen cards (at least 4)"}
+  duration_min: {default: [5, 30], help: "minutes the attack lasts"}

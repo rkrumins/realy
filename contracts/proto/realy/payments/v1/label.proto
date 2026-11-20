@@ -1,0 +1,42 @@
+// Ground-truth labels. Never embedded in TransactionEvent (no leakage); published on
+// `payments.labels` with a simulated chargeback / report delay.
+syntax = "proto3";
+
+package realy.payments.v1;
+
+option java_package = "io.realy.contracts.payments.v1";
+option java_multiple_files = true;
+
+enum FraudType {
+  FRAUD_TYPE_NONE = 0;
+  CARD_TESTING = 1;
+  ACCOUNT_TAKEOVER = 2;
+  LOST_STOLEN = 3;
+  COUNTERFEIT = 4;
+  MERCHANT_BREACH = 5;
+  ATM_CASHOUT = 6;
+  APP_SCAM_MULE = 7;
+  BUST_OUT = 8;
+  BOT_ECOM = 9;
+  FRIENDLY_FRAUD = 10;  // label noise: legitimate transaction charged back
+}
+
+enum LabelSource {
+  LABEL_SOURCE_UNSPECIFIED = 0;
+  CHARGEBACK = 1;
+  CUSTOMER_REPORT = 2;
+  INVESTIGATION = 3;
+}
+
+message FraudLabel {
+  fixed64 event_id = 1;
+  sfixed64 label_time_us = 2;   // simulation time at which the label becomes known
+  sfixed64 event_time_us = 3;
+  bool is_fraud = 4;
+  FraudType fraud_type = 5;
+  uint64 campaign_id = 6;
+  LabelSource source = 7;
+  uint64 customer_id = 8;
+  uint64 card_id = 9;
+  int64 amount_usd_minor = 10;
+}

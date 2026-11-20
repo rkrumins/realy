@@ -1,0 +1,6 @@
+# Optional Ingress for the console. Add to an overlay's `components:` and patch the host / class / TLS.
+# Put real authentication in front of it (OAuth2 proxy / IAP / SSO) or set the console token Secret.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ingress.yaml

@@ -1,0 +1,40 @@
+# Turns components/standalone's Kafka into a 3-broker KRaft quorum (each pod broker + controller):
+# replication factor 3 and min.insync.replicas 2, so acks=all writes need two replicas and the pipeline
+# keeps running - with zero lost decisions - while any one broker is down (make k8s-test checks this).
+# Apply after components/standalone:   components: [../../components/standalone, ../../components/kafka-3-brokers]
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - pdb.yaml
+patches:
+  - target: { kind: StatefulSet, name: realy-kafka }
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata: { name: realy-kafka }
+      spec:
+        replicas: 3
+        template:
+          spec:
+            containers:
+              - name: kafka
+                env:
+                  - { name: REALY_KAFKA_REPLICAS, value: "3" }
+                  - { name: KAFKA_DEFAULT_REPLICATION_FACTOR, value: "3" }
+                  - { name: KAFKA_MIN_INSYNC_REPLICAS, value: "2" }
+                  - { name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "3" }
+                  - { name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "3" }
+                  - { name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "2" }
+  - target: { kind: Job, name: kafka-topics }
+    patch: |-
+      apiVersion: batch/v1
+      kind: Job
+      metadata: { name: kafka-topics }
+      spec:
+        template:
+          spec:
+            containers:
+              - name: create
+                env:
+                  - { name: REPLICATION_FACTOR, value: "3" }
+                  - { name: MIN_ISR, value: "2" }

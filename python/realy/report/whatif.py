@@ -1,0 +1,156 @@
+"""`realy rules-whatif`: replay alternative rule sets / thresholds over a finished run, offline.
+
+Every decision record carries the feature vector exactly as served and the model score, so a change to
+the policy can be measured on the same traffic without re-running the pipeline: CEL rules are
+re-evaluated (the same Python CEL used by `realy verify`, parity-checked against the Java engine) and the
+outcome recomputed with the policy precedence. Ground truth comes from the run's event log.
+
+Use it to tune on a TRAINING run and confirm on the evaluation run; tuning on the run you report is
+fitting the test set.
+"""
+from __future__ import annotations
+
+import math
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pyarrow as pa
+
+from ..features import load_schema
+from ..features.derived import event_view
+from .. import challenge as stepup
+from ..policy import NAMES as OUT
+from ..policy import RuleSet as Rules
+from ..verify.verify import _read
+
+
+def load(run_dir: Path, sample_mod: int = 1) -> dict[str, Any]:
+    run_dir = Path(run_dir)
+    events, feats, dec = _read(run_dir, "events-*.parquet"), _read(run_dir, "features-*.parquet"), _read(run_dir, "decisions-*.parquet")
+    if events is None or feats is None or dec is None:
+        raise ValueError(f"{run_dir}: needs events, features and decisions parquet")
+    dec = dec.filter(pa.compute.equal(dec["revision"], 0))
+    d_id = dec["event_id"].to_numpy()
+    _, first = np.unique(d_id, return_index=True)
+    dec = dec.take(pa.array(first))
+    d_id = dec["event_id"].to_numpy()
+    f_id = feats["event_id"].to_numpy()
+    e_id = events["event_id"].to_numpy()
+    ids = np.intersect1d(np.intersect1d(d_id, f_id), e_id)
+    if sample_mod > 1:
+        ids = ids[(ids % np.uint64(sample_mod)) == 0]
+    pick = lambda arr: np.searchsorted(arr, ids, sorter=np.argsort(arr))  # noqa: E731
+    di = np.argsort(d_id)[pick(d_id)]
+    fi = np.argsort(f_id)[pick(f_id)]
+    ei = np.argsort(e_id)[pick(e_id)]
+    cols = [c for c in events.column_names if c not in ("t_intended_us", "backfill")]
+    ev_cols = {c: events[c].to_numpy(zero_copy_only=False)[ei].tolist() for c in cols}
+    vals = load_schema().pad(np.asarray(feats["values"].to_pylist(), np.float32)).tolist()   # older runs: narrower
+    return {
+        "ids": ids, "events": [{c: ev_cols[c][i] for c in cols} for i in range(ids.size)],
+        "features": [vals[j] for j in fi.tolist()],
+        "score": dec["score"].to_numpy()[di].astype(np.float64), "path": dec["path"].to_numpy()[di],
+        "outcome": dec["outcome"].to_numpy()[di], "is_fraud": events["is_fraud"].to_numpy()[ei].astype(bool),
+        "amount": events["amount_usd_minor"].to_numpy()[ei], "fraud_type": events["fraud_type"].to_numpy()[ei],
+        # the latent step-up result of every event (instrument-only): a variant that challenges payments
+        # the run approved still knows how each would have ended
+        "challenge": stepup.for_run(run_dir, ids, events["is_fraud"].to_numpy()[ei].astype(bool),
+                                    events["fraud_type"].to_numpy()[ei]),
+        # which payments a REVIEW actually holds (contracts/insights.yaml review_holds): card auths are not
+        "review_holds": stepup.review_holds(events["payment_type"].to_numpy()[ei]),
+    }
+
+
+def rescore(data: dict[str, Any], weights: str | Path) -> dict[str, Any]:
+    """The same served feature vectors scored by another model (offline, the verifier's exact
+    implementation of the proxy MLP). Every event counts as model-scored: this measures model + policy
+    on identical traffic without the run's deadline fallbacks."""
+    from ..verify.verify import ProxyScorer
+    sc = ProxyScorer(weights)
+    X = np.asarray(data["features"], np.float32)
+    out = dict(data)
+    out["score"] = sc.score(X).astype(np.float64)
+    out["path"] = np.zeros(X.shape[0], np.int8)
+    out["model_version"] = sc.version
+    return out
+
+
+def evaluate(data: dict[str, Any], rules_yaml: str, review: float | None = None, decline: float | None = None,
+             challenge: float | None = None) -> dict[str, Any]:
+    schema = load_schema()
+    rules = Rules(rules_yaml).with_thresholds(review, decline, challenge)
+    n = data["ids"].size
+    outcome = np.zeros(n, np.int8)
+    per_rule: dict[str, list[int]] = {}
+    names = [f.name for f in schema.features]
+    for i in range(n):
+        fmap = dict(zip(names, (float(x) for x in data["features"][i])))
+        view = event_view(data["events"][i])
+        hits = rules.evaluate(fmap, view)
+        score = float(data["score"][i]) if int(data["path"][i]) == 0 else math.nan
+        outcome[i] = rules.decide(hits, score, rules.challengeable(view) if rules.uses_challenge else True)
+        for rid, _ in hits:
+            per_rule.setdefault(rid, []).append(i)
+    y = data["is_fraud"]
+    flagged, declined = outcome >= 2, outcome == 3
+    legit = ~y
+    amt = data["amount"]
+    fin = stepup.final(outcome, data["challenge"], data.get("review_holds")) if "challenge" in data else outcome
+    let_through = (fin == stepup.APPROVED)          # approved outright or after passing a step-up
+    paid = np.isin(fin, stepup.PAID)                # ... or reviewed after the money moved (card auths)
+    stopped = np.isin(fin, stepup.STOPPED)
+    challenged = outcome == stepup.CHALLENGED
+    res = {"rules": rules.version, "model": data.get("model_version", "as served"), "review": rules.review, "decline": rules.decline,
+           "challenge": rules.challenge, "events": int(n),
+           "fraud_events": int(y.sum()),
+           "recall_stopped": float(stopped[y].mean()) if y.any() else None,
+           "legit_challenge_rate": float(challenged[legit].mean()) if legit.any() else None,
+           "legit_abandoned": int((fin[legit] == stepup.ABANDONED).sum()),
+           "lost_sales_usd": float(amt[legit & (fin == stepup.ABANDONED)].sum() / 100),
+           "fraud_passed_challenge": int((y & challenged & (fin == stepup.APPROVED)).sum()),
+           "recall_flagged": float(flagged[y].mean()) if y.any() else None,
+           "recall_declined": float(declined[y].mean()) if y.any() else None,
+           "precision_flagged": float(y[flagged].mean()) if flagged.any() else None,
+           "precision_declined": float(y[declined].mean()) if declined.any() else None,
+           "false_positive_rate": float(flagged[legit].mean()) if legit.any() else None,
+           "legit_declined_rate": float(declined[legit].mean()) if legit.any() else None,
+           # fraud that got paid: approved outright or after passing a step-up (a REVIEW counts as caught)
+           "fraud_usd_approved": float(amt[y & let_through].sum() / 100), "fraud_usd_total": float(amt[y].sum() / 100),
+           # ... plus fraud reviewed only after it was paid (a review cannot hold a card authorisation)
+           "fraud_usd_paid": float(amt[y & paid].sum() / 100),
+           "reviews": int((outcome == 2).sum()), "legit_reviewed": int(((outcome == 2) & legit).sum()),
+           "by_rule": {}, "by_type": {}}
+    ft = data["fraud_type"]
+    for t in sorted(set(int(x) for x in ft[y])):
+        m = y & (ft == t)
+        res["by_type"][int(t)] = {"events": int(m.sum()), "recall_flagged": float(flagged[m].mean()),
+                                  "recall_declined": float(declined[m].mean()), "recall_stopped": float(stopped[m].mean()),
+                                  "usd_approved": float(amt[m & let_through].sum() / 100),
+                                  "usd_paid": float(amt[m & paid].sum() / 100)}
+    for rid, idx in sorted(per_rule.items()):
+        ix = np.asarray(idx)
+        res["by_rule"][rid] = {"fires": int(ix.size), "fraud": int(y[ix].sum()), "precision": float(y[ix].mean()),
+                               "legit_hit_rate": float((~y[ix]).sum() / max(1, legit.sum()))}
+    return res
+
+
+def render(rows: list[tuple[str, dict[str, Any]]]) -> str:
+    keys = ("recall_flagged", "recall_stopped", "precision_flagged", "false_positive_rate",
+            "legit_declined_rate", "legit_challenge_rate", "fraud_usd_paid", "lost_sales_usd")
+    out = [f"{'variant':34s} " + " ".join(f"{k[:16]:>16s}" for k in keys)]
+    for name, r in rows:
+        out.append(f"{name[:34]:34s} " + " ".join(
+            f"{r[k]:16.4f}" if isinstance(r.get(k), float) and "usd" not in k
+            else f"{r.get(k) or 0:16,.0f}"
+            for k in keys))
+    changed = sorted({k for _, r in rows for k in r["by_rule"]})
+    out.append("")
+    out.append(f"{'rule':34s} " + " ".join(f"{n[:22]:>22s}" for n, _ in rows) + "   (fires / precision)")
+    for k in changed:
+        cells = []
+        for _, r in rows:
+            v = r["by_rule"].get(k)
+            cells.append(f"{v['fires']:>8d} / {v['precision']:.3f}".rjust(22) if v else "-".rjust(22))
+        out.append(f"{k[:34]:34s} " + " ".join(cells))
+    return "\n".join(out)

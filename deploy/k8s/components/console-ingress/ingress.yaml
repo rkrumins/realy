@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: console
+  annotations:
+    # live telemetry is a long-lived WebSocket; ingress-nginx defaults would cut it after 60 s
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  # ingressClassName: nginx
+  rules:
+    - host: realy.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: console, port: { number: 8090 } } }
+  # tls:
+  #   - hosts: [realy.example.com]
+  #     secretName: realy-console-tls

@@ -1,0 +1,6 @@
+# build output of ../frontend (npm run build) and local job data
+server/static/
+data/
+__pycache__/
+*.egg-info/
+.pytest_cache/

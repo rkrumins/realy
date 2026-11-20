@@ -1,0 +1,24 @@
+name: app-scam-mules
+description: Authorised push-payment scams funnelled into mule accounts (fan-in of 6+ senders per payee).
+seed: 16
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 500 }
+  duration_s: 120
+  warmup_s: 15
+  backfill_days: 1
+topology: gateway-kafka
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100 }
+fraud:
+  background_per_1k: 0.2
+  campaigns:
+    - { kind: app_scam_mule, at_s: 20, count: 15, params: { victims: 10 } }

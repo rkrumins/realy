@@ -1,0 +1,8 @@
+# Voluntary disruptions (drains, upgrades) take down at most one broker: the quorum (2 of 3) and
+# min.insync.replicas=2 both survive that.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: realy-kafka }
+spec:
+  maxUnavailable: 1
+  selector: { matchLabels: { app: kafka } }

@@ -1,0 +1,21 @@
+name: smoke
+description: 500 TPS for 60 s through the async gateway; zero loss and every check must pass.
+seed: 42
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 500 }
+  duration_s: 60
+  warmup_s: 10
+topology: gateway-kafka
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  self_inclusion: true
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+  max_batch: 1
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }

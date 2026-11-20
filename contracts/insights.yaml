@@ -1,0 +1,37 @@
+# What the report's insights judge against, and the costs behind its business view.
+# Read by python/realy/report/insights.py; a copy is stored in every report (report.insights_config),
+# so a later edit never changes how an old run was judged. Override the file with REALY_INSIGHTS.
+version: 1
+
+# Fraud share of a real portfolio, for the base-rate projection: precision measured on an enriched
+# synthetic world (about 2% fraud) does not transfer; recall and false-positive rates do.
+production_base_rate: 0.001
+
+# Business assumptions (edit to your institution's numbers; the console recomputes live).
+costs:
+  review_cost_usd: 4.0             # analyst cost per payment sent to review
+  reviews_per_analyst_hour: 30
+  decline_friction_usd: 2.5        # margin and goodwill lost per good payment declined
+
+# What a REVIEW does to the payment (payment types, by name). A transfer can be held until an analyst
+# has called the customer; a card authorisation cannot wait (the terminal needs an answer within a
+# second or two): it is approved and the case is worked afterwards, so a reviewed card payment that
+# was fraud is paid out. Fraud "stopped" and "$ paid" in reports and what-ifs follow this.
+review_holds: [TRANSFER]
+
+# Training labels: share of a run's fraud that a training set cut this many days after the window sees.
+label_maturity_days: 30
+
+thresholds:
+  rule_precision_floor: 0.10       # rules below this precision (with at least rule_min_fires) are flagged
+  rule_min_fires: 50
+  false_positive_rate_warn: 0.02   # share of good customers sent to review or declined
+  typology_decline_floor: 0.50     # typologies declined below this share are flagged
+  typology_min_events: 20
+  fallback_share_warn: 0.01        # rules-only decisions (the model missed its deadline)
+  tail_stage_share: 0.40           # a stage holding this share of the slowest 1% is the dominant tail
+  startup_warn_s: 180              # preparation (history, catch-up, prime) longer than this
+  label_coverage_warn: 0.85        # share of fraud labelled by the maturity cut
+  regression_pct: 10               # vs the previous run of the same scenario
+  stepup_pass_warn: 0.25           # a typology passing step-ups this often is not stopped by them
+  stepup_abandon_warn: 0.001       # good customers abandoning at a step-up, as a share of all good customers

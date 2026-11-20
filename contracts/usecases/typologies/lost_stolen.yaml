@@ -1,0 +1,16 @@
+id: 3
+name: lost_stolen
+title: Lost / stolen card
+description: >-
+  A physical card is spent quickly near where it was taken, contactless and just under the no-PIN
+  (CVM) limit.
+pattern: lost_stolen
+mix_weight: 0.12
+labels: {source: customer_report, delay_scale: 0.3}
+roles: [spree_payment]
+challenge: {pass: 0.03, fail: 0.97, abandon: 0.0}
+auth: {three_ds_authenticated: 0.05, pin_verified: 0.02, cryptogram_valid: 0.99, scheme_score: {mean: 45, sd: 20}}  # the real card: valid chip, no PIN
+signals: [card_contactless_count_30m, card_contactless_sum_30m, card_count_5m]
+rules: [CONTACTLESS_SPLIT, VELOCITY_CARD_5M]
+params:
+  extra_txns: {default: [0, 2], help: "payments beyond what reaches $210 at 92-99% of the CVM limit"}

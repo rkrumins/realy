@@ -1,0 +1,37 @@
+# Self-contained Kafka + Flink: no operators or CRDs, only stock images and the realy images.
+# Used by overlays/local* (kind / k3d / minikube / Docker Desktop) and usable on any vanilla cluster.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - kafka.yaml
+  - generated/kafka-topics-script.yaml
+  - flink.yaml
+configMapGenerator:
+  - name: kafka-start
+    files: [kafka-start.sh]
+patches:
+  # the console manages the session cluster's jobs over REST (submit / savepoint / restore / cancel)
+  - target: { kind: Deployment, name: console }
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: console }
+      spec:
+        template:
+          spec:
+            containers:
+              - name: console
+                env:
+                  - { name: FLINK_REST, value: http://flink-jobmanager:8081 }
+  - target: { kind: Job, name: bench-run }
+    patch: |-
+      apiVersion: batch/v1
+      kind: Job
+      metadata: { name: bench-run }
+      spec:
+        template:
+          spec:
+            containers:
+              - name: driver
+                env:
+                  - { name: FLINK_REST, value: http://flink-jobmanager:8081 }

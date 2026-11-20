@@ -1,0 +1,27 @@
+name: lost-stolen-contactless
+description: >-
+  Stolen cards spent contactless just under the CVM limit, near the victim's home, minutes apart
+  (CONTACTLESS_SPLIT territory) - 20 campaigns inside the measured window on a warm-started pipeline.
+seed: 21
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 500 }
+  duration_s: 180
+  warmup_s: 15
+  backfill_days: 1
+topology: gateway-kafka
+fraud:
+  background_per_1k: 0.2
+  campaigns:
+    - { kind: lost_stolen, at_s: 30, count: 10 }
+    - { kind: lost_stolen, at_s: 90, count: 10, params: { extra_txns: [1, 2] } }
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100 }

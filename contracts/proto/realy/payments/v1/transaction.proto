@@ -1,0 +1,101 @@
+// Canonical payment event. Production-shaped: contains no benchmark fields.
+// Benchmark timing travels separately in the `x-bench-trace` Kafka header (realy.bench.v1.BenchTrace).
+syntax = "proto3";
+
+package realy.payments.v1;
+
+option java_package = "io.realy.contracts.payments.v1";
+option java_multiple_files = true;
+
+enum PaymentType {
+  PAYMENT_TYPE_UNSPECIFIED = 0;
+  CARD_PURCHASE = 1;
+  ATM_WITHDRAWAL = 2;
+  TRANSFER = 3;   // account-to-account push payment (instant payment rail)
+  CARD_REFUND = 4;
+}
+
+enum Channel {
+  CHANNEL_UNSPECIFIED = 0;
+  POS = 1;
+  ECOM = 2;
+  ATM = 3;
+  MOTO = 4;
+  IN_APP = 5;
+  ONLINE_BANKING = 6;
+}
+
+enum EntryMode {
+  ENTRY_MODE_UNSPECIFIED = 0;
+  CHIP = 1;
+  CONTACTLESS = 2;
+  MAGSTRIPE = 3;
+  MANUAL = 4;
+  WALLET_TOKEN = 5;
+  ECOM_3DS = 6;
+  ECOM_NON_3DS = 7;
+  CREDENTIAL_ON_FILE = 8;
+  BANK_APP = 9;
+}
+
+// Result of 3-D Secure (EMV 3DS) cardholder authentication carried in an online card authorisation.
+enum ThreeDsResult {
+  THREE_DS_NONE = 0;            // no 3DS: not an online payment, or the merchant did not try
+  THREE_DS_ATTEMPTED = 1;       // the merchant attempted it; the cardholder was not authenticated
+  THREE_DS_AUTHENTICATED = 2;   // authenticated (frictionless or after a challenge): liability shifts
+}
+
+enum CardType {
+  CARD_TYPE_UNSPECIFIED = 0;
+  DEBIT = 1;
+  CREDIT = 2;
+  PREPAID = 3;
+  VIRTUAL = 4;
+}
+
+message TransactionEvent {
+  // Globally unique, deterministic: (generator_id << 48) | sequence.
+  fixed64 event_id = 1;
+  // Event (simulation) time, epoch microseconds. Feature windows use this clock.
+  sfixed64 event_time_us = 2;
+  PaymentType payment_type = 3;
+
+  uint64 customer_id = 4;
+  uint64 account_id = 5;
+  uint64 card_id = 6;            // 0 when not a card payment
+  CardType card_type = 7;
+
+  int64 amount_minor = 8;        // in `currency` minor units
+  string currency = 9;           // ISO 4217
+  int64 amount_usd_minor = 10;   // normalised amount (USD cents)
+
+  uint64 merchant_id = 11;       // 0 for transfers
+  uint32 mcc = 12;               // ISO 18245
+  string merchant_country = 13;  // ISO 3166-1 alpha-2
+  uint64 terminal_id = 14;       // POS/ATM terminal, 0 for card-not-present
+
+  Channel channel = 15;
+  EntryMode entry_mode = 16;
+  bool card_present = 17;
+
+  double lat = 18;               // transaction location (terminal, or IP geo for remote)
+  double lon = 19;
+
+  uint64 device_id = 20;         // 0 when no device (card-present)
+  uint32 ip_v4 = 21;             // 0 when no IP
+  string ip_country = 22;
+  uint32 ip_asn = 23;
+
+  uint64 payee_id = 24;          // transfers only
+
+  bool cvv_match = 25;
+  bool avs_match = 26;
+  bool recurring = 27;
+  uint32 credit_limit_usd = 28;  // card credit limit (0 for debit)
+
+  // Authorisation signals the issuer receives with the request (alongside cvv_match / avs_match).
+  ThreeDsResult three_ds = 29;   // online card payments
+  bool pin_verified = 30;        // the PIN was entered and verified (chip, ATM)
+  bool cryptogram_valid = 31;    // EMV chip / network-token cryptogram verified (false for magstripe, keyed)
+  uint32 scheme_score = 32;      // card network risk score 0-99 carried in the request (0 = none)
+}

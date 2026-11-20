@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package realy.scoring.v1;
+
+import "realy/payments/v1/transaction.proto";
+import "realy/features/v1/features.proto";
+import "realy/bench/v1/trace.proto";
+
+option java_package = "io.realy.contracts.scoring.v1";
+option java_multiple_files = true;
+
+enum Outcome {
+  OUTCOME_UNSPECIFIED = 0;
+  APPROVE = 1;
+  REVIEW = 2;
+  DECLINE = 3;
+  CHALLENGE = 4;   // step up before approving: 3DS / SCA challenge online, PIN prompt in store, in-app
+                   // confirmation of a transfer; the payment continues only if the customer passes
+}
+
+enum IngressMode {
+  INGRESS_MODE_UNSPECIFIED = 0;
+  SYNC_GRPC = 1;
+  SYNC_HTTP = 2;
+  ASYNC_KAFKA_GATEWAY = 3;
+  ASYNC_FLINK_INLINE = 4;
+}
+
+enum DecisionPath {
+  PATH_FULL = 0;                // features + model + rules
+  PATH_RULES_ONLY_FALLBACK = 1; // model/feature deadline or error -> rules only
+  PATH_PROVISIONAL = 2;         // sync answer given before scoring finished
+  PATH_FINAL_AFTER_PROVISIONAL = 3;
+  PATH_ECHO = 4;                // calibration topology, no processing
+}
+
+message RuleHit {
+  string rule_id = 1;
+  Outcome action = 2;
+  string reason = 3;
+}
+
+message ModelResult {
+  string model_name = 1;
+  string model_version = 2;
+  string deployment = 3;
+  float score = 4;
+  repeated float raw_outputs = 5;
+  fixed64 input_hash = 6;
+  bool timed_out = 7;
+  bool errored = 8;
+  uint32 batch_size = 9;
+}
+
+// System-of-record for a decision: everything needed to reproduce, audit, or train.
+message DecisionRecord {
+  fixed64 event_id = 1;
+  Outcome outcome = 2;
+  float score = 3;
+  repeated string reason_codes = 4;
+  repeated RuleHit rule_hits = 5;
+  ModelResult model = 6;
+  string policy_version = 7;
+  string rule_set_version = 8;
+  DecisionPath path = 9;
+  bool degraded = 10;
+  IngressMode ingress_mode = 11;
+  string instance_id = 12;
+  sfixed64 decided_at_us = 13;
+  uint32 revision = 14;          // 0 = first decision, 1 = final after provisional
+  realy.payments.v1.TransactionEvent event = 15;
+  realy.features.v1.FeatureVector features = 16;
+  realy.bench.v1.BenchTrace trace = 17;
+  uint32 feature_schema_version = 18;
+}

@@ -1,0 +1,47 @@
+# Kafka topic contracts. `realy bench` / compose init / Strimzi KafkaTopic CRs are generated from this.
+# Partition counts are defaults for a 10k TPS target; scale with capacity-planning.md.
+defaults:
+  replication_factor: 3        # compose (single broker) overrides to 1
+  min_insync_replicas: 2
+topics:
+  payments.events.raw:
+    partitions: 48
+    key: customer_id (decimal string)  # keeps all of a customer's activity ordered
+    value: realy.payments.v1.TransactionEvent
+    # x-bench-trace: realy.bench.v1.BenchTrace (intended/sent time, clock domain); x-run-id: owning run
+    # (":backfill" / ":prime" suffix for history); x-backfill: history the gateway must not score
+    # (Flink still folds it into state); x-mirrored: a sync decision already made, mirrored for Flink
+    headers: [x-bench-trace, x-run-id, x-backfill, x-mirrored]
+    timestamp: CreateTime (event time, ms)
+    retention_ms: 21600000     # 6h
+    config: { compression.type: lz4, message.timestamp.type: CreateTime }
+  payments.decisions:
+    partitions: 48
+    key: customer_id (decimal string)
+    value: realy.scoring.v1.DecisionRecord
+    timestamp: LogAppendTime   # broker-stamped, an independent clock for egress
+    retention_ms: 86400000     # 24h: system of record until ClickHouse has ingested
+    config: { compression.type: lz4, message.timestamp.type: LogAppendTime }
+  payments.labels:
+    partitions: 12
+    key: customer_id (decimal string)
+    value: realy.payments.v1.FraudLabel
+    retention_ms: 604800000
+  bench.control:
+    partitions: 1
+    key: "<target>"
+    value: realy.bench.v1.ControlMessage (proto3 JSON)
+    config: { cleanup.policy: compact }
+  bench.metrics:
+    partitions: 6
+    key: "<source>:<instance>"
+    value: realy.bench.v1.MetricsSnapshot (proto3 JSON)
+    retention_ms: 86400000
+
+# Client settings that matter for latency (pinned in every producer/consumer we ship).
+client_latency_settings:
+  producer: { linger.ms: 1, batch.size: 131072, compression.type: lz4, acks: all, enable.idempotence: true,
+              partitioner: murmur2_random (librdkafka) / default (Java) -> identical partitioning }
+  # fetch.min.bytes=1 is what matters: the broker completes a pending fetch as soon as a record is
+  # appended, so fetch.max.wait.ms only bounds empty-fetch churn (100 ms) and adds no latency.
+  consumer: { fetch.min.bytes: 1, fetch.max.wait.ms: 100, max.poll.records: 2000, enable.auto.commit: false }

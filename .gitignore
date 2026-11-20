@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+java/**/build/
+java/.gradle/
+.gradle/
+runs/
+runs-k8s/
+data/
+node_modules/
+ui/dist/
+python/realy/control/static/
+*.spool
+.DS_Store

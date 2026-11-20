@@ -1,0 +1,13 @@
+# Production-shaped Kafka + Flink, managed by operators that must already be installed in the cluster:
+#   Strimzi (>= 0.45)                 -> Kafka (KRaft, 3 brokers) + KafkaTopics generated from contracts/
+#   Flink Kubernetes Operator (>=1.10) -> FlinkDeployments realy-features (running) / realy-inline (suspended)
+#   prometheus-operator (optional)     -> PodMonitors
+# Used by overlays/dev and overlays/gke-l4. The console only observes the Flink jobs here (FLINK_REST="").
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - kafka.yaml
+  - generated/kafka-topics.yaml
+  - flink-rbac.yaml
+  - flink.yaml
+  - monitoring.yaml

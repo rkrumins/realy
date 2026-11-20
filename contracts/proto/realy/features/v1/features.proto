@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package realy.features.v1;
+
+option java_package = "io.realy.contracts.features.v1";
+option java_multiple_files = true;
+
+enum Entity {
+  ENTITY_UNSPECIFIED = 0;
+  CUSTOMER = 1;
+  CARD = 2;
+  DEVICE = 3;
+  IP = 4;
+  MERCHANT = 5;
+  TERMINAL = 6;
+  PAYEE = 7;
+}
+
+enum FeatureSource {
+  FEATURE_SOURCE_UNSPECIFIED = 0;
+  STREAM = 1;     // computed by the Flink feature job (windowed aggregates)
+  PROFILE = 2;    // static / batch profile in the online store (seeded from the world)
+  DERIVED = 3;    // computed at scoring time from event + other features
+}
+
+message EntityFreshness {
+  Entity entity = 1;
+  FeatureSource source = 2;
+  sfixed64 as_of_us = 3;        // event time the stored values were computed for
+  sfixed64 updated_at_us = 4;   // wall time the values were written (staleness = scoring wall time - this)
+  bool found = 5;
+}
+
+// The feature vector exactly as served to the model. Order is defined by
+// contracts/features/feature_schema.yaml (schema_version).
+message FeatureVector {
+  uint32 schema_version = 1;
+  repeated float values = 2;
+  bytes missing_bitmap = 3;     // bit i set => feature i was missing and defaulted
+  sfixed64 computed_at_us = 4;
+  repeated EntityFreshness freshness = 5;
+}
