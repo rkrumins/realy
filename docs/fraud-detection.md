@@ -3,7 +3,9 @@
 This page explains how a payment is judged fraudulent and why each signal exists. It covers what
 the nine synthetic fraud typologies look like and how well the system catches each one, measured on
 a world the model has never seen. For the plumbing (how features get from Flink to Redis to the
-model), see [feature-store-and-inference.md](feature-store-and-inference.md).
+model), see [feature-store-and-inference.md](feature-store-and-inference.md). For what this
+simulation leaves out of a real payment flow, see
+[How close is this to a real payment flow?](#how-close-is-this-to-a-real-payment-flow)
 
 ## How a payment is judged
 
@@ -434,3 +436,75 @@ What happened:
 
 The fix is a decision-history feature: declines on this card in the last hour. That is a feature-DSL
 change (an aggregator over `payments.decisions`), not a rule.
+
+## How close is this to a real payment flow?
+
+**Realistic:** the shape of the system and the discipline of measuring it.
+- **The pipeline:** stateful streaming features (Flink on RocksDB) → online store (Redis) → model
+  serving (KServe v2 / Triton) → rules and policy → an audit write acknowledged before the reply →
+  offline store (ClickHouse) → delayed labels → retraining on the vectors exactly as served.
+- **Latency:** a 150 ms budget, deadlines with a rules-only fallback, and per-stage timing under
+  open-loop load.
+- **Signals:** velocity per card, customer, device, IP, merchant, terminal and payee; novelty (new
+  device, payee, IP country); geo-speed; amount against the customer's norm; credit utilisation; mule
+  fan-in. These are the core features of production systems.
+- **Typologies:** the nine are real typologies, with their real-world signatures.
+- **Labels:** late, partial and noisy, as in a bank; the 30-day cut cost 9 points of decline recall.
+- **Evaluation:** out of sample, point in time, with per-rule precision and fraud dollars approved.
+
+**Simplified:**
+- **Fraud is enriched about 20×.** It is 2% of events here, against roughly 0.1% in card traffic,
+  so that every typology is measurable in minutes. Recall and FPR transfer to a real base rate;
+  precision does not. The same detectors at a 0.1% fraud rate:
+
+  | fraud-eval, `baseline-v3`, observed-label model | Recall | Good customers hit | Precision at 2% fraud (measured) | Precision at 0.1% fraud |
+  |---|---|---|---|---|
+  | declined | 0.845 | 0.17% | 0.908 | 0.33 (1 fraud in 3 declines) |
+  | flagged (review or decline) | 0.915 | 1.79% | 0.503 | 0.05 (1 fraud in 20 flags) |
+
+  `precision = recall·p / (recall·p + FPR·(1 − p))` for a fraud rate p. The declines would be a
+  good result; flagging 1.8% of good customers is more friction than a card authorisation flow
+  usually tolerates.
+- **The fraudsters do not adapt.** Campaigns are scripted. They do not probe thresholds, move to
+  another merchant after declines, or learn which amounts pass.
+- **The model and rules are small:** a proxy MLP (and GBDT) on 54 features and 17 rules. Production
+  systems use hundreds to thousands of features, several models by channel or typology, and far
+  larger rule estates.
+- **REVIEW is generic.** A card authorisation cannot be held for an analyst. In practice REVIEW
+  maps to a step-up (a 3DS / SCA challenge), approve-and-alert (a "was this you?" message, then a
+  card block), or a decline with referral. For instant transfers it maps to a hold, a Confirmation
+  of Payee check, or a scam warning.
+
+**Not modelled:**
+- **The authorisation message flow:** ISO 8583 / ISO 20022 messages between acquirer, scheme and
+  issuer; response codes; scheme stand-in processing; reversals, advices, clearing and settlement;
+  the chargeback lifecycle and its reason codes. One event gets one decision here.
+- **Non-fraud checks in the same call:** card status (hot-card file), CVV, PIN and EMV cryptogram
+  validation, address verification, balance and limits. In reality these stop a share of
+  counterfeit and lost / stolen fraud before any model runs, and their failures are fraud signals.
+- **External risk signals:** scheme scores carried in the authorisation, 3DS / ACS risk data, device
+  intelligence and behavioural biometrics, and session events before the payment (login, password
+  reset, new payee, SIM swap). These carry most of the weight against account takeover and APP scams.
+- **Unsupervised anomaly detection.** Anomalies enter only as per-entity deviation features
+  (amount ratio, novelty, geo-speed, local hour) feeding a supervised model. There is no
+  label-free score for new attack patterns, no population-level spike detection (a merchant or BIN
+  suddenly receiving card tests), and no drift monitoring of features or scores.
+- **Graph analytics:** entity resolution and link analysis for mule networks and synthetic
+  identities. Here, payee fan-in is the only network feature.
+- **The human loop:** alert queues, analyst decisions and customer confirmations. In practice these
+  are the fastest labels (hours, not the 30–45 days of a chargeback).
+- **Governance:** champion / challenger, reason codes for adverse decisions, model-risk review,
+  and scheme and regulatory constraints (for example, SCA exemptions that depend on the measured
+  fraud rate, and APP-scam reimbursement rules).
+
+**The most valuable additions**, in order:
+1. **An authorisation layer:** card status, CVV and cryptogram results, and a scheme score as event
+   fields. Add step-up as a decision with its own friction cost and drop-off.
+2. **Decision-history features:** recent declines and step-up failures per card and device (see
+   the worked example above).
+3. **An unsupervised anomaly score** served beside the model, plus merchant- and BIN-level spike
+   detection in Flink. Measure out of sample whether either adds recall.
+4. **Session events** (login, new payee, device change) for ATO and APP scams.
+5. **A production base rate and adaptive campaigns** that react to declines.
+6. **A case-management simulation,** so that analyst labels arrive in hours.
+
