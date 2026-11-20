@@ -55,23 +55,35 @@ def test_guardrails_ignore_warm_down_phases():
     assert h.abort_reason is None
 
 
-def test_auto_prime_only_for_cold_async_warm_state(monkeypatch):
-    from realy.runner import run as run_mod
-    from realy.world import load_or_build  # noqa: F401  (world only needed for its natural rate)
+def test_history_plan_primes_a_cold_scoring_path_after_the_bulk_replay():
+    from realy.runner.run import describe_history, history_days, plan_history
+    rate = 6.7                                     # natural events per sim-second
+    prime_days = 15_000 / (rate * 86_400)          # 30 s at 500 TPS
+    # warm pipeline, 1-day backfill: one unpaced bulk segment (unchanged behaviour)
+    assert plan_history(1.0, [], 500, rate) == [{"mode": "bulk", "days": 1.0}]
+    # cold scoring path after a world switch: bulk replay, then the last 30 s of history paced + scored
+    segs = plan_history(1.0, ["gateway has scored 0 events"], 500, rate)
+    assert [s["mode"] for s in segs] == ["bulk", "prime"]
+    assert abs(segs[1]["days"] - prime_days) < 1e-12 and abs(history_days(segs) - 1.0) < 1e-12
+    assert "scored" in describe_history(segs, 500, rate)
+    # cold, no backfill (first run after `make up`): prime only (the former auto-prime)
+    assert plan_history(None, ["Flink job started 5 s ago"], 500, rate) == [{"mode": "prime", "days": prime_days}]
+    # a backfill shorter than one prime: all of it scored
+    assert plan_history(prime_days / 2, ["cold"], 500, rate) == [{"mode": "prime", "days": prime_days / 2}]
+    # priming disabled / warm: nothing extra
+    assert plan_history(None, ["cold"], 500, rate, auto_prime=False) == []
+    assert plan_history(None, [], 500, rate) == []
 
-    class W:
-        n_customers = 1000
-    monkeypatch.setattr(run_mod, "natural_rate_total", lambda w: 6.7)
-    ep = run_mod.Endpoints(gateway_admin="http://gw", flink_rest="http://flink")
-    monkeypatch.setattr(run_mod, "_gateway_decisions", lambda admin: 0)
-    monkeypatch.setattr(run_mod, "_flink_job_uptime_s", lambda rest: 5.0)
-    days = run_mod.auto_prime_days(load_scenario("smoke"), ep, W(), 500, lambda _: None)
-    assert days > 0 and abs(days * 6.7 * 86_400 - 15_000) < 1   # 30 s at 500 TPS
-    assert run_mod.auto_prime_days(load_scenario("flink-inline-smoke"), ep, W(), 500, lambda _: None) == 0  # fresh state
-    assert run_mod.auto_prime_days(load_scenario("sync-smoke"), ep, W(), 500, lambda _: None) == 0         # sync rail
-    monkeypatch.setattr(run_mod, "_gateway_decisions", lambda admin: 1_000_000)
-    monkeypatch.setattr(run_mod, "_flink_job_uptime_s", lambda rest: 3_600.0)
-    assert run_mod.auto_prime_days(load_scenario("smoke"), ep, W(), 500, lambda _: None) == 0             # warm
+
+def test_emitter_reads_legacy_and_segmented_history_plans():
+    from realy.emit.driver import ShardPlan, history_segments
+    base = dict(shard=0, n_shards=1, run_id="r", run_dir="/tmp", scenario={}, world_dir="/w", t_start_us=0,
+                time_scale=1.0, sim_start_us=0, duration_s=1.0)
+    assert history_segments(ShardPlan(**base), 1.0) == [{"mode": "bulk", "days": 1.0}]
+    assert history_segments(ShardPlan(**base, prime=True), 0.1) == [{"mode": "prime", "days": 0.1}]
+    segs = [{"mode": "bulk", "days": 0.9}, {"mode": "prime", "days": 0.1}]
+    assert history_segments(ShardPlan(**base, extra={"history": segs}), 1.0) == segs
+    assert history_segments(ShardPlan(**base, extra={"history": []}), 1.0) == []
 
 
 def test_prime_wait_uses_group_lag_then_falls_back(monkeypatch):

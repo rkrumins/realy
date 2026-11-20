@@ -285,24 +285,48 @@ def cold_pipeline(sc: Scenario, ep: Endpoints) -> list[str]:
     return reasons
 
 
-def auto_prime_days(sc: Scenario, ep: Endpoints, world: Any, base_tps: float, log: Callable[[str], None]) -> float:
-    """Warm a cold pipeline with REALY_PRIME_S (default 30) seconds of history events paced at the
-    scenario's starting rate, scored by the pipeline and excluded from results like any backfill. Never for fresh-state runs (exact verification
-    replays only the run's own events) or when the scenario already backfills. REALY_AUTO_PRIME=0 disables."""
-    if (os.environ.get("REALY_AUTO_PRIME", "1") == "0" or sc.flink_state == "fresh" or sc.traffic.backfill_days
-            or sc.topology == "gateway-grpc"):  # the sync rail replays a compiled dataset; no backfill path
-        return 0.0
-    reasons = cold_pipeline(sc, ep)
-    if not reasons:
-        return 0.0
-    # paced at the scenario's starting rate: the broker, gateway, Flink and ClickHouse settle after
-    # ~25-30 s of steady traffic on a small host (an unpaced burst leaves catch-up work behind instead)
-    prime_s = float(os.environ.get("REALY_PRIME_S", "30"))
-    events = int(min(600_000, max(5_000, prime_s * base_tps)))
-    days = events / max(1e-9, natural_rate_total(world) * 86_400)
-    log(f"cold pipeline ({'; '.join(reasons)}): priming with ~{events:,} unmeasured history events "
-        f"paced at {base_tps:,.0f}/s (~{events / max(base_tps, 1):.0f} s)")
-    return days
+def plan_history(backfill_days: float | None, cold_reasons: list[str], base_tps: float, natural_rate: float,
+                 prime_s: float = 30.0, auto_prime: bool = True) -> list[dict[str, Any]]:
+    """The run's unmeasured history, as ordered segments (oldest first), each `{"mode", "days"}`:
+
+      bulk   unpaced, header `x-backfill`: Flink builds feature state from it, the gateway skips it.
+             Fastest way to warm state with days of history.
+      prime  paced at the scenario's starting rate, scored by the pipeline (no `x-backfill`), never
+             measured: warms the scoring path itself (gateway / Flink-inline JIT, connections, model
+             server, ClickHouse ingest) at the steady state it will be measured in.
+
+    A cold scoring path (`cold_reasons`) gets the last `prime_s` seconds' worth of history as a prime
+    segment: inside the backfill when there is one (state is still built from all history, in event
+    order), or on its own when there is none. History events of every segment are logged as
+    `backfill` and replayed by `verify`, so priming never costs exactness, fresh state included."""
+    bulk = float(backfill_days or 0.0)
+    prime_days = 0.0
+    if auto_prime and cold_reasons:
+        events = int(min(600_000, max(5_000, prime_s * base_tps)))
+        prime_days = events / max(1e-9, natural_rate * 86_400)
+    if prime_days >= bulk > 0:            # the whole backfill is shorter than one prime: score all of it
+        return [{"mode": "prime", "days": bulk}]
+    segs = []
+    if bulk > 0:
+        segs.append({"mode": "bulk", "days": bulk - prime_days})
+    if prime_days > 0:
+        segs.append({"mode": "prime", "days": prime_days})
+    return segs
+
+
+def history_days(segs: list[dict[str, Any]], mode: str | None = None) -> float:
+    return float(sum(s["days"] for s in segs if mode in (None, s["mode"])))
+
+
+def describe_history(segs: list[dict[str, Any]], base_tps: float, natural_rate: float) -> str:
+    parts = []
+    for s in segs:
+        n = s["days"] * natural_rate * 86_400
+        if s["mode"] == "bulk":
+            parts.append(f"{s['days']:.3g} sim days unpaced (~{n:,.0f} events, builds feature state; not scored)")
+        else:
+            parts.append(f"~{n:,.0f} events paced at {base_tps:,.0f}/s (~{n / max(base_tps, 1):.0f} s, scored: warms the scoring path)")
+    return " + ".join(parts) if parts else "none"
 
 
 class _Stop(Exception):
@@ -325,6 +349,9 @@ class _Run:
         self.coll_summ: dict[int, dict] = {}
         self.bf_got = 0
         self.bf_events = 0
+        self.bf_primed = 0
+        self.history: list[dict[str, Any]] = []
+        self.primes = False
         self.n_ems = 0
         self.n_coll = 0
         self.drain = None
@@ -382,7 +409,11 @@ class _Run:
             self.coll_summ[idx] = val
         elif kind == "backfill":
             self.bf_got += 1
-            self.bf_events += int(val)
+            if isinstance(val, dict):
+                self.bf_events += int(val.get("events", 0))
+                self.bf_primed += int(val.get("primed", 0))
+            else:
+                self.bf_events += int(val)
         return True
 
     def sleep(self, seconds: float, where: str) -> None:
@@ -431,11 +462,19 @@ class _Run:
         log(f"time scale {self.ts:.1f} sim-s per wall-s (natural rate {natural_rate_total(self.world):.1f} ev/sim-s)")
         apply_topology(sc, self.run_id, ep, log, world=self.world.content_hash)
         self.sleep(float(os.environ.get("REALY_CONFIG_SETTLE_S", "2")), "config settle")
-        self.prime_days = auto_prime_days(sc, ep, self.world, self.base_tps, log)
-        if self.prime_days:
-            sc.traffic.backfill_days = self.prime_days
-        self.gw_before = _gateway_decisions(ep.gateway_admin) if self.prime_days else None
         self.sync = sc.topology == "gateway-grpc"
+        # the sync rail replays a compiled dataset (no history path); REALY_AUTO_PRIME=0 disables priming
+        auto_prime = os.environ.get("REALY_AUTO_PRIME", "1") != "0" and not self.sync
+        cold = cold_pipeline(sc, ep) if auto_prime else []
+        rate = natural_rate_total(self.world)
+        self.history = [] if self.sync else plan_history(sc.traffic.backfill_days, cold, self.base_tps, rate,
+                                                          float(os.environ.get("REALY_PRIME_S", "30")), auto_prime)
+        if self.history:
+            sc.traffic.backfill_days = history_days(self.history)
+            log(f"history: {describe_history(self.history, self.base_tps, rate)}"
+                + (f" (cold scoring path: {'; '.join(cold)})" if history_days(self.history, "prime") else ""))
+        self.primes = bool(history_days(self.history, "prime"))
+        self.gw_before = _gateway_decisions(ep.gateway_admin) if self.primes else None
         self.sim0 = sim_start_us(sc)
         if self.sync:
             from .sync import compile_run_dataset
@@ -480,12 +519,11 @@ class _Run:
         self.plans = [ShardPlan(shard=s, n_shards=n_shards, run_id=self.run_id, run_dir=str(self.run_dir),
                                 scenario=sc.model_dump(mode="json"), world_dir=str(sc.world_dir), t_start_us=t_start,
                                 time_scale=self.ts, sim_start_us=self.sim0, duration_s=sc.traffic.duration_s,
-                                prime=bool(self.prime_days),
-                                extra={"prime_tps": self.base_tps / n_shards} if self.prime_days else {})
+                                extra={"history": self.history, "prime_tps": self.base_tps / n_shards})
                       for s in range(n_shards)]
         self.manifest.update({"t_start_us": t_start, "time_scale": self.ts, "sim_start_us": self.sim0,
                               "shards": n_shards, "collectors": self.n_coll, "world_hash": self.world.content_hash,
-                              "prepare_s": round(time.time() - self.t0, 2), "auto_prime": bool(self.prime_days)})
+                              "prepare_s": round(time.time() - self.t0, 2), "auto_prime": self.primes, "history": self.history})
         self.write_manifest()
         self.log(f"run {self.run_id}: {sc.topology}, {n_shards} emitter shard(s), {self.n_coll} collector(s), "
                  f"{sc.traffic.duration_s:.0f}s ({sc.traffic.profile.kind} {sc.traffic.profile.tps:.0f} TPS)")
@@ -530,8 +568,8 @@ class _Run:
             self.pump(0.5)
         bf = self.bf_events
         if bf:
-            log(f"{'prime' if self.prime_days else 'backfill'}: {bf:,} history events ({sc.traffic.backfill_days:.3g} sim days) "
-                f"emitted {'paced' if self.prime_days else 'unpaced'}")
+            log(f"history: {bf:,} events emitted ({sc.traffic.backfill_days:.3g} sim days"
+                + (f"; {self.bf_primed:,} paced and scored" if self.bf_primed else "") + ")")
             from ..common.kafka import wait_group_caught_up
             timeout = float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900"))
             stopped = lambda: bool(h.abort_reason)  # noqa: E731
@@ -549,8 +587,8 @@ class _Run:
                 else:
                     log(f"WARN backfill: feature job NOT caught up after {timeout:.0f} s (group {grp}, lag "
                         f"{lag if lag >= 0 else 'unknown'}): measured-window features are stale and the report will say so")
-            if self.prime_days and sc.topology in ("gateway-kafka", "echo-kafka"):
-                wait_gateway_primed(ep, self.gw_before, bf, timeout, log, stop=stopped)
+            if self.bf_primed and sc.topology in ("gateway-kafka", "echo-kafka"):
+                wait_gateway_primed(ep, self.gw_before, self.bf_primed, timeout, log, stop=stopped)
                 self.check("prime catch-up")
         t_start = now_us() + 3_000_000
         self.start_v.value = t_start

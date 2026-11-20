@@ -45,11 +45,20 @@ class ShardPlan:
     duration_s: float
     events_topic: str = "payments.events.raw"
     write_events: bool = True
-    # True: the history phase primes a cold pipeline. Events go out WITHOUT `x-backfill`, so the
-    # gateway / Flink-inline score them too (JIT, connections, caches warm up); they stay untraced,
-    # so the collector ignores their decisions and the report excludes them like any backfill.
+    # Legacy: True = the whole history is one prime segment. Superseded by extra["history"]: ordered
+    # segments {"mode": "bulk"|"prime", "days"} (runner.plan_history). Prime events go out WITHOUT
+    # `x-backfill`, so the gateway / Flink-inline score them (JIT, connections, caches warm up); they
+    # stay untraced, so the collector ignores their decisions and the report excludes them.
     prime: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+def history_segments(plan: "ShardPlan", backfill_days: float | None) -> list[dict[str, Any]]:
+    segs = plan.extra.get("history")
+    if segs is not None:
+        return [s for s in segs if float(s.get("days") or 0) > 0]
+    days = float(backfill_days or 0)
+    return [{"mode": "prime" if plan.prime else "bulk", "days": days}] if days > 0 else []
 
 
 # --------------------------------------------------------------------------------------- generator
@@ -104,32 +113,40 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
         writer.write_table(table)
         buf, buf_rows = [], 0
 
-    # ------------------------------------------------------------ warm-start backfill (unpaced)
+    # ------------------------------------------------------------ history segments (unmeasured)
     backfilled = 0
-    bf_days = float(sc.traffic.backfill_days or 0)
-    if bf_days > 0:
+    segs = history_segments(plan, sc.traffic.backfill_days)
+    if segs:
         block = 3_600_000_000  # one simulated hour per batch
-        t = plan.sim_start_us - int(bf_days * 86_400_000_000)
         rate = gen.natural_rate_per_sim_s()
         bcarry = 0.0
-        while t < plan.sim_start_us and not stop.is_set():
-            t1 = min(plan.sim_start_us, t + block)
-            exp = rate * (t1 - t) / 1e6 + bcarry
-            k = int(exp)
-            bcarry = exp - k
-            b = gen.generate(k, t, t1)
-            if len(b):
-                q.put(("backfill", None, b.payloads, b.keys, b.event_ids, b.labels))
-                backfilled += len(b)
-                if plan.write_events:
-                    cols = dict(b.columns)
-                    cols["t_intended_us"] = np.full(len(b), -1, np.int64)
-                    cols["backfill"] = np.ones(len(b), np.bool_)
-                    buf.append(cols)
-                    buf_rows += len(b)
-                    if buf_rows >= 100_000:
-                        flush()
-            t = t1
+        # segment boundaries in sim time, oldest first, ending at the measured window's start
+        total_us = int(sum(float(x["days"]) for x in segs) * 86_400_000_000)
+        bounds, t_b = [], plan.sim_start_us - total_us
+        for x in segs:
+            t_e = t_b + int(float(x["days"]) * 86_400_000_000)
+            bounds.append((t_b, t_e))
+            t_b = t_e
+        bounds[-1] = (bounds[-1][0], plan.sim_start_us)
+        for si, (t, t_end) in enumerate(bounds):
+            while t < t_end and not stop.is_set():
+                t1 = min(t_end, t + block)
+                exp = rate * (t1 - t) / 1e6 + bcarry
+                k = int(exp)
+                bcarry = exp - k
+                b = gen.generate(k, t, t1)
+                if len(b):
+                    q.put(("backfill", si, b.payloads, b.keys, b.event_ids, b.labels))
+                    backfilled += len(b)
+                    if plan.write_events:
+                        cols = dict(b.columns)
+                        cols["t_intended_us"] = np.full(len(b), -1, np.int64)
+                        cols["backfill"] = np.ones(len(b), np.bool_)
+                        buf.append(cols)
+                        buf_rows += len(b)
+                        if buf_rows >= 100_000:
+                            flush()
+                t = t1
     q.put(("backfill_done", backfilled))
     _wait_go(go, stop)
     t_start = int(start.value) if start is not None and start.value > 0 else plan.t_start_us
@@ -227,23 +244,30 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     BT = trace_pb2.BenchTrace
     run_id = plan.run_id
     run_b = run_id.encode()
-    # ------------------------------------------------------------ backfill phase: unpaced (prime: paced), untraced
-    bf_hdr = ([("x-run-id", run_b + b":prime")] if plan.prime
-              else [("x-backfill", b"1"), ("x-run-id", run_b + b":backfill")])
-    backfilled = 0
-    # priming is paced at the scenario's starting rate so the pipeline reaches the same steady state
-    # (JIT tiers, broker/page cache, RocksDB compaction, ClickHouse ingest) it will be measured in
-    prime_rate = float(plan.extra.get("prime_tps") or 0.0) if plan.prime else 0.0
-    t_bf0 = time.monotonic()
+    # ------------------------------------------------------------ history segments: untraced, never measured
+    # bulk: unpaced, `x-backfill` (Flink builds state, the gateway skips them); prime: paced at the
+    # scenario's starting rate and scored, so the pipeline reaches the steady state it is measured in
+    # (JIT tiers, broker / page cache, RocksDB compaction, ClickHouse ingest)
+    segs = history_segments(plan, (plan.scenario.get("traffic") or {}).get("backfill_days"))
+    hdr = {"bulk": [("x-backfill", b"1"), ("x-run-id", run_b + b":backfill")], "prime": [("x-run-id", run_b + b":prime")]}
+    prime_rate = float(plan.extra.get("prime_tps") or 0.0)
+    backfilled = primed = 0
+    seg_i, seg_t0, seg_n = -1, 0.0, 0
     while not stop.is_set():
         try:
             item = q.get(timeout=0.5)
         except queue_mod.Empty:
             continue
         if item[0] == "backfill":
+            si = item[1] if isinstance(item[1], int) else 0
+            mode = segs[si]["mode"] if si < len(segs) else "bulk"
+            if si != seg_i:                      # a new segment: pacing restarts from its first event
+                seg_i, seg_t0, seg_n = si, time.monotonic(), 0
+            bf_hdr = hdr.get(mode, hdr["bulk"])
+            paced = mode == "prime" and prime_rate > 0
             for p_, k_ in zip(item[2], item[3]):
-                if prime_rate and backfilled % 50 == 0:
-                    ahead = backfilled / prime_rate - (time.monotonic() - t_bf0)
+                if paced and seg_n % 50 == 0:
+                    ahead = seg_n / prime_rate - (time.monotonic() - seg_t0)
                     if ahead > 0.002:
                         producer.poll(0)
                         time.sleep(ahead)
@@ -254,6 +278,9 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                     except BufferError:
                         producer.poll(0.01)
                 backfilled += 1
+                seg_n += 1
+                if mode == "prime":
+                    primed += 1
             for _, lb in item[5]:
                 producer.produce(LABELS, lb, headers=[h for h in bf_hdr if h[0] == "x-run-id"])
             producer.poll(0)
@@ -263,7 +290,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
             raise RuntimeError("generator failed:\n" + item[1])
     producer.flush(120)
     if results is not None:
-        results.put(("backfill", plan.shard, backfilled))
+        results.put(("backfill", plan.shard, {"events": backfilled, "primed": primed}))
     _wait_go(go, stop)
     t0 = int(start.value) if start is not None and start.value > 0 else plan.t_start_us
     ts = plan.time_scale
