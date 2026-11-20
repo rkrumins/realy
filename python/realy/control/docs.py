@@ -17,7 +17,7 @@ router = APIRouter(tags=["docs"])
 # Navigation order; files not listed are appended under "More". Missing files are skipped.
 NAV: list[tuple[str, list[str]]] = [
     ("Start here", ["getting-started.md", "console-guide.md", "scenarios.md"]),
-    ("Concepts", ["architecture.md", "feature-store-and-inference.md", "fraud-detection.md", "contracts.md",
+    ("Concepts", ["architecture.md", "components.md", "feature-store-and-inference.md", "fraud-detection.md", "contracts.md",
                   "synthetic-data.md", "latency-budget.md"]),
     ("Run & deploy", ["running-benchmarks.md", "deployment-docker.md", "deployment-kubernetes.md", "k8s-l4.md",
                       "production.md", "capacity-planning.md", "operations.md", "security.md"]),

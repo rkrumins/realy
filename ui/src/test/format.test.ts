@@ -32,3 +32,12 @@ describe("fmtFeature", () => {
     expect(fmtFeature(true)).toBe("yes");
   });
 });
+
+describe("doc anchors", () => {
+  it("match GitHub's slugs", async () => {
+    const { slug } = await import("@/pages/Docs");
+    expect(slug("Lost / stolen card")).toBe("lost--stolen-card");
+    expect(slug("Startup: what a run does before it measures")).toBe("startup-what-a-run-does-before-it-measures");
+    expect(slug("What's new?")).toBe("whats-new");
+  });
+});
