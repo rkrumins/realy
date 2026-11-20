@@ -26,9 +26,9 @@ Every run walks the same 13 steps. Each is recorded with a status (`pending`, `r
 | 2 | Kafka topics | topics are created if missing |
 | 3 | Profiles seeded | customer / merchant profile blobs (`pf:*`) written to Redis for this world |
 | 4 | State provenance | does the running Flink job's state belong to this world? Known match: warm. Another world, or unknown: fresh |
-| 5 | Online store | fresh state: the `fs:*` stream blobs are cleared; warm: kept |
-| 6 | Flink job | kept, or cancelled and resubmitted (fresh state), or restored from a savepoint (mode switch) |
-| 7 | Configs applied | scoring and model-server configs published and pushed to the admin endpoints |
+| 5 | Configs applied | scoring and model-server configs published and pushed to the admin endpoints |
+| 6 | Online store | fresh state: the `fs:*` stream blobs are cleared; warm: kept |
+| 7 | Flink job | kept, or cancelled and resubmitted (fresh state), or restored from a savepoint (mode switch) |
 | 8 | History replay | unpaced bulk history (Flink builds state; the gateway skips it), then a paced, **scored** prime segment when the scoring path is cold |
 | 9 | Feature catch-up | until Flink has processed the history (see below) |
 | 10 | Scoring-path prime | released only once the feature job has caught up: paced at the measured rate and scored, so the gateway, model and audit path warm on a quiet pipeline |

@@ -2,7 +2,7 @@ import { ArrowDownToLine, Pause, Play, Search, TriangleAlert } from "lucide-reac
 import * as React from "react";
 import { Link } from "react-router";
 import { cn } from "@/lib/cn";
-import { fmtMs, fmtUsd } from "@/lib/format";
+import { fmtMs, fmtScore, fmtUsd } from "@/lib/format";
 import type { LiveDecision } from "@/lib/types";
 import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
@@ -22,7 +22,7 @@ export function ScoreBar({ score, className }: { score: number | null | undefine
       <div className="h-1.5 w-14 overflow-hidden rounded-full bg-surface-3">
         <div className={cn("h-full rounded-full", tone)} style={{ width: `${(s ?? 0) * 100}%` }} />
       </div>
-      <span className="w-9 text-right font-mono text-[11.5px] text-muted">{s === null ? "—" : s.toFixed(2)}</span>
+      <span className="w-10 text-right font-mono text-[11.5px] text-muted" title={s === null ? undefined : String(score)}>{fmtScore(s)}</span>
     </div>
   );
 }

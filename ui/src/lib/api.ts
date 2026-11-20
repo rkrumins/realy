@@ -1,6 +1,7 @@
 /** Thin typed client for the console API. Every 401 flips the app into the sign-in screen. */
 import type {
   AuthMe, BudgetCheck, BulkAbortResult, Campaign, ClickHouseEnv, CompareResponse, CustomerResponse, CustomersResponse, DecisionDetail, DocPage, DocsIndex,
+  EntitiesResponse, EntityResponse, ExplorerViews, SearchResponse, Typology,
   EnvResponse, FlinkEnv, Job, KafkaEnv, RedisEnv, RunDetail, RunsResponse, ScenarioListItem, Schedule, SearchRow,
   Status, SummaryResponse, TopologyResponse,
 } from "./types";
@@ -107,10 +108,16 @@ export const api = {
   envRedis: () => request<RedisEnv>("/api/env/redis"),
   envClickhouse: () => request<ClickHouseEnv>("/api/env/clickhouse"),
   // explorer
+  explorerViews: () => request<ExplorerViews>(`/api/explorer/views`),
+  usecases: () => request<{ typologies: Typology[] }>(`/api/usecases`),
   search: (run: string, q: string, kind = "auto", limit = 50) =>
-    request<{ results: SearchRow[] }>(`/api/runs/${enc(run)}/search?q=${enc(q)}&kind=${enc(kind)}&limit=${limit}`),
+    request<SearchResponse>(`/api/runs/${enc(run)}/search?q=${enc(q)}&kind=${enc(kind)}&limit=${limit}`),
   decision: (run: string, eventId: string, maturityDays = 30) =>
     request<DecisionDetail>(`/api/runs/${enc(run)}/decisions/${enc(eventId)}?maturity_days=${maturityDays}`),
+  entities: (run: string, entity: string, sort = "events", show = "all", limit = 100, q = "") =>
+    request<EntitiesResponse>(`/api/runs/${enc(run)}/entities/${enc(entity)}?sort=${enc(sort)}&show=${enc(show)}&limit=${limit}&q=${enc(q)}`),
+  entity: (run: string, entity: string, id: string, offset = 0, limit = 500) =>
+    request<EntityResponse>(`/api/runs/${enc(run)}/entities/${enc(entity)}/${enc(id)}?offset=${offset}&limit=${limit}`),
   customer: (run: string, cid: string) => request<CustomerResponse>(`/api/runs/${enc(run)}/customers/${enc(cid)}`),
   customers: (run: string, sort = "events", show = "all", limit = 100) =>
     request<CustomersResponse>(`/api/runs/${enc(run)}/customers?sort=${enc(sort)}&show=${enc(show)}&limit=${limit}`),
