@@ -6,124 +6,124 @@ Every environment variable the code reads, found by scanning it (so this page ca
 
 | Variable | Default | Read by | Compose sets it in | Where |
 |---|---|---|---|---|
-| `ADMIN_PORT` | `8002` | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java:40` |
-| `AUDIT_SPOOL` | `/tmp/realy-audit.spool` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java:32` |
-| `CLICKHOUSE_URL` | `http://localhost:8123` | python (shared), report, verifier | console | `python/realy/acceptance/live.py:60`<br>`python/realy/report/history.py:121`<br>`python/realy/verify/verify.py:278` |
-| `CONTROL_TOPIC` | `bench.control` | every JVM service |  | `java/common/src/main/java/io/realy/common/ControlSubscriber.java:31` |
-| `DECISIONS_TOPIC` | `payments.decisions` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java:30` |
-| `EMITTER_JAVA_OPTS` | `-XX:+UseZGC -XX:+ZGenerational -Xmx3g` | runner |  | `python/realy/runner/sync.py:96` |
-| `EVENTS_TOPIC` | `payments.events.raw` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java:31`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java:85` |
-| `FEATURE_SCHEMA` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/features/FeatureSchema.java:134` |
-| `FLINK_CHECKPOINTS_LOCAL` |  | runner | console | `python/realy/runner/flink.py:29` |
-| `FLINK_CHECKPOINTS_URI` | `file:///checkpoints` | runner |  | `python/realy/runner/flink.py:28` |
-| `FLINK_CHECKPOINT_MS` | `10000` | runner |  | `python/realy/runner/flink.py:291`<br>`python/realy/runner/run.py:369` |
-| `FLINK_JOB_JAR` |  | runner |  | `python/realy/runner/flink.py:21` |
-| `FLINK_KAFKA_BOOTSTRAP` | `kafka:29092` | runner | console | `python/realy/runner/flink.py:289` |
-| `FLINK_PARALLELISM` | `2` | runner |  | `python/realy/runner/flink.py:251` |
-| `FLINK_REST` | `http://localhost:8081` | console, runner | console | `python/realy/control/env.py:35`<br>`python/realy/runner/run.py:40` |
-| `FLINK_SAVEPOINT_DIR` | `file:///checkpoints/savepoints` | runner |  | `python/realy/runner/flink.py:23` |
-| `FLINK_STORE_STATE` |  | runner |  | `python/realy/runner/flink.py:294`<br>`python/realy/runner/flink.py:295` |
-| `FLINK_UI_URL` |  | console | console | `python/realy/control/env.py:35` |
-| `GATEWAY_ADMIN` | `http://localhost:8080` | runner | console | `python/realy/runner/run.py:38` |
-| `GATEWAY_GROUP` | `realy-gateway` | gateway, runner |  | `python/realy/runner/run.py:284`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java:86` |
-| `GATEWAY_GRPC` | `localhost:8080` | runner | console | `python/realy/runner/run.py:768` |
-| `GRAFANA_URL` |  | console | console | `python/realy/control/env.py:36` |
-| `GRPC_PORT` | `8001` | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java:34` |
-| `HOSTNAME` | `0` / `flink-tm` / `flink` / `gateway` / `mock-model` | Flink job, Java load emitter, gateway, model server |  | `java/flink-job/src/main/java/io/realy/flink/FlinkMetrics.java:16`<br>`java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java:61`<br>`java/load-emitter/src/main/java/io/realy/emitter/LoadEmitterMain.java:103` |
-| `INGRESS_KAFKA` | `false` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java:42` |
-| `JOB_MODE` | `features` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java:53` |
-| `KAFKA_ACKS` | `all` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:63`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:63` |
-| `KAFKA_BATCH_SIZE` | `131072` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:66`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:66` |
-| `KAFKA_BOOTSTRAP` | `localhost:9092` | Flink job, console, every JVM service, python (shared) | console, flink-taskmanager, gateway, mock-model | `python/realy/common/kafka.py:22`<br>`python/realy/control/env.py:25`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:17` |
-| `KAFKA_COMPRESSION` | `lz4` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:67`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:67` |
-| `KAFKA_CONSUMERS` | `2` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java:76` |
-| `KAFKA_DELIVERY_TIMEOUT_MS` | `30000` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:70`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:70` |
-| `KAFKA_FETCH_MAX_WAIT_MS` | `100` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:88`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:88` |
-| `KAFKA_IDEMPOTENCE` | `true` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:64`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:64` |
-| `KAFKA_LINGER_MS` | `1` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:65`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:65` |
-| `KAFKA_MAX_POLL_RECORDS` | `2000` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:89`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:89` |
-| `KAFKA_OFFSET_RESET` | `latest` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:84`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:84` |
-| `KAFKA_REPLICATION` | `spec["defaults` | python (shared) |  | `python/realy/common/kafka.py:97` |
-| `KAFKA_SASL_JAAS_CONFIG` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:25` |
-| `KAFKA_SASL_MECHANISM` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py:28`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:24` |
-| `KAFKA_SASL_PASSWORD` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py:28`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:52` |
-| `KAFKA_SASL_USERNAME` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py:28`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:46` |
-| `KAFKA_SECURITY_PROTOCOL` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py:28`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:23` |
-| `KAFKA_SSL_CA_LOCATION` | `unset: PLAINTEXT` | python (shared) |  | `python/realy/common/kafka.py:28` |
-| `KAFKA_SSL_CERT_LOCATION` | `unset: PLAINTEXT` | python (shared) |  | `python/realy/common/kafka.py:28` |
-| `KAFKA_SSL_ENDPOINT_IDENTIFICATION` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py:28`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:32` |
-| `KAFKA_SSL_KEYSTORE_LOCATION` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:29` |
-| `KAFKA_SSL_KEYSTORE_PASSWORD` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:30` |
-| `KAFKA_SSL_KEY_LOCATION` | `unset: PLAINTEXT` | python (shared) |  | `python/realy/common/kafka.py:28` |
-| `KAFKA_SSL_KEY_PASSWORD` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py:28`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java:31` |
-| `KAFKA_SSL_TRUSTSTORE_LOCATION` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:26` |
-| `KAFKA_SSL_TRUSTSTORE_PASSWORD` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:27` |
-| `KAFKA_SSL_TRUSTSTORE_TYPE` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java:28` |
-| `MAX_CONNECTIONS` | `10_000` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:58` |
-| `MAX_INFLIGHT` | `4096` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java:39` |
-| `MAX_PARALLELISM` | `128` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java:93` |
-| `METRICS_PUBLISH` | `true` | every JVM service |  | `java/common/src/main/java/io/realy/common/StageMetrics.java:83` |
-| `METRICS_TOPIC` | `bench.metrics` | every JVM service |  | `java/common/src/main/java/io/realy/common/StageMetrics.java:94` |
-| `MIRROR_TO_KAFKA` | `true` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:60` |
-| `MODEL_ADMIN` | `http://localhost:8002` | python (shared), runner | console | `python/realy/cli.py:264`<br>`python/realy/runner/run.py:39` |
-| `MODEL_CHANNELS` | `4` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:45` |
-| `MODEL_INPUT_DIM` | `schema.size(` | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java:58`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:45` |
-| `MODEL_INPUT_NAME` | `input__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java:56` |
-| `MODEL_NAME` | `fraud_mlp` | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java:57`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:45` |
-| `MODEL_OUTPUT_NAME` | `output__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java:57` |
-| `MODEL_SERVER_CONFIG` |  | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java:28` |
-| `MODEL_TARGET` | `localhost:8001` | Flink job, gateway | flink-taskmanager, gateway | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java:57`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:44`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:87` |
-| `MODEL_WEIGHTS` |  | model server, verifier | mock-model | `python/realy/verify/verify.py:64`<br>`java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java:23` |
-| `PARALLELISM` | `4` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java:92` |
-| `PORT` | `8080` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:57` |
-| `PROMETHEUS_URL` |  | console | console | `python/realy/control/env.py:37` |
-| `REALY_ABORT_DRAIN_S` | `20` | runner |  | `python/realy/runner/run.py:994` |
-| `REALY_ALLOW_CONCURRENT` | `0` | runner |  | `python/realy/runner/lifecycle.py:161` |
-| `REALY_AUTO_PRIME` | `1` | runner |  | `python/realy/runner/run.py:682` |
-| `REALY_BACKFILL_TIMEOUT_S` | `900` | runner |  | `python/realy/runner/run.py:500`<br>`python/realy/runner/run.py:808` |
-| `REALY_CONFIG_SETTLE_S` | `2` | runner |  | `python/realy/runner/run.py:679` |
-| `REALY_CONSOLE_TOKEN` |  | console, python (shared) | console | `python/realy/acceptance/live.py:67`<br>`python/realy/acceptance/live.py:555`<br>`python/realy/control/auth.py:26` |
-| `REALY_CONSOLE_URL` | `http://localhost:8090` | python (shared) |  | `python/realy/cli.py:371` |
-| `REALY_DATA` |  | python (shared) |  | `python/realy/scenario.py:24` |
-| `REALY_EMITTER_FINISH_S` | `120` | runner |  | `python/realy/runner/run.py:981` |
-| `REALY_ENV_TIMEOUT_S` | `2.5` | console |  | `python/realy/control/env.py:16` |
-| `REALY_EXPLORER` | `REPO_ROOT / "contracts" / "explorer.yaml` | console |  | `python/realy/control/explorer.py:46` |
-| `REALY_EXPLORER_CACHE_MB` | `768` | console |  | `python/realy/control/explorer.py:736` |
-| `REALY_EXPLORER_FEATURES_MB` | `256` | console |  | `python/realy/control/explorer.py:567` |
-| `REALY_FRESHNESS_SLO_MS` | `1000` | console |  | `python/realy/control/topology.py:29` |
-| `REALY_GIT_SHA` |  | report |  | `python/realy/report/history.py:80` |
-| `REALY_HOME` |  | python (shared) |  | `python/realy/scenario.py:22` |
-| `REALY_IMAGES` |  | report |  | `python/realy/report/history.py:81` |
-| `REALY_INFRA_INTERVAL_S` | `5` | runner |  | `python/realy/runner/infra.py:21` |
-| `REALY_INSIGHTS` | `REPO_ROOT / "contracts" / "insights.yaml` | report |  | `python/realy/report/insights.py:19` |
-| `REALY_MODELS` |  | trainer | console | `python/realy/train/proxy.py:31` |
-| `REALY_OWNER` |  | runner | console | `python/realy/runner/lifecycle.py:76` |
-| `REALY_PIPELINE` | `default` | runner |  | `python/realy/runner/lifecycle.py:64` |
-| `REALY_PRIME_S` | `30` | runner |  | `python/realy/runner/run.py:686` |
-| `REALY_RUNS` | `/runs` / `REPO_ROOT / "runs` | python (shared), runner |  | `python/realy/acceptance/live.py:62`<br>`python/realy/runner/run.py:33` |
-| `REALY_RUN_HISTORY` | `1` | report |  | `python/realy/report/history.py:119` |
-| `REALY_RUN_WATCHDOG_S` |  | runner |  | `python/realy/runner/run.py:499` |
-| `REALY_SCENARIOS` |  | python (shared) |  | `python/realy/scenario.py:23` |
-| `REALY_SHUTDOWN_GRACE_S` | `45` | console | console | `python/realy/control/worker.py:77` |
-| `REALY_SINK_SETTLE_S` | `120` / `120` | runner |  | `python/realy/runner/run.py:890`<br>`python/realy/runner/run.py:902` |
-| `REALY_STORE_ABORT_AT` | `0.97` | runner |  | `python/realy/runner/infra.py:86` |
-| `REALY_STORE_WARN_AT` | `0.85` | runner |  | `python/realy/runner/infra.py:85` |
-| `REALY_USECASES` | `REPO_ROOT / "contracts" / "usecases" / "typologies` | python (shared) |  | `python/realy/usecases.py:30` |
-| `REALY_USECASES_USER` |  | python (shared) |  | `python/realy/usecases.py:39` |
-| `REALY_VERIFY_MIN_EXACT` | `0.98` | verifier |  | `python/realy/verify/verify.py:287` |
-| `REALY_WORLD_SWITCH_BACKFILL_DAYS` | `1` | runner |  | `python/realy/runner/run.py:1105`<br>`python/realy/runner/run.py:1117` |
-| `REDIS_COMMAND_TIMEOUT_MS` | `2000` | gateway + Flink (scoring core) | flink-taskmanager | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java:62` |
-| `REDIS_CONNECTIONS` | `4` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:43` |
-| `REDIS_CONNECT_TIMEOUT_MS` | `2000` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java:69` |
-| `REDIS_REQUEST_QUEUE` | `100_000` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java:66` |
-| `REDIS_URI` | `redis://localhost:6379` | Flink job, console, gateway, runner | console, flink-taskmanager, gateway | `python/realy/control/env.py:26`<br>`python/realy/runner/lifecycle.py:81`<br>`python/realy/runner/seed.py:18` |
-| `RUN_ID` |  | every JVM service |  | `java/common/src/main/java/io/realy/common/StageMetrics.java:36` |
-| `RUN_SEED` | `42` | Flink job, gateway, model server | flink-taskmanager, gateway, mock-model | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java:62`<br>`java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java:32`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:51` |
-| `SCORING_CONFIG` |  | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java:136`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java:37` |
-| `STATE_TTL_DAYS` | `8` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java:79` |
-| `STORE_FAIL_AFTER_MS` | `30_000` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java:91` |
-| `STORE_FLUSH_TIMEOUT_MS` | `60_000` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java:92` |
-| `STORE_MAX_IN_FLIGHT` | `1000` | Flink job | flink-taskmanager | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java:91` |
-| `STORE_STATE` | `customer,card` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java:127` |
+| `ADMIN_PORT` | `8002` | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
+| `AUDIT_SPOOL` | `/tmp/realy-audit.spool` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
+| `CLICKHOUSE_URL` | `http://localhost:8123` | python (shared), report, verifier | console | `python/realy/acceptance/live.py`<br>`python/realy/report/history.py`<br>`python/realy/verify/verify.py` |
+| `CONTROL_TOPIC` | `bench.control` | every JVM service |  | `java/common/src/main/java/io/realy/common/ControlSubscriber.java` |
+| `DECISIONS_TOPIC` | `payments.decisions` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
+| `EMITTER_JAVA_OPTS` | `-XX:+UseZGC -XX:+ZGenerational -Xmx3g` | runner |  | `python/realy/runner/sync.py` |
+| `EVENTS_TOPIC` | `payments.events.raw` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
+| `FEATURE_SCHEMA` |  | gateway + Flink (scoring core), python (shared) |  | `python/realy/features/schema.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/features/FeatureSchema.java` |
+| `FLINK_CHECKPOINTS_LOCAL` |  | runner | console | `python/realy/runner/flink.py` |
+| `FLINK_CHECKPOINTS_URI` | `file:///checkpoints` | runner |  | `python/realy/runner/flink.py` |
+| `FLINK_CHECKPOINT_MS` | `10000` | runner |  | `python/realy/runner/flink.py`<br>`python/realy/runner/run.py` |
+| `FLINK_JOB_JAR` |  | runner |  | `python/realy/runner/flink.py` |
+| `FLINK_KAFKA_BOOTSTRAP` | `kafka:29092` | runner | console | `python/realy/runner/flink.py` |
+| `FLINK_PARALLELISM` | `2` | runner |  | `python/realy/runner/flink.py` |
+| `FLINK_REST` | `http://localhost:8081` | console, runner | console | `python/realy/control/env.py`<br>`python/realy/runner/run.py` |
+| `FLINK_SAVEPOINT_DIR` | `file:///checkpoints/savepoints` | runner |  | `python/realy/runner/flink.py` |
+| `FLINK_STORE_STATE` |  | runner |  | `python/realy/runner/flink.py` |
+| `FLINK_UI_URL` |  | console | console | `python/realy/control/env.py` |
+| `GATEWAY_ADMIN` | `http://localhost:8080` | runner | console | `python/realy/runner/run.py` |
+| `GATEWAY_GROUP` | `realy-gateway` | gateway, runner |  | `python/realy/runner/run.py`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
+| `GATEWAY_GRPC` | `localhost:8080` | runner | console | `python/realy/runner/run.py` |
+| `GRAFANA_URL` |  | console | console | `python/realy/control/env.py` |
+| `GRPC_PORT` | `8001` | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
+| `HOSTNAME` | `0` / `flink-tm` / `flink` / `gateway` / `mock-model` | Flink job, Java load emitter, gateway, model server |  | `java/flink-job/src/main/java/io/realy/flink/FlinkMetrics.java`<br>`java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/load-emitter/src/main/java/io/realy/emitter/LoadEmitterMain.java` |
+| `INGRESS_KAFKA` | `false` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
+| `JOB_MODE` | `features` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
+| `KAFKA_ACKS` | `all` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_BATCH_SIZE` | `131072` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_BOOTSTRAP` | `localhost:9092` | Flink job, console, every JVM service, python (shared) | console, flink-taskmanager, gateway, mock-model | `python/realy/common/kafka.py`<br>`python/realy/control/env.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_COMPRESSION` | `lz4` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_CONSUMERS` | `2` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
+| `KAFKA_DELIVERY_TIMEOUT_MS` | `30000` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_FETCH_MAX_WAIT_MS` | `100` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_IDEMPOTENCE` | `true` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_LINGER_MS` | `1` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_MAX_POLL_RECORDS` | `2000` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_OFFSET_RESET` | `latest` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_REPLICATION` | `spec["defaults` | python (shared) |  | `python/realy/common/kafka.py` |
+| `KAFKA_SASL_JAAS_CONFIG` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SASL_MECHANISM` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SASL_PASSWORD` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SASL_USERNAME` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SECURITY_PROTOCOL` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SSL_CA_LOCATION` | `unset: PLAINTEXT` | python (shared) |  | `python/realy/common/kafka.py` |
+| `KAFKA_SSL_CERT_LOCATION` | `unset: PLAINTEXT` | python (shared) |  | `python/realy/common/kafka.py` |
+| `KAFKA_SSL_ENDPOINT_IDENTIFICATION` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SSL_KEYSTORE_LOCATION` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SSL_KEYSTORE_PASSWORD` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SSL_KEY_LOCATION` | `unset: PLAINTEXT` | python (shared) |  | `python/realy/common/kafka.py` |
+| `KAFKA_SSL_KEY_PASSWORD` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SSL_TRUSTSTORE_LOCATION` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SSL_TRUSTSTORE_PASSWORD` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SSL_TRUSTSTORE_TYPE` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `MAX_CONNECTIONS` | `10_000` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MAX_INFLIGHT` | `4096` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
+| `MAX_PARALLELISM` | `128` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
+| `METRICS_PUBLISH` | `true` | every JVM service |  | `java/common/src/main/java/io/realy/common/StageMetrics.java` |
+| `METRICS_TOPIC` | `bench.metrics` | every JVM service |  | `java/common/src/main/java/io/realy/common/StageMetrics.java` |
+| `MIRROR_TO_KAFKA` | `true` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MODEL_ADMIN` | `http://localhost:8002` | python (shared), runner | console | `python/realy/cli.py`<br>`python/realy/runner/run.py` |
+| `MODEL_CHANNELS` | `4` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MODEL_INPUT_DIM` | `schema.size(` | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MODEL_INPUT_NAME` | `input__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
+| `MODEL_NAME` | `fraud_mlp` | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MODEL_OUTPUT_NAME` | `output__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
+| `MODEL_SERVER_CONFIG` |  | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
+| `MODEL_TARGET` | `localhost:8001` | Flink job, gateway | flink-taskmanager, gateway | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MODEL_WEIGHTS` |  | model server, verifier | mock-model | `python/realy/verify/verify.py`<br>`java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
+| `PARALLELISM` | `4` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
+| `PORT` | `8080` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `PROMETHEUS_URL` |  | console | console | `python/realy/control/env.py` |
+| `REALY_ABORT_DRAIN_S` | `20` | runner |  | `python/realy/runner/run.py` |
+| `REALY_ALLOW_CONCURRENT` | `0` | runner |  | `python/realy/runner/lifecycle.py` |
+| `REALY_AUTO_PRIME` | `1` | runner |  | `python/realy/runner/run.py` |
+| `REALY_BACKFILL_TIMEOUT_S` | `900` | runner |  | `python/realy/runner/run.py` |
+| `REALY_CONFIG_SETTLE_S` | `2` | runner |  | `python/realy/runner/run.py` |
+| `REALY_CONSOLE_TOKEN` |  | console, python (shared) | console | `python/realy/acceptance/live.py`<br>`python/realy/control/auth.py`<br>`python/realy/control/env.py` |
+| `REALY_CONSOLE_URL` | `http://localhost:8090` | python (shared) |  | `python/realy/cli.py` |
+| `REALY_DATA` |  | python (shared) |  | `python/realy/scenario.py` |
+| `REALY_EMITTER_FINISH_S` | `120` | runner |  | `python/realy/runner/run.py` |
+| `REALY_ENV_TIMEOUT_S` | `2.5` | console |  | `python/realy/control/env.py` |
+| `REALY_EXPLORER` | `REPO_ROOT / "contracts" / "explorer.yaml` | console |  | `python/realy/control/explorer.py` |
+| `REALY_EXPLORER_CACHE_MB` | `768` | console |  | `python/realy/control/explorer.py` |
+| `REALY_EXPLORER_FEATURES_MB` | `256` | console |  | `python/realy/control/explorer.py` |
+| `REALY_FRESHNESS_SLO_MS` | `1000` | console |  | `python/realy/control/topology.py` |
+| `REALY_GIT_SHA` |  | report |  | `python/realy/report/history.py` |
+| `REALY_HOME` |  | python (shared) |  | `python/realy/scenario.py` |
+| `REALY_IMAGES` |  | report |  | `python/realy/report/history.py` |
+| `REALY_INFRA_INTERVAL_S` | `5` | runner |  | `python/realy/runner/infra.py` |
+| `REALY_INSIGHTS` | `REPO_ROOT / "contracts" / "insights.yaml` | report |  | `python/realy/report/insights.py` |
+| `REALY_MODELS` |  | trainer | console | `python/realy/train/proxy.py` |
+| `REALY_OWNER` |  | runner | console | `python/realy/runner/lifecycle.py` |
+| `REALY_PIPELINE` | `default` | runner |  | `python/realy/runner/lifecycle.py` |
+| `REALY_PRIME_S` | `30` | runner |  | `python/realy/runner/run.py` |
+| `REALY_RUNS` | `/runs` / `REPO_ROOT / "runs` | python (shared), runner |  | `python/realy/acceptance/live.py`<br>`python/realy/runner/run.py` |
+| `REALY_RUN_HISTORY` | `1` | report |  | `python/realy/report/history.py` |
+| `REALY_RUN_WATCHDOG_S` |  | runner |  | `python/realy/runner/run.py` |
+| `REALY_SCENARIOS` |  | python (shared) |  | `python/realy/scenario.py` |
+| `REALY_SHUTDOWN_GRACE_S` | `45` | console | console | `python/realy/control/worker.py` |
+| `REALY_SINK_SETTLE_S` | `120` / `120` | runner |  | `python/realy/runner/run.py` |
+| `REALY_STORE_ABORT_AT` | `0.97` | runner |  | `python/realy/runner/infra.py` |
+| `REALY_STORE_WARN_AT` | `0.85` | runner |  | `python/realy/runner/infra.py` |
+| `REALY_USECASES` | `REPO_ROOT / "contracts" / "usecases" / "typologies` | python (shared) |  | `python/realy/usecases.py` |
+| `REALY_USECASES_USER` |  | python (shared) |  | `python/realy/usecases.py` |
+| `REALY_VERIFY_MIN_EXACT` | `0.98` | verifier |  | `python/realy/verify/verify.py` |
+| `REALY_WORLD_SWITCH_BACKFILL_DAYS` | `1` | runner |  | `python/realy/runner/run.py` |
+| `REDIS_COMMAND_TIMEOUT_MS` | `2000` | gateway + Flink (scoring core) | flink-taskmanager | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java` |
+| `REDIS_CONNECTIONS` | `4` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `REDIS_CONNECT_TIMEOUT_MS` | `2000` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java` |
+| `REDIS_REQUEST_QUEUE` | `100_000` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java` |
+| `REDIS_URI` | `redis://localhost:6379` | Flink job, console, gateway, runner | console, flink-taskmanager, gateway | `python/realy/control/env.py`<br>`python/realy/runner/lifecycle.py`<br>`python/realy/runner/seed.py` |
+| `RUN_ID` |  | every JVM service |  | `java/common/src/main/java/io/realy/common/StageMetrics.java` |
+| `RUN_SEED` | `42` | Flink job, gateway, model server | flink-taskmanager, gateway, mock-model | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `SCORING_CONFIG` |  | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `STATE_TTL_DAYS` | `8` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java` |
+| `STORE_FAIL_AFTER_MS` | `30_000` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java` |
+| `STORE_FLUSH_TIMEOUT_MS` | `60_000` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java` |
+| `STORE_MAX_IN_FLIGHT` | `1000` | Flink job | flink-taskmanager | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java` |
+| `STORE_STATE` | `customer,card` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
 
 119 variables.

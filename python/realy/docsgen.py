@@ -323,8 +323,8 @@ def environment() -> str:
             if len(d) < 60:
                 e["defaults"].add(d)
         e["components"].add(comp)
-        if len(e["where"]) < 3:
-            e["where"].append(f"{rel}:{line}")
+        if rel not in e["where"] and len(e["where"]) < 3:      # files, not lines: stable across edits
+            e["where"].append(rel)
 
     for f in sorted((REPO_ROOT / "python" / "realy").rglob("*.py")):
         if "_pb2" in f.name:
