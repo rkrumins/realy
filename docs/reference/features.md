@@ -2,7 +2,7 @@
 
 # Feature catalog
 
-54 features, in model-tensor order (index = position in the tensor). Stream features are computed by the Flink job (or the gateway's inline path) with bucketed event-time windows; profile features are seeded into the online store from the synthetic world; derived features are computed at scoring time, by a library function (`fn`) or a CEL expression over `event` and `f` (`expr`, numbers or booleans as 1 / 0: new event-level features need no code). Semantics: see the header of the schema file and [contracts.md](../contracts.md).
+62 features, in model-tensor order (index = position in the tensor). Stream features are computed by the Flink job (or the gateway's inline path) with bucketed event-time windows; profile features are seeded into the online store from the synthetic world; derived features are computed at scoring time, by a library function (`fn`) or a CEL expression over `event` and `f` (`expr`, numbers or booleans as 1 / 0: new event-level features need no code). Semantics: see the header of the schema file and [contracts.md](../contracts.md).
 
 ## Entities
 
@@ -28,6 +28,7 @@
 | `transfer` | `event.payment_type == 'TRANSFER'` |
 | `has_device` | `event.device_id != 0` |
 | `has_ip` | `event.ip_v4 != 0` |
+| `cvv_fail` | `event.payment_type == 'CARD_PURCHASE' && !event.card_present && !event.cvv_match` |
 
 ## Features
 
@@ -87,3 +88,11 @@
 | 51 | `amount_to_avg_ratio` | derived |  | `fn amount_to_avg_ratio()` |  | 0 |
 | 52 | `local_hour` | derived |  | `fn local_hour()` |  | 0 |
 | 53 | `credit_utilisation_24h` | derived |  | `fn credit_utilisation_24h()` |  | 0 |
+| 54 | `cvv_mismatch` | derived |  | `expr event.payment_type == 'CARD_PURCHASE' && !event.card_present && !event.cvv_match ? 1.0 : 0.0` |  | 0 |
+| 55 | `avs_mismatch` | derived |  | `expr event.payment_type == 'CARD_PURCHASE' && !event.card_present && !event.avs_match ? 1.0 : 0.0` |  | 0 |
+| 56 | `three_ds_authenticated` | derived |  | `expr event.three_ds == 'THREE_DS_AUTHENTICATED' ? 1.0 : 0.0` |  | 0 |
+| 57 | `pin_verified` | derived |  | `expr event.pin_verified ? 1.0 : 0.0` |  | 0 |
+| 58 | `cryptogram_missing` | derived |  | `expr event.card_present && event.payment_type != 'TRANSFER' && !event.cryptogram_valid ? 1.0 : 0.0` |  | 0 |
+| 59 | `scheme_score` | derived |  | `expr double(event.scheme_score)` |  | 0 |
+| 60 | `card_cvv_fail_count_1h` | stream | card | `count where cvv_fail` | 1h / 1m | 0 |
+| 61 | `merch_cvv_fail_count_5m` | stream | merchant | `count where cvv_fail` | 5m / 10s | 0 |

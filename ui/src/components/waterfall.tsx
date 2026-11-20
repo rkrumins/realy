@@ -53,7 +53,7 @@ export function StepWaterfall({ stages, budget }: { stages: Record<string, Stage
   if (!rows.length) return <div className="py-8 text-center text-[13px] text-subtle">No per-stage timings in this run.</div>;
 
   const Row = ({ label, start, p50, p99, sub, total, color }: { label: string; start: number; p50: number; p99: number; sub?: boolean; total?: boolean; color: string }) => (
-    <div className={cn("grid grid-cols-[132px_1fr_150px] items-center gap-3 py-[5px] text-[12.5px]", total && "border-t border-border pt-2.5 mt-1")}>
+    <div className={cn("grid grid-cols-[88px_minmax(0,1fr)_104px] sm:grid-cols-[132px_minmax(0,1fr)_150px] items-center gap-3 py-[5px] text-[12.5px]", total && "border-t border-border pt-2.5 mt-1")}>
       <div className={cn("truncate", sub ? "pl-4 text-subtle" : total ? "font-medium text-fg" : "text-muted")}>{label}</div>
       <Tooltip content={<span className="num">p50 {fmtMs(p50)} · p99 {fmtMs(p99)} · starts at {fmtMs(start)}</span>}>
         <div className="relative h-4">
@@ -63,21 +63,21 @@ export function StepWaterfall({ stages, budget }: { stages: Record<string, Stage
             style={{ left: pct(start), width: `max(2px, ${pct(p50)})`, background: color }} />
         </div>
       </Tooltip>
-      <div className="whitespace-nowrap text-right font-mono text-[11.5px] text-muted">{fmtMs(p50)} <span className="text-subtle">/ {fmtMs(p99)}</span></div>
+      <div className="whitespace-nowrap text-right font-mono text-[10.5px] text-muted sm:text-[11.5px]">{fmtMs(p50)} <span className="text-subtle">/ {fmtMs(p99)}</span></div>
     </div>
   );
 
   return (
     <div className="relative">
       {isNum(budget) && (
-        <div className="pointer-events-none absolute inset-y-0 left-[calc(132px+12px)] right-[calc(150px+12px)]">
+        <div className="pointer-events-none absolute inset-y-0 left-[calc(88px+12px)] right-[calc(104px+12px)] sm:left-[calc(132px+12px)] sm:right-[calc(150px+12px)]">
           <div className="absolute inset-y-0 border-l border-dashed border-fail/70" style={{ left: pct(budget) }}>
             <span className="absolute -top-0.5 ml-1 whitespace-nowrap text-[10.5px] text-fail">budget {fmtMs(budget)}</span>
           </div>
         </div>
       )}
-      <div className="mb-1 grid grid-cols-[132px_1fr_150px] gap-3 pt-4 text-[10.5px] uppercase tracking-wider text-subtle">
-        <span>stage</span><span>p50 bar · p99 whisker</span><span className="text-right">p50 / p99</span>
+      <div className="mb-1 grid grid-cols-[88px_minmax(0,1fr)_104px] sm:grid-cols-[132px_minmax(0,1fr)_150px] gap-3 pt-4 text-[10.5px] uppercase tracking-wider text-subtle">
+        <span>stage</span><span className="truncate">p50 bar · p99 whisker</span><span className="text-right">p50 / p99</span>
       </div>
       {rows.map((r, i) => <Row key={r.key} label={r.label} start={r.start} p50={r.p50} p99={r.p99} sub={r.sub} color={SERIES[i % 8]} />)}
       {hot && <Row label="hot path" start={0} p50={hot.p50} p99={hot.p99} total color="var(--accent)" />}

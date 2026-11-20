@@ -25,7 +25,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
-from .scenario import REPO_ROOT, ChallengeRates
+from .scenario import REPO_ROOT, AuthRates, ChallengeRates
 
 BUILTIN_DIR = Path(os.environ.get("REALY_USECASES", REPO_ROOT / "contracts" / "usecases" / "typologies"))
 BUILTIN_PATTERNS = ("card_testing", "account_takeover", "lost_stolen", "counterfeit", "merchant_breach",
@@ -68,6 +68,7 @@ class Typology(BaseModel):
     labels: Labels = Labels()
     roles: list[str] = []
     challenge: Challenge | None = None
+    auth: AuthRates | None = None       # authorisation signals of its payments (gen/auth.py)
     signals: list[str] = []
     rules: list[str] = []
     params: dict[str, Param] = {}

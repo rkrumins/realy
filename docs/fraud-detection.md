@@ -11,7 +11,7 @@ simulation leaves out of a real payment flow, see
 
 ```mermaid
 flowchart LR
-  E["payment event"] --> F["54 features<br/>stream (Flink) + profile + derived"]
+  E["payment event"] --> F["62 features<br/>stream (Flink) + profile + derived"]
   F --> M["model score<br/>MLP proxy, 0..1"]
   F --> R["CEL rules<br/>every rule evaluated"]
   M --> P{"policy"}
@@ -43,7 +43,7 @@ decisions separately, so a model's quality is never confused with its availabili
 
 ## Features
 
-There are 54 features in `contracts/features/feature_schema.yaml`, which is also the model's tensor
+There are 62 features in `contracts/features/feature_schema.yaml` (schema v2), which is also the model's tensor
 order. A derived feature is either a library function (`fn`) or a **CEL expression** (`expr`) over the
 rules' environment, `event` and `f` (every feature computed so far). For example,
 `{name: cvv_mismatch, source: derived, expr: "!event.cvv_match"}` adds a feature with no Java or Python
@@ -70,8 +70,34 @@ fails when the schema loads. Window semantics, identical in Flink, the gateway a
 | Payee | `payee_inbound_count_1h`, `payee_inbound_sum_24h`, `payee_distinct_senders_24h` | money flowing into one account from many senders | APP scams / mules |
 | Profile (seeded) | `cust_tenure_days`, `cust_segment`, `cust_avg_ticket_usd`, `merch_risk_tier`, `merch_fraud_rate_30d` | slow-moving context | all (calibration) |
 | Derived (at scoring) | `amount_usd`, `is_cnp`, `is_contactless`, `is_atm`, `is_transfer`, `is_foreign`, `dist_from_home_km`, `amount_to_avg_ratio`, `local_hour`, `credit_utilisation_24h` | the event itself relative to the customer | all |
+| Authorisation signals (v2, CEL expressions) | `cvv_mismatch`, `avs_mismatch`, `three_ds_authenticated`, `pin_verified`, `cryptogram_missing`, `scheme_score` | what the authorisation request itself says: the CVV / address check, 3DS result, PIN, chip or token cryptogram, the card network's risk score | card testing, breach, bots (CVV, 3DS, score), counterfeit (no cryptogram), lost / stolen (no PIN) |
+| CVV failures (v2, stream) | `card_cvv_fail_count_1h`, `merch_cvv_fail_count_5m` | repeated CVV failures on a card, or across one merchant (enumeration) | card testing, BIN attacks |
 
 Amounts in stream features are USD **minor** units (cents); `amount_usd` is dollars.
+
+**Authorisation signals** are fields of the payment event, as an issuer receives them with the
+request (`three_ds`, `pin_verified`, `cryptogram_valid`, `scheme_score`, beside `cvv_match` /
+`avs_match`).
+
+How they are drawn (`python/realy/gen/auth.py`):
+- **Rates are data:** each population's rates are scenario `fraud.auth` for genuine payments, and
+  each typology's `auth` block for fraud (contracts/usecases).
+- **Who passes:**
+  - card testers and bots rarely pass 3DS and carry high network scores;
+  - a lost or stolen card has a valid chip but no PIN;
+  - a cloned stripe has no valid cryptogram;
+  - an APP-scam victim's payment looks genuine.
+- **Drawn per event,** from the event id and seed, after the events exist. No other random stream
+  moves, so every pre-existing event keeps its values, and runs before and after stay comparable.
+
+**Schema changes are append-only.** v2 appended eight features, so a v1 vector (54 values) is an
+exact prefix of a v2 one:
+- feature logs, ClickHouse `f_*` columns and the models of earlier runs keep their meaning;
+- older vectors are widened with each new feature's default where needed;
+- models bind their inputs by name (`ProxyModel.bind`, `ProxyScorer`), so a model trained on 54
+  features scores 62-wide vectors exactly as before;
+- warm state is reused only when the stream-feature layout matches (the provenance identity includes
+  it), because the keyed state and the online-store blobs are laid out by it.
 
 **Exactness by topology** (measured by `pulsebench verify`):
 
@@ -638,7 +664,7 @@ How it was decided:
   usually tolerates.
 - **The fraudsters do not adapt.** Campaigns are scripted. They do not probe thresholds, move to
   another merchant after declines, or learn which amounts pass.
-- **The model and rules are small:** a proxy MLP (and GBDT) on 54 features and 17 rules. Production
+- **The model and rules are small:** a proxy MLP (and GBDT) on 62 features and 17 rules. Production
   systems use hundreds to thousands of features, several models by channel or typology, and far
   larger rule estates.
 - **Step-up results are simulated.** CHALLENGE is a real outcome (see [Step-up](#step-up-challenge))

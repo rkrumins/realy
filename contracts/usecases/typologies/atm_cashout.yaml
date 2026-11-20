@@ -9,6 +9,7 @@ mix_weight: 0.03
 labels: {source: investigation, delay_scale: 0.2}
 roles: [withdrawal]
 challenge: {pass: 0.0, fail: 1.0, abandon: 0.0}
+auth: {three_ds_authenticated: 0.0, pin_verified: 0.95, cryptogram_valid: 0.05, scheme_score: {mean: 45, sd: 20}}    # cloned cards with skimmed PINs
 signals: [card_atm_count_1h, term_atm_sum_1h, is_foreign]
 rules: [ATM_VELOCITY, ATM_TERMINAL_CASHOUT, MAGSTRIPE_FOREIGN]
 params:

@@ -36,6 +36,12 @@ class EntryMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CREDENTIAL_ON_FILE: _ClassVar[EntryMode]
     BANK_APP: _ClassVar[EntryMode]
 
+class ThreeDsResult(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    THREE_DS_NONE: _ClassVar[ThreeDsResult]
+    THREE_DS_ATTEMPTED: _ClassVar[ThreeDsResult]
+    THREE_DS_AUTHENTICATED: _ClassVar[ThreeDsResult]
+
 class CardType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     CARD_TYPE_UNSPECIFIED: _ClassVar[CardType]
@@ -65,6 +71,9 @@ ECOM_3DS: EntryMode
 ECOM_NON_3DS: EntryMode
 CREDENTIAL_ON_FILE: EntryMode
 BANK_APP: EntryMode
+THREE_DS_NONE: ThreeDsResult
+THREE_DS_ATTEMPTED: ThreeDsResult
+THREE_DS_AUTHENTICATED: ThreeDsResult
 CARD_TYPE_UNSPECIFIED: CardType
 DEBIT: CardType
 CREDIT: CardType
@@ -72,7 +81,7 @@ PREPAID: CardType
 VIRTUAL: CardType
 
 class TransactionEvent(_message.Message):
-    __slots__ = ("event_id", "event_time_us", "payment_type", "customer_id", "account_id", "card_id", "card_type", "amount_minor", "currency", "amount_usd_minor", "merchant_id", "mcc", "merchant_country", "terminal_id", "channel", "entry_mode", "card_present", "lat", "lon", "device_id", "ip_v4", "ip_country", "ip_asn", "payee_id", "cvv_match", "avs_match", "recurring", "credit_limit_usd")
+    __slots__ = ("event_id", "event_time_us", "payment_type", "customer_id", "account_id", "card_id", "card_type", "amount_minor", "currency", "amount_usd_minor", "merchant_id", "mcc", "merchant_country", "terminal_id", "channel", "entry_mode", "card_present", "lat", "lon", "device_id", "ip_v4", "ip_country", "ip_asn", "payee_id", "cvv_match", "avs_match", "recurring", "credit_limit_usd", "three_ds", "pin_verified", "cryptogram_valid", "scheme_score")
     EVENT_ID_FIELD_NUMBER: _ClassVar[int]
     EVENT_TIME_US_FIELD_NUMBER: _ClassVar[int]
     PAYMENT_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -101,6 +110,10 @@ class TransactionEvent(_message.Message):
     AVS_MATCH_FIELD_NUMBER: _ClassVar[int]
     RECURRING_FIELD_NUMBER: _ClassVar[int]
     CREDIT_LIMIT_USD_FIELD_NUMBER: _ClassVar[int]
+    THREE_DS_FIELD_NUMBER: _ClassVar[int]
+    PIN_VERIFIED_FIELD_NUMBER: _ClassVar[int]
+    CRYPTOGRAM_VALID_FIELD_NUMBER: _ClassVar[int]
+    SCHEME_SCORE_FIELD_NUMBER: _ClassVar[int]
     event_id: int
     event_time_us: int
     payment_type: PaymentType
@@ -129,4 +142,8 @@ class TransactionEvent(_message.Message):
     avs_match: bool
     recurring: bool
     credit_limit_usd: int
-    def __init__(self, event_id: _Optional[int] = ..., event_time_us: _Optional[int] = ..., payment_type: _Optional[_Union[PaymentType, str]] = ..., customer_id: _Optional[int] = ..., account_id: _Optional[int] = ..., card_id: _Optional[int] = ..., card_type: _Optional[_Union[CardType, str]] = ..., amount_minor: _Optional[int] = ..., currency: _Optional[str] = ..., amount_usd_minor: _Optional[int] = ..., merchant_id: _Optional[int] = ..., mcc: _Optional[int] = ..., merchant_country: _Optional[str] = ..., terminal_id: _Optional[int] = ..., channel: _Optional[_Union[Channel, str]] = ..., entry_mode: _Optional[_Union[EntryMode, str]] = ..., card_present: _Optional[bool] = ..., lat: _Optional[float] = ..., lon: _Optional[float] = ..., device_id: _Optional[int] = ..., ip_v4: _Optional[int] = ..., ip_country: _Optional[str] = ..., ip_asn: _Optional[int] = ..., payee_id: _Optional[int] = ..., cvv_match: _Optional[bool] = ..., avs_match: _Optional[bool] = ..., recurring: _Optional[bool] = ..., credit_limit_usd: _Optional[int] = ...) -> None: ...
+    three_ds: ThreeDsResult
+    pin_verified: bool
+    cryptogram_valid: bool
+    scheme_score: int
+    def __init__(self, event_id: _Optional[int] = ..., event_time_us: _Optional[int] = ..., payment_type: _Optional[_Union[PaymentType, str]] = ..., customer_id: _Optional[int] = ..., account_id: _Optional[int] = ..., card_id: _Optional[int] = ..., card_type: _Optional[_Union[CardType, str]] = ..., amount_minor: _Optional[int] = ..., currency: _Optional[str] = ..., amount_usd_minor: _Optional[int] = ..., merchant_id: _Optional[int] = ..., mcc: _Optional[int] = ..., merchant_country: _Optional[str] = ..., terminal_id: _Optional[int] = ..., channel: _Optional[_Union[Channel, str]] = ..., entry_mode: _Optional[_Union[EntryMode, str]] = ..., card_present: _Optional[bool] = ..., lat: _Optional[float] = ..., lon: _Optional[float] = ..., device_id: _Optional[int] = ..., ip_v4: _Optional[int] = ..., ip_country: _Optional[str] = ..., ip_asn: _Optional[int] = ..., payee_id: _Optional[int] = ..., cvv_match: _Optional[bool] = ..., avs_match: _Optional[bool] = ..., recurring: _Optional[bool] = ..., credit_limit_usd: _Optional[int] = ..., three_ds: _Optional[_Union[ThreeDsResult, str]] = ..., pin_verified: _Optional[bool] = ..., cryptogram_valid: _Optional[bool] = ..., scheme_score: _Optional[int] = ...) -> None: ...

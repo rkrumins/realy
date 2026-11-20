@@ -42,6 +42,11 @@ INTERNAL: dict[str, tuple[np.dtype, object]] = {
     "avs_match": (np.dtype(bool), True),
     "recurring": (np.dtype(bool), False),
     "credit_limit_usd": (np.dtype(np.uint32), 0),
+    # authorisation signals (gen/auth.py): filled in by finalize, after event ids exist
+    "three_ds": (np.dtype(np.int8), 0),
+    "pin_verified": (np.dtype(bool), False),
+    "cryptogram_valid": (np.dtype(bool), False),
+    "scheme_score": (np.dtype(np.uint32), 0),
     # ground truth (never serialized into the event)
     "is_fraud": (np.dtype(bool), False),
     "fraud_type": (np.dtype(np.int8), 0),
@@ -111,14 +116,17 @@ class EventBatch:
         return len(self.payloads)
 
 
-def finalize(chunk: dict[str, np.ndarray], gen_id: int, seq0: int) -> EventBatch:
-    """Sort a merged chunk by (event_time, order), assign event ids, serialize."""
+def finalize(chunk: dict[str, np.ndarray], gen_id: int, seq0: int, auth=None) -> EventBatch:
+    """Sort a merged chunk by (event_time, order), assign event ids, draw the authorisation signals
+    (`auth`: gen.auth.AuthSignals; None leaves them at their defaults), serialize."""
     g = geo()
     n = chunk["event_time_us"].shape[0]
     idx = np.lexsort((chunk["order"], chunk["event_time_us"]))
     c = take(chunk, idx)
     seq = np.arange(seq0, seq0 + n, dtype=np.uint64)
     event_ids = (np.uint64(gen_id) << np.uint64(48)) | seq
+    if auth is not None:
+        c.update(auth.draw(c, event_ids))
     countries = np.asarray(g.countries + [""], dtype="U2")  # index -1 -> ""
     currencies = np.asarray(g.currency, dtype="U3")
     merchant_country = countries[c["merchant_country_idx"]]
@@ -134,6 +142,8 @@ def finalize(chunk: dict[str, np.ndarray], gen_id: int, seq0: int) -> EventBatch
         "device_id": c["device_id"], "ip_v4": c["ip_v4"], "ip_country": ip_country, "ip_asn": c["ip_asn"],
         "payee_id": c["payee_id"], "cvv_match": c["cvv_match"], "avs_match": c["avs_match"], "recurring": c["recurring"],
         "credit_limit_usd": c["credit_limit_usd"],
+        "three_ds": c["three_ds"].astype(np.int32), "pin_verified": c["pin_verified"],
+        "cryptogram_valid": c["cryptogram_valid"], "scheme_score": c["scheme_score"],
         "is_fraud": c["is_fraud"], "fraud_type": c["fraud_type"].astype(np.int32), "campaign_id": c["campaign_id"],
     }
     payloads = serialize_events(cols, n)

@@ -80,6 +80,7 @@ Wall-clock target rate as a function of time since run start.
 | `friendly_fraud_per_1k` | `float` | `0.2` | legit events charged back (label noise) |
 | `chargeback_delay_days` | `tuple[float, float]` | `(1.0, 45.0)` |  |
 | `challenge` | `ChallengeSpec` | `(object)` |  |
+| `auth` | `AuthSpec` | `(object)` |  |
 
 Default `mix`: `card_testing` 0.22, `account_takeover` 0.15, `lost_stolen` 0.12, `counterfeit` 0.1, `merchant_breach` 0.08, `atm_cashout` 0.03, `app_scam_mule` 0.12, `bust_out` 0.06, `bot_ecom` 0.12
 

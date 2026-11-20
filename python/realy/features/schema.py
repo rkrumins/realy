@@ -69,6 +69,28 @@ class FeatureSchema:
     def profile_features(self, entity: str) -> list[FeatureSpec]:
         return [f for f in self.features if f.source == "profile" and f.entity == entity]
 
+    def pad(self, X: "np.ndarray") -> "np.ndarray":
+        """Feature rows of an earlier, narrower schema (features are only ever appended) widened to this
+        one with each new feature's declared default."""
+        import numpy as np
+        X = np.asarray(X, np.float32)
+        n = len(self.features)
+        if X.ndim != 2 or X.shape[1] >= n:
+            return X
+        tail = np.asarray([f.default for f in self.features[X.shape[1]:]], np.float32)
+        return np.hstack([X, np.repeat(tail[None, :], X.shape[0], axis=0)])
+
+    def state_layout(self) -> str:
+        """Fingerprint of everything the keyed stream state and the online-store blobs are laid out by:
+        the stream features (entity, aggregation, value, filter, window, granularity, in order) and the
+        filters they use. Warm state built under another layout is unusable (runner provenance);
+        derived and profile features do not touch it."""
+        import hashlib
+        import json
+        spec = [[f.name, f.entity, f.agg, f.value, f.filter, self.filters.get(f.filter or "", ""), f.window_us,
+                 f.granularity_us, f.default] for f in self.stream_features()]
+        return hashlib.sha256(json.dumps(spec).encode()).hexdigest()[:12]
+
     def stream_entities(self) -> list[str]:
         seen: list[str] = []
         for f in self.features:

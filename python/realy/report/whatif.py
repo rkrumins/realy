@@ -46,7 +46,7 @@ def load(run_dir: Path, sample_mod: int = 1) -> dict[str, Any]:
     ei = np.argsort(e_id)[pick(e_id)]
     cols = [c for c in events.column_names if c not in ("t_intended_us", "backfill")]
     ev_cols = {c: events[c].to_numpy(zero_copy_only=False)[ei].tolist() for c in cols}
-    vals = feats["values"].to_pylist()
+    vals = load_schema().pad(np.asarray(feats["values"].to_pylist(), np.float32)).tolist()   # older runs: narrower
     return {
         "ids": ids, "events": [{c: ev_cols[c][i] for c in cols} for i in range(ids.size)],
         "features": [vals[j] for j in fi.tolist()],

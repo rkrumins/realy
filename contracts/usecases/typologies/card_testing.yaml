@@ -11,6 +11,7 @@ mix_weight: 0.22             # default share of background fraud (fraud.backgrou
 labels: {source: chargeback, delay_scale: 1.0}
 roles: [test, cash_out]
 challenge: {pass: 0.05, fail: 0.95, abandon: 0.0}
+auth: {three_ds_authenticated: 0.03, pin_verified: 0.0, cryptogram_valid: 0.0, scheme_score: {mean: 62, sd: 18}}   # stolen card numbers: no 3DS, no chip
 signals: [card_small_cnp_count_10m, card_count_1m, merch_small_cnp_count_5m, dev_distinct_cards_1h, ip_distinct_cards_1h]
 rules: [CARD_TESTING, CARD_TESTING_MERCHANT, VELOCITY_CARD_5M]
 params:

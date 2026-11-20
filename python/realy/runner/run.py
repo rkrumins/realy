@@ -581,6 +581,12 @@ class _Run:
         pids = [{"role": role, "index": idx, "pid": p.pid} for role, idx, p in self.procs]
         (self.run_dir / "pids.json").write_text(json.dumps({"driver": os.getpid(), "children": pids}, indent=1))
 
+    def state_identity(self) -> str:
+        """What the feature state must have been built for to be reused: this world AND this stream
+        feature layout (a schema change re-lays out keyed state and online-store blobs)."""
+        from ..features import load_schema
+        return f"{self.world.content_hash}/fs-{load_schema().state_layout()}"
+
     def state_lineage(self) -> dict[str, Any]:
         """Which runs' events the feature state this run reads was built from, recorded before this
         run sends any: {"mode": fresh|warm|none, "inherited_runs": n, "inherited": [last run ids],
@@ -639,7 +645,7 @@ class _Run:
             st.finish("profiles", f"skipped: {e}", "warn")
         self.check("prepare")
         st.start("provenance", "which world built the running feature state?")
-        dec = world_switch_state(sc, self.world.content_hash, log, ep.flink_rest)
+        dec = world_switch_state(sc, self.state_identity(), log, ep.flink_rest)
         why_verify = verify_needs_fresh(sc, dec, self.h.verifiable) if not dec.get("reason") else None
         if why_verify:
             log(f"exact verification requested: {why_verify}: starting Flink state fresh")
@@ -658,7 +664,7 @@ class _Run:
         self.base_tps = prof.tps if prof.kind != "step" else (prof.start_tps or prof.tps)
         self.ts = auto_time_scale(self.world, self.base_tps) if sc.traffic.time_scale == "auto" else float(sc.traffic.time_scale)
         log(f"time scale {self.ts:.1f} sim-s per wall-s (natural rate {natural_rate_total(self.world):.1f} ev/sim-s)")
-        apply_topology(sc, self.run_id, ep, log, world=self.world.content_hash, startup=st)
+        apply_topology(sc, self.run_id, ep, log, world=self.state_identity(), startup=st)
         self.manifest["state"] = self.state_lineage()
         self.write_manifest()
         from .flink import job_progress
@@ -1058,7 +1064,13 @@ def world_switch_decision(prev_world: str | None, world: str, flink_state: str, 
     if prev_world is None:
         reason = f"the pipeline state's world is unknown ({why_unknown or 'no provenance'})"
     else:
-        reason = f"pipeline state belongs to world {prev_world[:12]}, this run uses {world[:12]}"
+        pw, _, pl = prev_world.partition("/")
+        w, _, lay = world.partition("/")
+        if pw == w and pl != lay:
+            reason = (f"pipeline state was built with another feature layout ({pl or 'unrecorded'}, this run uses "
+                      f"{lay}): the stream features changed")
+        else:
+            reason = f"pipeline state belongs to world {pw[:12]}, this run uses {w[:12]}"
     return "fresh", backfill_days or default_backfill_days, reason
 
 

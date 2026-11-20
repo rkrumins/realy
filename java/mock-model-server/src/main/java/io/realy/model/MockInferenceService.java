@@ -54,14 +54,16 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
     private static final class Req {
         final float[] rows;
         final int n;
+        final int width;
         final StreamObserver<ModelInferResponse> obs;
         final long enqueuedUs;
         final String outputName;
         final String id;
 
-        Req(float[] rows, int n, StreamObserver<ModelInferResponse> obs, String outputName, String id) {
+        Req(float[] rows, int n, int width, StreamObserver<ModelInferResponse> obs, String outputName, String id) {
             this.rows = rows;
             this.n = n;
+            this.width = width;
             this.obs = obs;
             this.outputName = outputName;
             this.id = id;
@@ -75,8 +77,17 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
         long firstUs;
     }
 
+    /** The model reading rows laid out as the feature schema on the classpath (contracts). */
+    static ProxyModel bindToSchema(ProxyModel m) {
+        var names = io.realy.scoring.features.FeatureSchema.load().names();
+        if (!m.featureNames.isEmpty() && m.featureNames.stream().noneMatch(names::contains)) {
+            throw new IllegalArgumentException("model " + m.version + " shares no input with the feature schema");
+        }
+        return m.bind(names);
+    }
+
     public MockInferenceService(ProxyModel model, ModelServerConfig cfg, StageMetrics metrics, long seed) {
-        this.model = model;
+        this.model = bindToSchema(model);
         this.metrics = metrics;
         this.seed = seed;
         configure(cfg);
@@ -96,10 +107,9 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
             } catch (java.io.IOException | RuntimeException e) {
                 throw new IllegalArgumentException("cannot load model weights " + wp + ": " + e.getMessage(), e);
             }
-            if (model != null && m.nFeatures != model.nFeatures) {
-                throw new IllegalArgumentException("model " + m.version + " takes " + m.nFeatures + " features, serving "
-                        + model.nFeatures);
-            }
+            // inputs are matched to the live feature schema by name: a model trained on fewer (or other)
+            // features serves today's vectors; one sharing no input with the schema is rejected
+            m = bindToSchema(m);
             model = m;
             weightsPath = wp;
         }
@@ -133,7 +143,7 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
     public void modelMetadata(ModelMetadataRequest r, StreamObserver<ModelMetadataResponse> o) {
         o.onNext(ModelMetadataResponse.newBuilder().setName(model.name).addVersions(model.version).setPlatform("realy_mock")
                 .addInputs(ModelMetadataResponse.TensorMetadata.newBuilder().setName("input__0").setDatatype("FP32")
-                        .addShape(-1).addShape(model.nFeatures))
+                        .addShape(-1).addShape(model.rowWidth()))
                 .addOutputs(ModelMetadataResponse.TensorMetadata.newBuilder().setName("output__0").setDatatype("FP32")
                         .addShape(-1).addShape(1))
                 .build());
@@ -149,21 +159,14 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
         }
         var in = req.getInputs(0);
         int n = in.getShapeCount() > 0 ? (int) in.getShape(0) : 1;
-        int f = in.getShapeCount() > 1 ? (int) in.getShape(1) : model.nFeatures;
-        float[] rows = new float[n * model.nFeatures];
+        int f = in.getShapeCount() > 1 ? (int) in.getShape(1) : model.rowWidth();
+        float[] rows = new float[n * f];
         if (req.getRawInputContentsCount() > 0) {
             ByteBuffer bb = req.getRawInputContents(0).asReadOnlyByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
-            for (int r = 0; r < n; r++) {
-                for (int i = 0; i < f; i++) {
-                    float v = bb.getFloat();
-                    if (i < model.nFeatures) rows[r * model.nFeatures + i] = v;
-                }
-            }
+            for (int i = 0; i < n * f; i++) rows[i] = bb.getFloat();
         } else {
             var c = in.getContents();
-            for (int r = 0; r < n; r++) {
-                for (int i = 0; i < f && i < model.nFeatures; i++) rows[r * model.nFeatures + i] = c.getFp32Contents(r * f + i);
-            }
+            for (int i = 0; i < n * f; i++) rows[i] = c.getFp32Contents(i);
         }
         // Deterministic fault injection keyed by the input tensor.
         var s = serviceTime.sample(SplitMix64.of(seed, Hashing.fnv1a64(rows), 3));
@@ -183,7 +186,7 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
             return;
         }
         String outName = req.getOutputsCount() > 0 ? req.getOutputs(0).getName() : "output__0";
-        enqueue(new Req(rows, n, obs, outName, req.getId()));
+        enqueue(new Req(rows, n, f, obs, outName, req.getId()));
     }
 
     private void enqueue(Req r) {
@@ -256,7 +259,7 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
         metrics.inc("batches");
         for (Req r : b.reqs) {
             ByteBuffer out = ByteBuffer.allocate(4 * r.n).order(ByteOrder.LITTLE_ENDIAN);
-            for (int i = 0; i < r.n; i++) out.putFloat(model.score(r.rows, i * model.nFeatures));
+            for (int i = 0; i < r.n; i++) out.putFloat(model.score(r.rows, i * r.width, r.width));
             out.flip();
             long queueUs = startUs - r.enqueuedUs;
             metrics.recordUs("model_server_queue", queueUs);

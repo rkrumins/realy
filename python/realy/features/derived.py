@@ -14,15 +14,22 @@ CHANNEL = ["CHANNEL_UNSPECIFIED", "POS", "ECOM", "ATM", "MOTO", "IN_APP", "ONLIN
 ENTRY_MODE = ["ENTRY_MODE_UNSPECIFIED", "CHIP", "CONTACTLESS", "MAGSTRIPE", "MANUAL", "WALLET_TOKEN", "ECOM_3DS",
               "ECOM_NON_3DS", "CREDENTIAL_ON_FILE", "BANK_APP"]
 CARD_TYPE = ["CARD_TYPE_UNSPECIFIED", "DEBIT", "CREDIT", "PREPAID", "VIRTUAL"]
-ENUMS = {"payment_type": PAYMENT_TYPE, "channel": CHANNEL, "entry_mode": ENTRY_MODE, "card_type": CARD_TYPE}
+THREE_DS = ["THREE_DS_NONE", "THREE_DS_ATTEMPTED", "THREE_DS_AUTHENTICATED"]
+ENUMS = {"payment_type": PAYMENT_TYPE, "channel": CHANNEL, "entry_mode": ENTRY_MODE, "card_type": CARD_TYPE,
+         "three_ds": THREE_DS}
 INT_FIELDS = ("event_id", "event_time_us", "customer_id", "account_id", "card_id", "amount_minor", "amount_usd_minor",
-              "merchant_id", "mcc", "terminal_id", "device_id", "ip_v4", "ip_asn", "payee_id", "credit_limit_usd")
-BOOL_FIELDS = ("card_present", "cvv_match", "avs_match", "recurring")
+              "merchant_id", "mcc", "terminal_id", "device_id", "ip_v4", "ip_asn", "payee_id", "credit_limit_usd",
+              "scheme_score")
+BOOL_FIELDS = ("card_present", "cvv_match", "avs_match", "recurring", "pin_verified", "cryptogram_valid")
+# fields added after the first release: event logs written before them read as the proto default
+LATER_FIELDS = {"three_ds": 0, "pin_verified": False, "cryptogram_valid": False, "scheme_score": 0}
 
 
 def event_view(ev: dict) -> dict[str, Any]:
     """CEL `event` binding: enums by name, integers as int, bools, doubles, strings."""
     v: dict[str, Any] = {}
+    if any(k not in ev for k in LATER_FIELDS):
+        ev = {**LATER_FIELDS, **ev}
     for k in INT_FIELDS:
         v[k] = int(ev[k])
     for k in BOOL_FIELDS:

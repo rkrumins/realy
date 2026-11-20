@@ -98,3 +98,49 @@ def test_runs_read_their_own_snapshot(tmp_path):
     (tmp_path / "usecases.json").write_text(json.dumps(snap))
     assert "investment_scam" not in uc.for_run(tmp_path).by_name           # the run predates the typology
     assert "investment_scam" in uc.for_run(None).by_name
+
+
+def test_authorisation_signals_follow_their_population_and_move_nothing_else():
+    """The auth signals are drawn after the events exist, from the event id: every other column of
+    every event is exactly what it was without them, and each population carries its own signature."""
+    from realy.gen import Generator
+    from realy.scenario import load_scenario
+    from realy.world import load_or_build
+    sc = load_scenario("mixed-realistic")
+    w = load_or_build(sc.world, sc.seed, sc.world_dir)
+    t0 = 1_800_000_000_000_000
+    g1 = Generator(w, sc, 0, 1)
+    g2 = Generator(w, sc, 0, 1)
+    g2.auth = None                                    # the generator before authorisation signals
+    for g in (g1, g2):
+        for i in range(20):
+            g.schedule_campaign("card_testing", t0 + i * 1_000_000)
+            g.schedule_campaign("lost_stolen", t0 + i * 1_000_000)
+    a = g1.generate(40_000, t0, t0 + 2 * 86_400_000_000).columns
+    b = g2.generate(40_000, t0, t0 + 2 * 86_400_000_000).columns
+    new = {"three_ds", "pin_verified", "cryptogram_valid", "scheme_score"}
+    for k in a:
+        if k not in new:
+            assert np.array_equal(np.asarray(a[k]), np.asarray(b[k])), k
+    reg = uc.registry()
+    fraud, ft = np.asarray(a["is_fraud"]), np.asarray(a["fraud_type"])
+    score, em, pt = np.asarray(a["scheme_score"]), np.asarray(a["entry_mode"]), np.asarray(a["payment_type"])
+    legit_card = ~fraud & np.isin(pt, [1, 2])
+    tester = fraud & (ft == reg.by_name["card_testing"].id)
+    stolen = fraud & (ft == reg.by_name["lost_stolen"].id)
+    assert np.median(score[legit_card]) < 25 < 50 < np.median(score[tester])          # the network sees testers
+    assert np.all(score[pt == 3] == 0)                                                 # transfers carry no score
+    chip_legit = legit_card & (em == 1)
+    assert 0.8 < np.asarray(a["pin_verified"])[chip_legit].mean() < 0.9                # 0.85
+    assert np.asarray(a["pin_verified"])[stolen & (em == 1)].mean() < 0.1 if (stolen & (em == 1)).any() else True
+    assert not np.asarray(a["cryptogram_valid"])[em == 3].any()                        # magstripe never
+    three = np.asarray(a["three_ds"])
+    assert set(np.unique(three[em != 6]).tolist()) <= {0}                              # 3DS only on 3DS checkouts
+    assert (three[(em == 6) & ~fraud] == 2).mean() > 0.9
+    # deterministic: the same events get the same signals
+    g3 = Generator(w, sc, 0, 1)
+    for i in range(20):
+        g3.schedule_campaign("card_testing", t0 + i * 1_000_000)
+        g3.schedule_campaign("lost_stolen", t0 + i * 1_000_000)
+    c = g3.generate(40_000, t0, t0 + 2 * 86_400_000_000).columns
+    assert all(np.array_equal(np.asarray(a[k]), np.asarray(c[k])) for k in new)

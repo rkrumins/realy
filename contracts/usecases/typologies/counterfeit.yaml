@@ -9,6 +9,7 @@ mix_weight: 0.10
 labels: {source: customer_report, delay_scale: 0.5}
 roles: [genuine_anchor, clone_purchase, clone_withdrawal]
 challenge: {pass: 0.05, fail: 0.95, abandon: 0.0}
+auth: {three_ds_authenticated: 0.0, pin_verified: 0.10, cryptogram_valid: 0.03, scheme_score: {mean: 55, sd: 18}}    # cloned stripe: no valid cryptogram
 signals: [card_geo_speed_kmh, is_foreign, dist_from_home_km]
 rules: [IMPOSSIBLE_TRAVEL, MAGSTRIPE_FOREIGN]
 params:

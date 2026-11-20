@@ -9,6 +9,7 @@ mix_weight: 0.08
 labels: {source: chargeback, delay_scale: 1.0}
 roles: [compromised_card_use]
 challenge: {pass: 0.05, fail: 0.95, abandon: 0.0}
+auth: {three_ds_authenticated: 0.05, pin_verified: 0.0, cryptogram_valid: 0.0, scheme_score: {mean: 50, sd: 20}}    # breached card data used online
 signals: [dev_distinct_cards_1h, dev_distinct_customers_24h, ip_distinct_cards_1h, cust_device_novel]
 rules: [BOT_DEVICE_MANY_CARDS]
 params:

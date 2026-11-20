@@ -38,6 +38,13 @@ enum EntryMode {
   BANK_APP = 9;
 }
 
+// Result of 3-D Secure (EMV 3DS) cardholder authentication carried in an online card authorisation.
+enum ThreeDsResult {
+  THREE_DS_NONE = 0;            // no 3DS: not an online payment, or the merchant did not try
+  THREE_DS_ATTEMPTED = 1;       // the merchant attempted it; the cardholder was not authenticated
+  THREE_DS_AUTHENTICATED = 2;   // authenticated (frictionless or after a challenge): liability shifts
+}
+
 enum CardType {
   CARD_TYPE_UNSPECIFIED = 0;
   DEBIT = 1;
@@ -85,4 +92,10 @@ message TransactionEvent {
   bool avs_match = 26;
   bool recurring = 27;
   uint32 credit_limit_usd = 28;  // card credit limit (0 for debit)
+
+  // Authorisation signals the issuer receives with the request (alongside cvv_match / avs_match).
+  ThreeDsResult three_ds = 29;   // online card payments
+  bool pin_verified = 30;        // the PIN was entered and verified (chip, ATM)
+  bool cryptogram_valid = 31;    // EMV chip / network-token cryptogram verified (false for magstripe, keyed)
+  uint32 scheme_score = 32;      // card network risk score 0-99 carried in the request (0 = none)
 }

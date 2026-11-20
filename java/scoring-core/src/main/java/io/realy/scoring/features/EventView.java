@@ -41,6 +41,10 @@ public final class EventView {
         m.put("avs_match", e.getAvsMatch());
         m.put("recurring", e.getRecurring());
         m.put("credit_limit_usd", Integer.toUnsignedLong(e.getCreditLimitUsd()));
+        m.put("three_ds", e.getThreeDs().name());
+        m.put("pin_verified", e.getPinVerified());
+        m.put("cryptogram_valid", e.getCryptogramValid());
+        m.put("scheme_score", Integer.toUnsignedLong(e.getSchemeScore()));
         return m;
     }
 

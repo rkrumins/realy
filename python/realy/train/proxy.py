@@ -67,7 +67,7 @@ def load_training_set(run_dirs: list[Path], labels: str = "observed", maturity_d
         pos = np.clip(np.searchsorted(eid[order], fid), 0, eid.size - 1)
         ok = eid[order][pos] == fid
         idx = order[pos[ok]]
-        X = np.asarray(f["values"].to_pylist(), np.float32)[ok]
+        X = load_schema().pad(np.asarray(f["values"].to_pylist(), np.float32))[ok]   # older runs: narrower
         # Benchmark event ids are deterministic per world+seed: the same event replayed in several runs
         # must not appear on both sides of the train/test split (leakage). Keep its first occurrence.
         ids = fid[ok]

@@ -12,6 +12,7 @@ mix_weight: 0.0
 labels: {source: customer_report, delay_scale: 1.0}
 roles: [first_transfer, escalating_transfer]
 challenge: {pass: 0.9, fail: 0.0, abandon: 0.1}
+auth: {three_ds_authenticated: 0.95, pin_verified: 0.85, cryptogram_valid: 0.999, scheme_score: {mean: 15, sd: 10}} # the victim pays: genuine signals
 signals: [cust_payee_novel, amount_usd, amount_to_avg_ratio, is_transfer]
 rules: [APP_SCAM_NEW_PAYEE]
 victims: {kind: customer, count: 1}

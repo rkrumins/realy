@@ -304,26 +304,37 @@ data:
     \  IN_APP = 5;\n  ONLINE_BANKING = 6;\n}\n\nenum EntryMode {\n  ENTRY_MODE_UNSPECIFIED\
     \ = 0;\n  CHIP = 1;\n  CONTACTLESS = 2;\n  MAGSTRIPE = 3;\n  MANUAL = 4;\n  WALLET_TOKEN\
     \ = 5;\n  ECOM_3DS = 6;\n  ECOM_NON_3DS = 7;\n  CREDENTIAL_ON_FILE = 8;\n  BANK_APP\
-    \ = 9;\n}\n\nenum CardType {\n  CARD_TYPE_UNSPECIFIED = 0;\n  DEBIT = 1;\n  CREDIT\
-    \ = 2;\n  PREPAID = 3;\n  VIRTUAL = 4;\n}\n\nmessage TransactionEvent {\n  //\
-    \ Globally unique, deterministic: (generator_id << 48) | sequence.\n  fixed64\
-    \ event_id = 1;\n  // Event (simulation) time, epoch microseconds. Feature windows\
-    \ use this clock.\n  sfixed64 event_time_us = 2;\n  PaymentType payment_type =\
-    \ 3;\n\n  uint64 customer_id = 4;\n  uint64 account_id = 5;\n  uint64 card_id\
-    \ = 6;            // 0 when not a card payment\n  CardType card_type = 7;\n\n\
-    \  int64 amount_minor = 8;        // in `currency` minor units\n  string currency\
-    \ = 9;           // ISO 4217\n  int64 amount_usd_minor = 10;   // normalised amount\
-    \ (USD cents)\n\n  uint64 merchant_id = 11;       // 0 for transfers\n  uint32\
-    \ mcc = 12;               // ISO 18245\n  string merchant_country = 13;  // ISO\
-    \ 3166-1 alpha-2\n  uint64 terminal_id = 14;       // POS/ATM terminal, 0 for\
-    \ card-not-present\n\n  Channel channel = 15;\n  EntryMode entry_mode = 16;\n\
-    \  bool card_present = 17;\n\n  double lat = 18;               // transaction\
+    \ = 9;\n}\n\n// Result of 3-D Secure (EMV 3DS) cardholder authentication carried\
+    \ in an online card authorisation.\nenum ThreeDsResult {\n  THREE_DS_NONE = 0;\
+    \            // no 3DS: not an online payment, or the merchant did not try\n \
+    \ THREE_DS_ATTEMPTED = 1;       // the merchant attempted it; the cardholder was\
+    \ not authenticated\n  THREE_DS_AUTHENTICATED = 2;   // authenticated (frictionless\
+    \ or after a challenge): liability shifts\n}\n\nenum CardType {\n  CARD_TYPE_UNSPECIFIED\
+    \ = 0;\n  DEBIT = 1;\n  CREDIT = 2;\n  PREPAID = 3;\n  VIRTUAL = 4;\n}\n\nmessage\
+    \ TransactionEvent {\n  // Globally unique, deterministic: (generator_id << 48)\
+    \ | sequence.\n  fixed64 event_id = 1;\n  // Event (simulation) time, epoch microseconds.\
+    \ Feature windows use this clock.\n  sfixed64 event_time_us = 2;\n  PaymentType\
+    \ payment_type = 3;\n\n  uint64 customer_id = 4;\n  uint64 account_id = 5;\n \
+    \ uint64 card_id = 6;            // 0 when not a card payment\n  CardType card_type\
+    \ = 7;\n\n  int64 amount_minor = 8;        // in `currency` minor units\n  string\
+    \ currency = 9;           // ISO 4217\n  int64 amount_usd_minor = 10;   // normalised\
+    \ amount (USD cents)\n\n  uint64 merchant_id = 11;       // 0 for transfers\n\
+    \  uint32 mcc = 12;               // ISO 18245\n  string merchant_country = 13;\
+    \  // ISO 3166-1 alpha-2\n  uint64 terminal_id = 14;       // POS/ATM terminal,\
+    \ 0 for card-not-present\n\n  Channel channel = 15;\n  EntryMode entry_mode =\
+    \ 16;\n  bool card_present = 17;\n\n  double lat = 18;               // transaction\
     \ location (terminal, or IP geo for remote)\n  double lon = 19;\n\n  uint64 device_id\
     \ = 20;         // 0 when no device (card-present)\n  uint32 ip_v4 = 21;     \
     \        // 0 when no IP\n  string ip_country = 22;\n  uint32 ip_asn = 23;\n\n\
     \  uint64 payee_id = 24;          // transfers only\n\n  bool cvv_match = 25;\n\
     \  bool avs_match = 26;\n  bool recurring = 27;\n  uint32 credit_limit_usd = 28;\
-    \  // card credit limit (0 for debit)\n}\n"
+    \  // card credit limit (0 for debit)\n\n  // Authorisation signals the issuer\
+    \ receives with the request (alongside cvv_match / avs_match).\n  ThreeDsResult\
+    \ three_ds = 29;   // online card payments\n  bool pin_verified = 30;        //\
+    \ the PIN was entered and verified (chip, ATM)\n  bool cryptogram_valid = 31;\
+    \    // EMV chip / network-token cryptogram verified (false for magstripe, keyed)\n\
+    \  uint32 scheme_score = 32;      // card network risk score 0-99 carried in the\
+    \ request (0 = none)\n}\n"
   realy__scoring__v1__decision.proto: "syntax = \"proto3\";\n\npackage realy.scoring.v1;\n\
     \nimport \"realy/payments/v1/transaction.proto\";\nimport \"realy/features/v1/features.proto\"\
     ;\nimport \"realy/bench/v1/trace.proto\";\n\noption java_package = \"io.realy.contracts.scoring.v1\"\

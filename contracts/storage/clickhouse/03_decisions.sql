@@ -2,7 +2,7 @@
 
 -- Identity of a decision is (run_id, event_id): benchmark event ids are deterministic per world+seed and
 -- repeat across runs (production: run_id is empty and event_id is globally unique).
--- Feature schema version 1: 54 features -> f_* columns (features_raw keeps the exact tensor).
+-- Feature schema version 2: 62 features -> f_* columns (features_raw keeps the exact tensor).
 -- Re-applying this file is safe and upgrades an existing install: the Kafka engine table and its view
 -- hold no data (the consumer group's offsets live in Kafka, so ingestion resumes where it stopped).
 DROP VIEW IF EXISTS realy.decisions_mv;
@@ -164,6 +164,14 @@ CREATE TABLE IF NOT EXISTS realy.decisions (
   `f_amount_to_avg_ratio` Float32,
   `f_local_hour` Float32,
   `f_credit_utilisation_24h` Float32,
+  `f_cvv_mismatch` Float32,
+  `f_avs_mismatch` Float32,
+  `f_three_ds_authenticated` Float32,
+  `f_pin_verified` Float32,
+  `f_cryptogram_missing` Float32,
+  `f_scheme_score` Float32,
+  `f_card_cvv_fail_count_1h` Float32,
+  `f_merch_cvv_fail_count_5m` Float32,
   run_id LowCardinality(String),
   gen_id UInt32,
   seq UInt64,
@@ -205,6 +213,68 @@ ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `rule_actions` Array(LowCar
 ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_entity` Array(LowCardinality(String));
 ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_age_us` Array(Int64);
 ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_found` Array(UInt8);
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_count_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_count_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_amount_sum_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_amount_avg_30d` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_distinct_countries_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_device_novel` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_payee_novel` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_ip_country_novel` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_transfer_count_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_transfer_sum_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_count_1m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_count_5m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_count_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_count_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_amount_sum_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_amount_sum_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_amount_max_7d` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_small_cnp_count_10m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_distinct_merchants_10m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_distinct_merchants_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_contactless_count_30m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_contactless_sum_30m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_atm_count_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_atm_sum_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_geo_speed_kmh` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_secs_since_last` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_dev_count_5m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_dev_distinct_cards_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_dev_distinct_customers_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_ip_count_5m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_ip_distinct_cards_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_merch_count_1m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_merch_small_cnp_count_5m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_merch_amount_sum_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_term_count_5m` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_term_atm_sum_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_payee_inbound_count_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_payee_inbound_sum_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_payee_distinct_senders_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_tenure_days` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_segment` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cust_avg_ticket_usd` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_merch_risk_tier` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_merch_fraud_rate_30d` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_amount_usd` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_is_cnp` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_is_contactless` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_is_atm` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_is_transfer` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_is_foreign` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_dist_from_home_km` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_amount_to_avg_ratio` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_local_hour` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_credit_utilisation_24h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cvv_mismatch` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_avs_mismatch` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_three_ds_authenticated` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_pin_verified` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_cryptogram_missing` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_scheme_score` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_card_cvv_fail_count_1h` Float32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_merch_cvv_fail_count_5m` Float32;
 ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `lat_feature_store_write_us`;
 ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `lat_audit_ack_us`;
 ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `lat_sink_us`;
@@ -280,6 +350,14 @@ SELECT
   `features.values`[52] AS `f_amount_to_avg_ratio`,
   `features.values`[53] AS `f_local_hour`,
   `features.values`[54] AS `f_credit_utilisation_24h`,
+  `features.values`[55] AS `f_cvv_mismatch`,
+  `features.values`[56] AS `f_avs_mismatch`,
+  `features.values`[57] AS `f_three_ds_authenticated`,
+  `features.values`[58] AS `f_pin_verified`,
+  `features.values`[59] AS `f_cryptogram_missing`,
+  `features.values`[60] AS `f_scheme_score`,
+  `features.values`[61] AS `f_card_cvv_fail_count_1h`,
+  `features.values`[62] AS `f_merch_cvv_fail_count_5m`,
   `trace.run_id` AS run_id, `trace.gen_id` AS gen_id, `trace.seq` AS seq,
   `trace.t_intended_us` AS t_intended_us, `trace.t_sent_us` AS t_sent_us,
   toInt32(arraySum(arrayFilter((d, s) -> s = 11, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_queue_wait_us`,

@@ -116,7 +116,11 @@ FROM realy.events_queue WHERE length(_error) = 0;
         f"toInt32(arraySum(arrayFilter((d, s) -> s = {k}, `trace.spans.dur_us`, `trace.spans.stage`))) AS `lat_{n}_us`"
         for k, n in STAGES.items())
     dq_event = ",\n  ".join(f"`event.{c}` {t}" for c, t in EVENT_COLS if c != "event_id")
+    # features are only ever appended (schema v2 added eight): every f_* column is (re)declared so an
+    # install created under an earlier schema gains the new ones; existing rows read the column default
     migrations = "\n".join([f"ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `{c}` {t};" for c, t in ADDED_COLUMNS]
+                           + [f"ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_{f.name}` Float32;"
+                              for f in schema.features]
                            + [f"ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `{c}`;" for c in DROPPED_COLUMNS])
     files["03_decisions.sql"] = HEADER + f"""
 -- Identity of a decision is (run_id, event_id): benchmark event ids are deterministic per world+seed and

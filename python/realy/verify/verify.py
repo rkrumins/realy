@@ -69,9 +69,29 @@ class ProxyScorer:
         self.layers = [(np.asarray(l["W"], np.float32), np.asarray(l["b"], np.float32), l.get("activation", "relu"))
                        for l in w["layers"]]
         self.version = w.get("version")
+        names = list(w.get("feature_names") or [])
+        self.names = names if len(names) == self.mean.shape[0] else []
+        # where each model input sits in a schema-laid-out row (-1: absent -> its training mean), the
+        # same binding as ProxyModel.bind (Java): a model trained on fewer features scores today's rows
+        schema = [f.name for f in load_schema().features]
+        pos = {n: i for i, n in enumerate(schema)}
+        self.index = (np.asarray([pos.get(n, -1) for n in self.names], np.int64) if self.names
+                      else np.arange(self.mean.shape[0]))
+        self.row_width = len(schema) if self.names else self.mean.shape[0]
+
+    def to_model(self, x: np.ndarray) -> np.ndarray:
+        """Rows in the model's own input order: schema-laid-out rows are gathered by name; rows already as
+        wide as the model are positional."""
+        x = np.asarray(x, np.float32)
+        if x.shape[1] == self.mean.shape[0] and x.shape[1] != self.row_width:
+            return x
+        out = np.repeat(self.mean[None, :], x.shape[0], axis=0).astype(np.float32)
+        have = self.index >= 0
+        out[:, have] = x[:, self.index[have]]
+        return out
 
     def score(self, x: np.ndarray) -> np.ndarray:
-        h = ((x.astype(np.float32) - self.mean) / self.std).astype(np.float32)
+        h = ((self.to_model(x) - self.mean) / self.std).astype(np.float32)
         for W, b, act in self.layers:
             h = (h @ W.T + b).astype(np.float32)
             if act == "relu":

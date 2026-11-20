@@ -58,6 +58,8 @@ class Generator:
                                  tuple(f.chargeback_delay_days))
         from ..usecases import registry as _registry
         self.reg = registry or _registry()
+        from .auth import AuthSignals
+        self.auth = AuthSignals(scenario, self.reg)
         self.campaigns = CampaignEngine(world, self.rows, shard, n_shards, r_camp, self.merchants,
                                         f.unreported_fraction, tuple(f.chargeback_delay_days), registry=self.reg)
         # registry order (by id) keeps the background draw identical to the former hard-coded tuple
@@ -131,7 +133,7 @@ class Generator:
         else:
             camp = make_chunk(0)
         legit = self.legit.generate(max(0, n - n_due), t0, t1, order0=self.seq)
-        batch = finalize(concat_chunks([legit, camp]), self.gen_id, self.seq)
+        batch = finalize(concat_chunks([legit, camp]), self.gen_id, self.seq, self.auth)
         self.seq += len(batch)
         return batch
 

@@ -149,6 +149,28 @@ class ChallengeSpec(_Model):
     typologies: dict[str, ChallengeRates] = Field(default_factory=dict)
 
 
+class ScoreDist(_Model):
+    mean: float = Field(15.0, ge=0, le=99)
+    sd: float = Field(10.0, ge=0, le=60)
+
+
+class AuthRates(_Model):
+    """Authorisation signals of a population (realy/gen/auth.py): the share of its online card
+    payments that arrive 3DS-authenticated (the rest of a 3DS-capable checkout is "attempted"), of
+    its chip / ATM payments with a verified PIN, of its chip, contactless and wallet payments with a
+    valid cryptogram (magstripe and keyed never have one), and its card-network risk score."""
+    three_ds_authenticated: float = Field(0.95, ge=0, le=1)
+    pin_verified: float = Field(0.85, ge=0, le=1)
+    cryptogram_valid: float = Field(0.999, ge=0, le=1)
+    scheme_score: ScoreDist = Field(default_factory=ScoreDist)
+
+
+class AuthSpec(_Model):
+    """Fraud uses its typology's `auth` block (contracts/usecases), unless overridden here."""
+    legitimate: AuthRates = Field(default_factory=AuthRates)
+    typologies: dict[str, AuthRates] = Field(default_factory=dict)
+
+
 class FraudSpec(_Model):
     # Background campaigns started per 1,000 legitimate events (Poisson), and their mix.
     background_per_1k: float = 0.5
@@ -158,6 +180,7 @@ class FraudSpec(_Model):
     friendly_fraud_per_1k: float = 0.2      # legit events charged back (label noise)
     chargeback_delay_days: tuple[float, float] = (1.0, 45.0)
     challenge: ChallengeSpec = Field(default_factory=ChallengeSpec)
+    auth: AuthSpec = Field(default_factory=AuthSpec)
 
 
 class BudgetSpec(_Model):

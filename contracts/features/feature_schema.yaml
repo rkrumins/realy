@@ -21,7 +21,7 @@
 #     fully deterministic (Kafka key = customer_id). Features of entities shared across customers
 #     (device, ip, merchant, terminal, payee) depend on cross-partition arrival order, exactly as in
 #     production; the verifier reports their agreement rate rather than requiring an exact match.
-schema_version: 1
+schema_version: 2
 
 entities:
   customer: { key: customer_id }
@@ -44,6 +44,7 @@ filters:
   transfer:     "event.payment_type == 'TRANSFER'"
   has_device:   "event.device_id != 0"
   has_ip:       "event.ip_v4 != 0"
+  cvv_fail:     "event.payment_type == 'CARD_PURCHASE' && !event.card_present && !event.cvv_match"
 
 # Profile attributes: stored in the online store with the profile features, available to derived
 # functions, but not part of the model tensor.
@@ -115,3 +116,14 @@ features:
   - { name: amount_to_avg_ratio,      source: derived, fn: amount_to_avg_ratio }
   - { name: local_hour,               source: derived, fn: local_hour }
   - { name: credit_utilisation_24h,   source: derived, fn: credit_utilisation_24h }
+  # ---------------------------------------------------------------- schema v2: authorisation signals
+  # Appended (never inserted): a v1 vector (54 values) is an exact prefix of a v2 one, so feature logs,
+  # ClickHouse f_* columns and models of earlier runs keep their meaning. Models bind inputs by name.
+  - { name: cvv_mismatch,             source: derived, expr: "event.payment_type == 'CARD_PURCHASE' && !event.card_present && !event.cvv_match ? 1.0 : 0.0" }
+  - { name: avs_mismatch,             source: derived, expr: "event.payment_type == 'CARD_PURCHASE' && !event.card_present && !event.avs_match ? 1.0 : 0.0" }
+  - { name: three_ds_authenticated,   source: derived, expr: "event.three_ds == 'THREE_DS_AUTHENTICATED' ? 1.0 : 0.0" }
+  - { name: pin_verified,             source: derived, expr: "event.pin_verified ? 1.0 : 0.0" }
+  - { name: cryptogram_missing,       source: derived, expr: "event.card_present && event.payment_type != 'TRANSFER' && !event.cryptogram_valid ? 1.0 : 0.0" }
+  - { name: scheme_score,             source: derived, expr: "double(event.scheme_score)" }
+  - { name: card_cvv_fail_count_1h,   source: stream, entity: card, agg: count, filter: cvv_fail, window: 1h, granularity: 1m }
+  - { name: merch_cvv_fail_count_5m,  source: stream, entity: merchant, agg: count, filter: cvv_fail, window: 5m, granularity: 10s }

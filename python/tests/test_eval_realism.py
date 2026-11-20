@@ -333,3 +333,20 @@ def test_step_up_results_follow_the_population_and_end_the_payment():
     out = np.array([1, 2, 3, 4, 4, 4])
     res = np.array([C.FAIL, C.FAIL, C.PASS, C.PASS, C.FAIL, C.ABANDON])
     assert C.final(out, res).tolist() == [1, 2, 3, C.APPROVED, C.DECLINED, C.ABANDONED]
+
+
+def test_a_feature_layout_change_starts_state_fresh():
+    """Keyed state and online-store blobs are laid out by the stream features: warm state from the same
+    world but another layout is unusable."""
+    from realy.features import load_schema
+    from realy.runner.run import world_switch_decision
+    lay = load_schema().state_layout()
+    st, bf, why = world_switch_decision("w1/fs-old", f"w1/fs-{lay}", "warm", None, 1.0)
+    assert st == "fresh" and "feature layout" in why
+    assert world_switch_decision(f"w1/fs-{lay}", f"w1/fs-{lay}", "warm", None)[0] == "warm"
+    assert "belongs to world w1" in world_switch_decision(f"w1/fs-{lay}", f"w2/fs-{lay}", "warm", None, 1.0)[2]
+    # derived features do not move the layout; stream ones do
+    import dataclasses
+    s = load_schema()
+    assert s.state_layout() == dataclasses.replace(s, features=[f for f in s.features if f.name != "scheme_score"]).state_layout()
+    assert s.state_layout() != dataclasses.replace(s, features=[f for f in s.features if f.name != "card_cvv_fail_count_1h"]).state_layout()

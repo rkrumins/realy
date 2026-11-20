@@ -9,6 +9,7 @@ mix_weight: 0.06
 labels: {source: investigation, delay_scale: 1.5}
 roles: [build_up, bust]
 challenge: {pass: 0.98, fail: 0.0, abandon: 0.02}
+auth: {three_ds_authenticated: 0.95, pin_verified: 0.85, cryptogram_valid: 0.999, scheme_score: {mean: 22, sd: 12}} # the customer themselves
 signals: [credit_utilisation_24h, amount_to_avg_ratio, card_amount_sum_24h]
 rules: [BUST_OUT_UTILISATION]
 params:

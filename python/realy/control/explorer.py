@@ -311,12 +311,15 @@ class Explorer:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 scorer = ProxyScorer.for_version(decision.get("model_version"))
-            x = np.asarray([f["value"] for f in features], np.float64)
+            # attribute in the model's own input space (inputs bound by name: a model may use fewer
+            # features than the schema has)
+            x = scorer.to_model(np.asarray([[f["value"] for f in features]], np.float32))[0].astype(np.float64)
+            names = scorer.names or [f["name"] for f in features][:x.shape[0]]
             ig = integrated_gradients(scorer, x)
             out["attribution"] = {"model_version": scorer.version, "score": ig["score"],
                                   "served_score": score, "baseline_score": ig["baseline_score"],
                                   "logit": ig["logit"], "baseline_logit": ig["baseline_logit"],
-                                  "top": top_attributions(ig, [f["name"] for f in features], x, scorer.mean),
+                                  "top": top_attributions(ig, names, x, scorer.mean),
                                   "method": "integrated gradients from the training mean (64 steps)"}
         return out
 
