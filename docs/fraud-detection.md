@@ -40,7 +40,11 @@ decisions separately, so a model's quality is never confused with its availabili
 ## Features
 
 There are 54 features in `contracts/features/feature_schema.yaml`, which is also the model's tensor
-order. Window semantics, identical in Flink, the gateway and the Python verifier:
+order. A derived feature is either a library function (`fn`) or a **CEL expression** (`expr`) over the
+rules' environment, `event` and `f` (every feature computed so far). For example,
+`{name: cvv_mismatch, source: derived, expr: "!event.cvv_match"}` adds a feature with no Java or Python
+code: booleans become 1 / 0, Java and the verifier evaluate the same expression, and an invalid one
+fails when the schema loads. Window semantics, identical in Flink, the gateway and the Python verifier:
 - **Buckets:** windows are bucketed on event time. Bucket `k = floor(t / granularity)`, and a window
   of W covers the most recent `W / granularity` buckets.
 - **Counts, sums, maxima, averages and distinct counts** include the current event ("update, then
@@ -183,8 +187,58 @@ The 11% still missing at 90 days is fraud that is never reported.
 
 ## Typologies
 
-Each typology is scripted from real-world patterns (`python/realy/gen/campaigns.py`). It is
-scheduled inside the measured window of `fraud-eval`, and measured there out of sample.
+Each typology is scripted from real-world patterns. It is scheduled inside the measured window of
+`fraud-eval`, and measured there out of sample.
+
+### Typologies are data: add, change or remove them without code
+
+Every typology is one YAML file in `contracts/usecases/typologies/`:
+- **Identity:** a stable `id`, title and description.
+- **Labels:** `labels.source` (chargeback, customer report, investigation) and `labels.delay_scale`.
+- **Campaign roles:** the steps of the story, e.g. test / cash_out.
+- **Step-up rates:** how its actors fare at a 3DS / PIN challenge.
+- **Expected signals and rules:** what it should exercise.
+- **Parameters:** each with a help text.
+
+The registry (`python/realy/usecases.py`) is what the generator, scenario validation, report,
+Explorer and ClickHouse enum read; nothing hard-codes a typology any more.
+
+| To | Do |
+|---|---|
+| change a typology's labels, roles or weights | edit its YAML; the next run uses it |
+| add one built from the generic `steps` DSL | add a YAML file with `pattern: steps` (no code) |
+| hide a built-in one | save a user copy with `disabled: true` |
+| keep your own outside the image | put files in `REALY_USECASES_USER` (default `<runs>/_usecases`, persisted with the runs volume) |
+
+**Reproducibility:**
+- Each run snapshots the definitions it was generated with (`usecases.json`), so later edits never
+  change how an old run is read.
+- The nine built-ins keep their tested generators. Moving them into the registry left every event
+  byte-identical, except a new instrument-only `campaign_role` column, and legitimate story events
+  (a counterfeit's genuine payment, a bust-out's build-up) now carrying their campaign id.
+
+**The `steps` DSL** (`python/realy/gen/steps.py`): victims (cards or customers), an actor (a fraud
+device and IP, the victim's own, or a shared pool), then ordered steps. Each step sets its role,
+count, timing, channel, entry mode, merchant categories and location, amount model (range, ratio to
+the customer's norm, or fraction of the credit limit), payee (mule, fresh, same), CVV / AVS
+behaviour, and whether it is fraud or a legitimate part of the story. `investment_scam.yaml` is
+written this way:
+
+```yaml
+pattern: steps
+victims: {kind: customer, count: 1}
+actor: {device: victim, ip: victim}          # the victim pays, from their own phone
+steps:
+  - {role: first_transfer, count: 1, payment_type: transfer, channel: online_banking,
+     entry_mode: bank_app, payee: fresh, amount_usd: [200, 900]}
+  - {role: escalating_transfer, count: [2, 5], after_s: [86400, 259200], gap_s: [43200, 172800],
+     payment_type: transfer, channel: online_banking, entry_mode: bank_app, payee: same,
+     amount_usd: [1500, 9000]}
+```
+
+After the first payment the payee is no longer new, so novelty rules go quiet: a deliberate test of a
+known gap. It is not in the default background mix (`mix_weight: 0`); add it to a scenario's
+`fraud.campaigns`.
 
 Out of sample: fraud-eval (seed 1337), models trained on fraud-train (seed 7). The model columns re-score the **same** served
 vectors with each model under `baseline-v2` (`rules-whatif --model`, no deadline fallbacks), so they compare models on identical traffic.
@@ -398,6 +452,43 @@ of the two you are looking at.
    `realy.v_rule_performance`.
 4. **Evaluate on a world (or a time period) the model has never seen.** Gate deployments on that,
    not on the training holdout.
+
+## Explaining a decision and its label
+
+Open any event in the console's Explorer. Everything below is recomputed offline from what the run
+recorded, so the pipeline is unchanged and the explanation matches what was served
+(`python/realy/explain.py`).
+- **Policy path:** the precedence branch that decided, in words. For example: "DECLINE: DECLINE rule
+  `CARD_TESTING` fired: DECLINE rules win over everything".
+- **Rules:** every rule re-evaluated with the run's CEL, with the values its condition saw
+  (`f.card_small_cnp_count_10m = 3`), and a check that the hits match what was served.
+- **What moved the score:** integrated gradients of the served model from an average customer (the
+  training mean) to this event. The features pushing towards or away from fraud sum to the score
+  difference.
+- **Label story:**
+  - the truth: typology, campaign role and step ("card_testing, test 3 of 11");
+  - what the bank learns and when (label source and delay);
+  - what a training set cut 30, 60 or 90 days later makes of it: fraud, legitimate because the label
+    arrives too late, never reported, or friendly fraud on a genuine payment.
+
+## Insights
+
+Every report opens with ranked findings (`python/realy/report/insights.py`). Each has its evidence, a
+link to drill into it and a next step:
+- the typology losing the most money, and typologies rarely declined;
+- rules that are mostly false positives;
+- the false-positive budget;
+- what model fallbacks cost in recall;
+- precision at a production fraud rate;
+- label coverage per typology at the training cut;
+- the dominant latency stage, startup time, failed readiness gates, in-sample warnings;
+- regressions against the previous run of the scenario.
+
+Thresholds and the cost assumptions behind the report's business view live in
+`contracts/insights.yaml`, and a copy is kept in each report. On fraud-eval the engine reproduces the
+hand analysis in this page: the ATO country rule at 3.6% precision, bust-out declined 4%, 1 flag in
+46 being fraud at a 0.1% fraud rate, and label coverage from 34% (bust-out) to 64% (card testing) at a
+30-day cut.
 
 ## Worked example: a card-testing burst, event by event
 

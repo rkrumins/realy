@@ -17,7 +17,7 @@ the cause, and what the code or config now does about it.
 
 ## Startup: what a run does before it measures
 
-Every run walks the same 12 steps. Each is recorded with a status (`pending`, `running`, `done`,
+Every run walks the same 13 steps. Each is recorded with a status (`pending`, `running`, `done`,
 `skipped`, `failed`, `warn`), timings, a detail line and, where it applies, live progress:
 
 | # | Step | What happens |
@@ -31,16 +31,17 @@ Every run walks the same 12 steps. Each is recorded with a status (`pending`, `r
 | 7 | Configs applied | scoring and model-server configs published and pushed to the admin endpoints |
 | 8 | History replay | unpaced bulk history (Flink builds state; the gateway skips it), then a paced, **scored** prime segment when the scoring path is cold |
 | 9 | Feature catch-up | until Flink has processed the history (see below) |
-| 10 | Scoring-path prime | until the gateway has scored the prime events |
-| 11 | Warm-up | live traffic, excluded from results |
-| 12 | Measure | the measured window |
+| 10 | Scoring-path prime | released only once the feature job has caught up: paced at the measured rate and scored, so the gateway, model and audit path warm on a quiet pipeline |
+| 11 | Audit sinks caught up | ClickHouse has ingested the replayed history (bounded by `REALY_SINK_SETTLE_S`, 120 s): the measured window does not share the host with that backlog |
+| 12 | Warm-up | live traffic, excluded from results |
+| 13 | Measure | the measured window |
 
 **Where you see it:**
 - **Live page:** a **Startup** panel with the checklist, durations, progress bars and ETA. It
   collapses to "prepared in N s" once the run measures.
 - **Overview:** the "running now" card shows the active step.
 - **Run log:** one consistent line per transition and every 5 s of progress, for example
-  `[startup 9/12] feature catch-up: 71% (412,330/583,063 events), 9,800/s, ETA 17 s · committed lag 230,511 (offsets commit at each checkpoint)`.
+  `[startup 9/13] feature catch-up: 71% (412,330/583,063 events), 9,800/s, ETA 17 s · committed lag 230,511 (offsets commit at each checkpoint)`.
 - **Run directory:** `startup.json`, rewritten atomically. The console reads it for the active run
   whoever started it (console, CLI, Kubernetes Job).
 - **Report:** a `startup` section with the time spent per step.
@@ -58,7 +59,8 @@ Every run walks the same 12 steps. Each is recorded with a status (`pending`, `r
   where the job started, not from the oldest event the topic retains.
 
 **Readiness gates before the measured window:**
-- **What is checked:** the feature job has caught up, and the Flink job is fully RUNNING.
+- **What is checked:** the feature job has caught up, the Flink job is fully RUNNING, the gateway
+  scored the prime, and the audit sinks have ingested the history.
 - **Where results are kept:** `manifest.json` (`gates`).
 - **On failure:** the report FAILs with the reason, instead of measuring silently on stale or
   missing features.
@@ -70,8 +72,8 @@ Every node of the Live topology map has an explicit state, computed by the conso
 
 | State | Colour | When |
 |---|---|---|
-| down | red | the component is unreachable, or the Flink job a run needs is missing / failed |
-| starting | blue, dashed | a Flink job is being submitted, initialising or restarting, or is younger than 30 s |
+| down | red | the component is unreachable, the Flink job a run needs is missing / failed, Flink stopped publishing metrics for 5 s while measuring, or a TaskManager missed heartbeats for 25 s |
+| starting | blue, dashed | a Flink job is being submitted, initialising or restarting, is younger than 30 s, or this run is about to submit one |
 | warming | indigo, with progress | the run is replaying history, catching up or priming (with the reason and %) |
 | ready | latency colour | healthy; coloured by live p99 as a share of the budget |
 | degraded | amber | Flink backpressured while measuring, or checkpoints failing |

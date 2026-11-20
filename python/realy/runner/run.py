@@ -753,8 +753,11 @@ class _Run:
         stopped = lambda: bool(h.abort_reason)  # noqa: E731
         feature_job = sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc")
         has_bulk = bool(history_days(self.history, "bulk"))
-        if self.history:
+        if has_bulk:
             st.start("history", describe_history_short(self.history))
+        elif self.history:      # prime only: step 10 carries the progress
+            st.skip("history", "no bulk history: the whole history is the scored prime (step 10)")
+            st.skip("catchup", "no bulk history to catch up on")
         # 1. bulk replay fully produced by every shard (or the whole history when nothing is held back)
         while len(self.bulk_done) < len(self.plans) and self.bf_got < len(self.plans):
             self.check("backfill")
@@ -784,9 +787,6 @@ class _Run:
             st.start("prime", f"released ~{self.prime_expected:,} prime events, paced at {self.base_tps:,.0f}/s and scored "
                               "(unmeasured warm-up of the gateway, model and audit path)")
             self.prime_go.set()
-        if self.primes and not has_bulk and self.history:
-            st.finish("history", "no bulk history: the prime is the whole history")
-            st.skip("catchup", "no bulk history to catch up on")
         while self.bf_got < len(self.plans):
             self.check("prime")
             self.pump(0.5)
@@ -809,9 +809,50 @@ class _Run:
         self.manifest["backfill_events"] = bf
         self._gates_and_go()
 
+    def _wait_sinks(self) -> None:
+        """The audit warehouse ingests every event (history included) from Kafka. A measured window that
+        starts while ClickHouse is still working through a replayed day competes with that backlog for
+        the same CPUs and disks: wait (bounded) until its consumer groups have caught up."""
+        from ..common.kafka import group_lag
+        st = self.startup
+        groups = [("clickhouse-events", "payments.events.raw"), ("clickhouse-decisions", "payments.decisions")]
+        try:
+            lags = {g: group_lag(g, t) for g, t in groups}
+        except Exception as e:  # noqa: BLE001
+            st.skip("sinks", f"cannot read the audit consumers' lag ({e.__class__.__name__})")
+            return
+        if all(v is None for v in lags.values()):
+            st.skip("sinks", "no ClickHouse consumers on this pipeline")
+            return
+        limit = max(2_000, self.bf_events // 100)
+        start_total = sum(v or 0 for v in lags.values())
+        if start_total <= limit:
+            st.skip("sinks", f"already caught up (lag {start_total:,})")
+            self.gates["sinks_caught_up"] = True
+            return
+        st.start("sinks", f"ClickHouse is ingesting {start_total:,} queued events (history included)")
+        deadline = time.time() + float(os.environ.get("REALY_SINK_SETTLE_S", "120"))
+        total = start_total
+        while time.time() < deadline:
+            self.check("sinks")
+            total = sum(v or 0 for v in {g: group_lag(g, t) for g, t in groups}.values())
+            st.progress("sinks", max(0, start_total - total), start_total, "events ingested",
+                        detail=f"lag {total:,} (ClickHouse Kafka engine)")
+            if total <= limit:
+                break
+            self.sleep(2.0, "sinks")
+        ok = total <= limit
+        self.gates["sinks_caught_up"] = ok
+        st.finish("sinks", f"lag {total:,}" + ("" if ok else f": still ingesting after {os.environ.get('REALY_SINK_SETTLE_S', '120')} s "
+                                                 "(the measured window shares the host with it)"), "done" if ok else "warn")
+
     def _gates_and_go(self) -> None:
         """Readiness gates before the measured window, recorded (manifest + startup) and never silent."""
         sc, ep = self.sc, self.ep
+        if not self.sync and self.bf_events:
+            self._wait_sinks()
+        elif self.startup.steps["sinks"]["status"] == "pending":
+            self.startup.skip("sinks", "no history to ingest")
         if sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc") and ep.flink_rest:
             from .flink import job_progress
             jp = job_progress(ep.flink_rest)

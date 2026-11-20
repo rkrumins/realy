@@ -32,6 +32,7 @@ STEPS: list[tuple[str, str]] = [
     ("history", "History replay"),
     ("catchup", "Feature catch-up"),
     ("prime", "Scoring-path prime"),
+    ("sinks", "Audit sinks caught up"),
     ("warmup", "Warm-up"),
     ("measure", "Measure"),
 ]

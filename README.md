@@ -59,6 +59,27 @@ On Kubernetes, with Kafka (3-broker KRaft) and Flink inside the same local clust
     queue ([fraud-detection.md](docs/fraud-detection.md)).
   * **Offline what-ifs:** `pulsebench rules-whatif` replays any rule set, threshold or model over a
     finished run's served vectors.
+* **Insight, not just numbers.**
+  * **Every report opens with ranked findings:** costly typologies, noisy rules, fallback cost,
+    precision at a real fraud rate, label coverage, the latency bottleneck, regressions. Each has
+    its evidence, a drill-down and a next step.
+  * **Every decision is explained:** the policy path, each rule with the values it saw, the model's
+    feature attribution.
+  * **Every label has its story:** typology and campaign step; what the bank learns and when; what
+    a training set would make of it.
+* **Use cases are data.**
+  * **Typologies:** one YAML file each, with labels, roles and step-up rates. New ones can be written
+    in a generic `steps` DSL with no code (`investment_scam` is), or come from user files persisted
+    with the runs.
+  * **Features:** derived features can be CEL expressions.
+  * **Insights:** thresholds and cost assumptions are YAML too.
+  * **Reproducibility:** each run snapshots the definitions it used.
+* **Honest startup.**
+  * **Steps:** a run reports its 13 startup steps live, with real progress (Flink's processed
+    records, not lagging committed offsets): replay, catch-up, a scored prime on a caught-up
+    pipeline, audit sinks.
+  * **Topology map:** shows starting, warming, ready, degraded and down rather than turning red
+    while warming.
 * **A full operator console**, built with React and Tailwind CSS:
   * launch, queue and schedule runs;
   * watch a live topology map with events/s and p99 on every hop, plus a feed of real decisions;

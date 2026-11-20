@@ -123,6 +123,12 @@ def node_states(nodes: list[dict], ctx: dict[str, Any]) -> dict[str, dict[str, A
                     _progress(s))
             else:
                 put(nid, "ready")
+        elif comp == "clickhouse":
+            if active and _running(steps, "sinks"):
+                s = _step(steps, "sinks")
+                put(nid, "warming", f"ingesting the history: {fmt_progress(s.get('progress')) or s.get('detail', '')}", _progress(s))
+            else:
+                put(nid, "ready")
         elif comp == "driver":
             if active and _running(steps, "history") and n["id"] in ("emitter",):
                 s = _step(steps, "history")
