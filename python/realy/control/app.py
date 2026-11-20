@@ -15,7 +15,7 @@ API (JSON):
   overview    GET /api/summary · GET /api/health
   auth        GET /api/auth/me · POST /api/auth/login · POST /api/auth/logout   (REALY_CONSOLE_TOKEN)
   env         GET /api/env · GET /api/env/{kafka,flink,redis,clickhouse}
-  explorer    GET /api/runs/{id}/search · /decisions/{event_id} · /customers/{cid} · /campaigns[/{cid}]
+  explorer    GET /api/runs/{id}/search · /decisions/{event_id} · /customers[/{cid}] · /campaigns[/{cid}]
   topology    GET /api/topology?topology=
   docs        GET /api/docs · GET /api/docs/page?path= · GET /api/docs/raw/{path} · GET /api/reference/scenario-schema
   openapi     GET /api/openapi.json · Swagger UI at /api/swagger
@@ -582,6 +582,17 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
     @app.exception_handler(HTTPException)
     async def http_exc(_, exc: HTTPException):
         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+    @app.exception_handler(Exception)
+    async def unexpected(request, exc: Exception):
+        # an unexpected failure is logged with its traceback and the request, and the page gets the
+        # reason in words (not a bare "HTTP 500" with nothing in the log to explain it)
+        import logging
+        import traceback
+        logging.getLogger("realy.console").error("unhandled error on %s %s\n%s", request.method, request.url.path,
+                                                 "".join(traceback.format_exception(exc)))
+        return JSONResponse({"detail": f"internal error: {type(exc).__name__}: {exc}"[:500],
+                             "path": request.url.path}, status_code=500)
 
     # ================================================================== UI
     if STATIC.is_dir() and (STATIC / "index.html").exists():

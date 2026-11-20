@@ -1,6 +1,6 @@
 /** Thin typed client for the console API. Every 401 flips the app into the sign-in screen. */
 import type {
-  AuthMe, BudgetCheck, BulkAbortResult, Campaign, ClickHouseEnv, CompareResponse, CustomerResponse, DecisionDetail, DocPage, DocsIndex,
+  AuthMe, BudgetCheck, BulkAbortResult, Campaign, ClickHouseEnv, CompareResponse, CustomerResponse, CustomersResponse, DecisionDetail, DocPage, DocsIndex,
   EnvResponse, FlinkEnv, Job, KafkaEnv, RedisEnv, RunDetail, RunsResponse, ScenarioListItem, Schedule, SearchRow,
   Status, SummaryResponse, TopologyResponse,
 } from "./types";
@@ -112,6 +112,8 @@ export const api = {
   decision: (run: string, eventId: string, maturityDays = 30) =>
     request<DecisionDetail>(`/api/runs/${enc(run)}/decisions/${enc(eventId)}?maturity_days=${maturityDays}`),
   customer: (run: string, cid: string) => request<CustomerResponse>(`/api/runs/${enc(run)}/customers/${enc(cid)}`),
+  customers: (run: string, sort = "events", show = "all", limit = 100) =>
+    request<CustomersResponse>(`/api/runs/${enc(run)}/customers?sort=${enc(sort)}&show=${enc(show)}&limit=${limit}`),
   campaigns: (run: string) => request<{ campaigns: Campaign[] }>(`/api/runs/${enc(run)}/campaigns`),
   campaign: (run: string, cid: string) => request<{ events: SearchRow[] }>(`/api/runs/${enc(run)}/campaigns/${enc(cid)}`),
   // docs

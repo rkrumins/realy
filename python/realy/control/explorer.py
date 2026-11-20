@@ -33,6 +33,26 @@ STAGE_NAMES = {10: "INGEST", 11: "QUEUE_WAIT", 12: "DESERIALIZE", 20: "SHUFFLE",
                51: "POLICY", 60: "AUDIT_ACK", 61: "SINK", 70: "DECISION", 71: "RESPONSE", 80: "FALLBACK",
                81: "ASYNC_WAIT"}
 ENTITY_NAMES = {1: "customer", 2: "card", 3: "device", 4: "ip", 5: "merchant", 6: "terminal", 7: "payee"}
+# features that carry state from one event to the next: shown on a customer's decision trail
+TRAIL_FEATURES = ["cust_count_1h", "cust_count_24h", "cust_amount_sum_24h", "card_count_1h", "card_small_cnp_count_10m",
+                  "card_distinct_merchants_10m", "card_cvv_fail_count_1h", "cust_device_novel", "cust_payee_novel",
+                  "amount_to_avg_ratio", "scheme_score"]
+
+
+def _trail_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {"events": 0}
+    out = {"events": len(rows), "cards": len({r["card_id"] for r in rows if r["card_id"] != "0"}),
+           "fraud_events": sum(1 for r in rows if r["is_fraud"]),
+           "amount_usd": round(sum(r["amount_usd"] for r in rows), 2),
+           "first_us": rows[0]["event_time_us"], "last_us": rows[-1]["event_time_us"]}
+    for o in ("APPROVE", "CHALLENGE", "REVIEW", "DECLINE"):
+        out[o.lower()] = sum(1 for r in rows if r.get("outcome") == o)
+    scores = [r["score"] for r in rows if r.get("score") is not None]
+    out["max_score"] = max(scores) if scores else None
+    return out
+
+
 ROW_EVENT_COLS = ["event_id", "customer_id", "card_id", "event_time_us", "payment_type", "channel",
                   "amount_usd_minor", "merchant_country", "is_fraud", "fraud_type", "campaign_id"]
 
@@ -192,7 +212,11 @@ class Explorer:
         event["amount_usd"] = er.get("amount_usd_minor", 0) / 100.0
         label = {"is_fraud": bool(er.get("is_fraud")), "fraud_type": _fraud_names(self.run_dir(run_id)).get(int(er.get("fraud_type") or 0), "?"),
                  "campaign_id": str(er.get("campaign_id") or 0)}
-        dec = _read(d, "decisions-*.parquet", None, flt)
+        warnings: list[str] = []
+        try:
+            dec = _read(d, "decisions-*.parquet", None, flt)
+        except Exception as e:  # noqa: BLE001 - every section degrades on its own; the event still shows
+            dec, _ = None, warnings.append(f"decision: {type(e).__name__}: {e}")
         decision = None
         spans: list[dict[str, Any]] = []
         timing: dict[str, Any] = {}
@@ -220,7 +244,10 @@ class Explorer:
             timing = {"t_intended_us": r.get("t_intended_us"), "t_sent_us": r.get("t_sent_us"),
                       "t_ingest_us": r.get("t_ingest_us"), "t_decision_us": r.get("t_decision_us"),
                       "t_collected_us": r.get("t_collected_us")}
-        em = _read(d, "emit-*.parquet", None, flt)
+        try:
+            em = _read(d, "emit-*.parquet", None, flt)
+        except Exception as e:  # noqa: BLE001
+            em, _ = None, warnings.append(f"emitter timing: {type(e).__name__}: {e}")
         if em is not None and em.num_rows:
             row = em.slice(0, 1).to_pylist()[0]
             timing.setdefault("t_intended_us", row.get("t_intended_us"))
@@ -232,16 +259,20 @@ class Explorer:
         if end and timing.get("t_intended_us"):
             timing["e2e_ms"] = (end - timing["t_intended_us"]) / 1000.0
         features = None
-        ft = _read(d, "features-*.parquet", None, flt)
-        if ft is not None and ft.num_rows:
-            fr = ft.slice(0, 1).to_pylist()[0]
-            schema = load_schema()
-            mb = fr.get("missing") or b""
-            bits = np.unpackbits(np.frombuffer(mb, np.uint8), bitorder="little") if mb else np.zeros(0, np.uint8)
-            features = [{"index": f.index, "name": f.name, "entity": f.entity or "derived", "source": f.source,
-                         "agg": f.agg, "value": float(v), "default": f.default,
-                         "missing": bool(bits[f.index]) if f.index < bits.size else False}
-                        for f, v in zip(schema.features, fr["values"])]
+        try:
+            ft = _read(d, "features-*.parquet", None, flt)
+            if ft is not None and ft.num_rows:
+                fr = ft.slice(0, 1).to_pylist()[0]
+                schema = load_schema()
+                mb = fr.get("missing") or b""
+                bits = np.unpackbits(np.frombuffer(mb, np.uint8), bitorder="little") if mb else np.zeros(0, np.uint8)
+                # a run of an earlier (narrower) schema has fewer values: features are only ever appended
+                features = [{"index": f.index, "name": f.name, "entity": f.entity or "derived", "source": f.source,
+                             "agg": f.agg, "value": float(v), "default": f.default,
+                             "missing": bool(bits[f.index]) if f.index < bits.size else False}
+                            for f, v in zip(schema.features, fr["values"] or [])]
+        except Exception as e:  # noqa: BLE001
+            features, _ = None, warnings.append(f"features: {type(e).__name__}: {e}")
         try:
             label.update(self._label_story(run_id, d, er, maturity_days))
         except Exception as e:  # noqa: BLE001 - an explanation must never break the event view
@@ -253,7 +284,7 @@ class Explorer:
             except Exception as e:  # noqa: BLE001
                 explanation = {"error": f"{type(e).__name__}: {e}"}
         return {"event": event, "decision": decision, "features": features, "spans": spans, "timing": timing,
-                "label": label, "explanation": explanation}
+                "label": label, "explanation": explanation, **({"warnings": warnings} if warnings else {})}
 
     def _label_story(self, run_id: str, d: Path, er: dict[str, Any], maturity_days: float) -> dict[str, Any]:
         from ..explain import label_story
@@ -345,7 +376,113 @@ class Explorer:
                            "tenure_days": float(p["tenure_days"][r]), "avg_ticket_usd": float(p["avg_ticket_usd"][r])}
         except Exception:  # noqa: BLE001 - profile is optional context
             profile = None
-        return {"customer": profile, "events": rows}
+        timeline = self._decision_trail(run_id, rows)
+        return {"customer": profile, "events": timeline, "summary": _trail_summary(timeline),
+                "features": [f for f in TRAIL_FEATURES if f in {x.name for x in load_schema().features}]}
+
+    def _decision_trail(self, run_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The customer's events in time order with what each decision saw and did: rules that fired,
+        the decision path, the velocity / novelty features that carry state from one event to the next
+        (so the trail shows the history building up), the label and, for a step-up, the payer's fate."""
+        if not rows:
+            return rows
+        d = self.run_dir(run_id)
+        ids = [int(r["event_id"]) for r in rows]
+        flt = [("event_id", "in", ids)]
+        dec = _read(d, "decisions-*.parquet", ["event_id", "revision", "rule_hits", "path", "model_version"], flt)
+        by_dec: dict[int, dict[str, Any]] = {}
+        if dec is not None:
+            for r in dec.to_pylist():
+                if int(r.get("revision") or 0) == 0:
+                    by_dec[int(r["event_id"])] = r
+        schema = load_schema()
+        idx = {f.name: f.index for f in schema.features}
+        want = [f for f in TRAIL_FEATURES if f in idx]
+        feats = _read(d, "features-*.parquet", ["event_id", "values"], flt)
+        by_feat: dict[int, list[float]] = {}
+        if feats is not None:
+            for eid, vals in zip(feats["event_id"].to_pylist(), feats["values"].to_pylist()):
+                by_feat[int(eid)] = vals
+        ev = _read(d, "events-*.parquet", ["event_id", "label_delay_us", "label_is_fraud", "fraud_type", "is_fraud"], flt)
+        by_ev = {int(r["event_id"]): r for r in ev.to_pylist()} if ev is not None else {}
+        from .. import challenge as stepup
+        fate = {}
+        if by_ev:
+            e_ids = np.asarray(list(by_ev), np.uint64)
+            lat = stepup.for_run(d, e_ids, np.asarray([bool(by_ev[int(i)]["is_fraud"]) for i in e_ids]),
+                                 np.asarray([int(by_ev[int(i)]["fraud_type"] or 0) for i in e_ids]))
+            fate = {int(i): stepup.RESULTS[int(r)] for i, r in zip(e_ids, lat)}
+        paths = {0: "FULL", 1: "RULES_ONLY_FALLBACK", 2: "PROVISIONAL", 3: "FINAL_AFTER_PROVISIONAL", 4: "ECHO"}
+        out = []
+        for r in sorted(rows, key=lambda x: (x["event_time_us"], x["event_id"])):
+            eid = int(r["event_id"])
+            dr, fv, er = by_dec.get(eid, {}), by_feat.get(eid), by_ev.get(eid, {})
+            delay = er.get("label_delay_us")
+            out.append({**r,
+                        "rule_hits": [x for x in (dr.get("rule_hits") or "").split(",") if x],
+                        "path": paths.get(int(dr["path"])) if dr.get("path") is not None else None,
+                        "features": ({k: float(fv[idx[k]]) for k in want if idx[k] < len(fv)} if fv else None),
+                        "label": (None if delay is None or delay < 0 else
+                                  {"fraud": bool(er.get("label_is_fraud")), "after_days": round(delay / 86_400e6, 1)}),
+                        "stepup": fate.get(eid) if r.get("outcome") == "CHALLENGE" else None})
+        return out
+
+    def customers(self, run_id: str, sort: str = "events", show: str = "all", limit: int = 100) -> dict[str, Any]:
+        """Customers of a run with their decision counts, to find the ones worth reading: many events,
+        several cards, a mix of genuine and fraudulent activity, high scores."""
+        s = self.slim(run_id)
+        e = s.ev
+        cid = e["customer_id"]
+        if not len(cid):
+            return {"customers": [], "stats": {"customers": 0}}
+        uniq, inv, counts = np.unique(cid, return_inverse=True, return_counts=True)
+        m = uniq.size
+        fraud = np.bincount(inv, weights=e["is_fraud"].astype(np.float64), minlength=m).astype(np.int64)
+        oc = s.outcome
+        flagged = np.bincount(inv, weights=(oc >= 2).astype(np.float64), minlength=m).astype(np.int64)
+        declined = np.bincount(inv, weights=(oc == 3).astype(np.float64), minlength=m).astype(np.int64)
+        challenged = np.bincount(inv, weights=(oc == 4).astype(np.float64), minlength=m).astype(np.int64)
+        amount = np.bincount(inv, weights=e["amount_usd_minor"].astype(np.float64), minlength=m) / 100.0
+        smax = np.full(m, -1.0)
+        np.maximum.at(smax, inv, np.nan_to_num(s.score.astype(np.float64), nan=-1.0))
+        pairs = np.unique(np.stack([inv.astype(np.int64), e["card_id"].astype(np.int64)]), axis=1)
+        pairs = pairs[:, pairs[1] != 0]
+        cards = np.bincount(pairs[0], minlength=m)
+        t = e["event_time_us"].astype(np.int64)
+        first = np.full(m, np.iinfo(np.int64).max)
+        last = np.full(m, np.iinfo(np.int64).min)
+        np.minimum.at(first, inv, t)
+        np.maximum.at(last, inv, t)
+        legit = counts - fraud
+        keep = {"all": np.ones(m, bool), "fraud": fraud > 0, "mixed": (fraud > 0) & (legit > 0),
+                "multi_card": cards > 1, "flagged": flagged > 0}.get(show)
+        if keep is None:
+            raise HTTPException(400, "show: all | fraud | mixed | multi_card | flagged")
+        key = {"events": counts, "fraud": fraud, "flagged": flagged, "max_score": smax, "amount": amount}.get(sort)
+        if key is None:
+            raise HTTPException(400, "sort: events | fraud | flagged | max_score | amount")
+        cand = np.flatnonzero(keep)
+        top = cand[np.lexsort((-counts[cand], -key[cand]))][:limit]
+        names = s.names
+        ftype = e["fraud_type"]
+        rows = []
+        for i in top.tolist():
+            types = []
+            if fraud[i]:
+                sel = (inv == i) & e["is_fraud"].astype(bool)
+                types = sorted({names.get(int(x), str(int(x))) for x in np.unique(ftype[sel])})
+            rows.append({"customer_id": str(int(uniq[i])), "events": int(counts[i]), "cards": int(cards[i]),
+                         "fraud_events": int(fraud[i]), "fraud_types": types, "flagged": int(flagged[i]),
+                         "declined": int(declined[i]), "challenged": int(challenged[i]),
+                         "max_score": None if smax[i] < 0 else round(float(smax[i]), 4),
+                         "amount_usd": round(float(amount[i]), 2), "first_us": int(first[i]), "last_us": int(last[i])})
+        return {"customers": rows, "stats": {
+            "customers": int(m), "events": int(counts.sum()), "with_2_plus": int((counts >= 2).sum()),
+            "with_10_plus": int((counts >= 10).sum()), "median_events": float(np.median(counts)),
+            "max_events": int(counts.max()), "with_fraud": int((fraud > 0).sum()),
+            "mixed": int(((fraud > 0) & (legit > 0)).sum()), "multi_card": int((cards > 1).sum()),
+            "note": "measured events of the run (history replay excluded); a customer's events share one Kafka key, "
+                    "so they are processed in order and every one sees the state the earlier ones built"}}
 
     def campaigns(self, run_id: str) -> list[dict[str, Any]]:
         s = self.slim(run_id)
@@ -388,6 +525,12 @@ def make_router(runs_dir: Path) -> APIRouter:
         except ValueError:
             raise HTTPException(400, "event_id must be an integer") from None
         return ex.decision(run_id, eid, maturity_days)
+
+    @r.get("/customers")
+    def customers(run_id: str, sort: str = "events", show: str = "all", limit: int = 100) -> dict[str, Any]:
+        """Customers of a run with per-customer decision counts (events, cards, fraud, flagged, max score).
+        sort: events | fraud | flagged | max_score | amount; show: all | fraud | mixed | multi_card | flagged."""
+        return ex.customers(run_id, sort, show, max(1, min(limit, 1000)))
 
     @r.get("/customers/{cid}")
     def customer(run_id: str, cid: str) -> dict[str, Any]:

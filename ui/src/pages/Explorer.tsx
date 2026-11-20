@@ -1,6 +1,6 @@
 import { ExplanationCard, LabelStoryCard } from "@/components/explain";
 import { useQuery } from "@tanstack/react-query";
-import { CreditCard, Fingerprint, Flag, ScanSearch, Search, ShieldAlert, Timer, User, X } from "lucide-react";
+import { CreditCard, Fingerprint, Flag, ScanSearch, Search, ShieldAlert, Timer, User, Users, X } from "lucide-react";
 import * as React from "react";
 import { useSearchParams } from "react-router";
 import { CartesianGrid, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
@@ -10,14 +10,14 @@ import { SpanWaterfall } from "@/components/waterfall";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/controls";
+import { Segmented, Skeleton } from "@/components/ui/controls";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, isNotFound } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { fmtMs, fmtNum, fmtPct, fmtSimTime, fmtUsd, isNum, titleCase } from "@/lib/format";
-import type { DecisionDetail, SearchRow } from "@/lib/types";
+import type { CustomerRow, DecisionDetail, SearchRow, TrailRow } from "@/lib/types";
 
 const OUTCOME_COLOR: Record<string, string> = { APPROVE: "var(--pass)", CHALLENGE: "var(--info)", REVIEW: "var(--warn)", DECLINE: "var(--fail)" };
 
@@ -196,13 +196,138 @@ function CustomerPanel({ run, cid, onPick, onClose }: { run: string; cid: string
                 ))}
               </ScatterChart>
             </ResponsiveContainer>
-            <div className="mt-1 flex gap-4 text-[11px] text-subtle">
+            <div className="mt-1 flex flex-wrap gap-4 text-[11px] text-subtle">
               {["APPROVE", "CHALLENGE", "REVIEW", "DECLINE"].map((o) => <span key={o} className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: OUTCOME_COLOR[o] }} />{o.toLowerCase()}</span>)}
-              <span>click a point to open the decision</span>
+              <span>click a point or a row to open the decision</span>
             </div>
+            {q.data?.summary && <TrailSummary s={q.data.summary} />}
+            <DecisionTrail rows={rows} features={q.data?.features ?? []} onPick={onPick} />
           </>
         )}
       </CardBody>
+    </Card>
+  );
+}
+
+const TRAIL_LABEL: Record<string, string> = {
+  cust_count_1h: "cust 1h", cust_count_24h: "cust 24h", cust_amount_sum_24h: "cust $24h", card_count_1h: "card 1h",
+  card_small_cnp_count_10m: "small CNP 10m", card_distinct_merchants_10m: "merchants 10m", card_cvv_fail_count_1h: "CVV fails 1h",
+  cust_device_novel: "new device", cust_payee_novel: "new payee", amount_to_avg_ratio: "× avg", scheme_score: "scheme",
+};
+
+function TrailSummary({ s }: { s: NonNullable<import("@/lib/types").CustomerResponse["summary"]> }) {
+  const span = (s.last_us - s.first_us) / 3.6e9;
+  const items: [string, React.ReactNode][] = [
+    ["events", fmtNum(s.events)], ["cards", fmtNum(s.cards)], ["fraud events", fmtNum(s.fraud_events)],
+    ["approved", fmtNum(s.approve)], ["stepped up", fmtNum(s.challenge)], ["reviewed", fmtNum(s.review)], ["declined", fmtNum(s.decline)],
+    ["spend", fmtUsd(s.amount_usd)], ["over", span < 48 ? `${fmtNum(span, 1)} h` : `${fmtNum(span / 24, 1)} days`],
+  ];
+  return (
+    <div className="mt-4 grid grid-cols-3 gap-x-4 gap-y-2 rounded-xl border border-border bg-surface-2/40 p-3 sm:grid-cols-5 lg:grid-cols-9">
+      {items.map(([k, v]) => <div key={k}><div className="text-[11px] text-subtle">{k}</div><div className="text-[14px] font-semibold num">{v}</div></div>)}
+    </div>
+  );
+}
+
+/** Every event of the customer in order: what the decision saw (state built by the earlier events) and did. */
+function DecisionTrail({ rows, features, onPick }: { rows: TrailRow[]; features: string[]; onPick: (id: string) => void }) {
+  if (!rows.length) return null;
+  const shown = features.filter((f) => f in TRAIL_LABEL);
+  return (
+    <div className="mt-4">
+      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-[12px] font-semibold uppercase tracking-[0.1em] text-subtle">decision trail</div>
+        <div className="text-[11.5px] text-muted">one Kafka key per customer: each event is scored with the state the earlier ones built</div>
+      </div>
+      <div className="max-h-[460px] overflow-auto rounded-xl border border-border">
+        <table className="w-full min-w-[1100px] text-[12px]">
+          <thead className="sticky top-0 z-10 bg-surface-2 text-left text-[10.5px] uppercase tracking-wider text-subtle">
+            <tr><th className="px-3 py-2 font-medium">Time</th><th className="px-2 py-2 font-medium">Card</th><th className="px-2 py-2 text-right font-medium">Amount</th>
+              <th className="px-2 py-2 font-medium">Channel</th><th className="px-2 py-2 font-medium">Truth</th><th className="px-2 py-2 font-medium">Score</th>
+              <th className="px-2 py-2 font-medium">Outcome</th><th className="px-2 py-2 font-medium">Rules</th>
+              {shown.map((f) => <th key={f} className="px-2 py-2 text-right font-medium" title={f}>{TRAIL_LABEL[f]}</th>)}
+              <th className="px-3 py-2 font-medium">Label</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.event_id} onClick={() => onPick(r.event_id)}
+                className={cn("cursor-pointer border-t border-border hover:bg-surface-2/60", r.is_fraud && "bg-fail/[0.05]")}>
+                <td className="whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-muted">{fmtSimTime(r.event_time_us).slice(5)}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 font-mono text-[11px]" title={r.card_id}>{r.card_id === "0" ? "—" : `…${r.card_id.slice(-5)}`}</td>
+                <td className="px-2 py-1.5 text-right num">{fmtUsd(r.amount_usd)}</td>
+                <td className="px-2 py-1.5 text-muted">{r.channel.toLowerCase().replace(/_/g, " ")}</td>
+                <td className="px-2 py-1.5">{r.is_fraud ? <Badge tone="fail">{r.fraud_type.replace(/_/g, " ")}</Badge> : <span className="text-subtle">genuine</span>}</td>
+                <td className="px-2 py-1.5">{isNum(r.score) ? <ScoreBar score={r.score} className="w-24" /> : <span className="text-[11px] text-muted">{r.path === "RULES_ONLY_FALLBACK" ? "rules only (model missed its deadline)" : "—"}</span>}</td>
+                <td className="px-2 py-1.5"><div className="flex items-center gap-1"><OutcomeBadge outcome={r.outcome} />{r.stepup && <span className="text-[10.5px] text-muted">{r.stepup}</span>}</div></td>
+                <td className="max-w-[220px] truncate px-2 py-1.5 font-mono text-[10.5px]" title={(r.rule_hits ?? []).join(", ")}>{(r.rule_hits ?? []).join(", ") || <span className="text-subtle">—</span>}</td>
+                {shown.map((f) => {
+                  const v = r.features?.[f];
+                  return <td key={f} className={cn("px-2 py-1.5 text-right num text-[11.5px]", !v && "text-subtle")}>{isNum(v) ? (Number.isInteger(v) ? fmtNum(v) : fmtNum(v, f === "amount_to_avg_ratio" ? 1 : 0)) : "—"}</td>;
+                })}
+                <td className="whitespace-nowrap px-3 py-1.5 text-[11px] text-muted">{r.label ? `${r.label.fraud ? "fraud" : "genuine"} after ${fmtNum(r.label.after_days, 0)} d` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const SHOW_OPTS = [{ value: "mixed", label: "genuine + fraud" }, { value: "fraud", label: "with fraud" },
+  { value: "multi_card", label: "several cards" }, { value: "all", label: "all" }] as const;
+const SORT_OPTS = [{ value: "events", label: "events" }, { value: "fraud", label: "fraud" }, { value: "flagged", label: "flagged" },
+  { value: "max_score", label: "max score" }] as const;
+
+/** Customers of the run, to find the ones worth reading: many events, several cards, genuine and fraud. */
+function Customers({ run, onCustomer }: { run: string; onCustomer: (cid: string) => void }) {
+  const [show, setShow] = React.useState<string>("mixed");
+  const [sort, setSort] = React.useState<string>("events");
+  const q = useQuery({ queryKey: ["customers", run, show, sort], queryFn: () => api.customers(run, sort, show, 100), retry: 0 });
+  const st = q.data?.stats;
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader icon={<Users />} title="Customers"
+        subtitle={st ? `${fmtNum(st.customers)} customers · ${fmtNum(st.with_2_plus ?? 0)} with 2+ events · ${fmtNum(st.with_10_plus ?? 0)} with 10+ · median ${fmtNum(st.median_events ?? 0, 0)}, most ${fmtNum(st.max_events ?? 0)} · ${fmtNum(st.mixed ?? 0)} with genuine and fraud activity` : "per-customer decisions"} />
+      <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
+        <Segmented size="sm" value={show} onChange={setShow} options={SHOW_OPTS.map((o) => ({ ...o }))} />
+        <span className="text-[11.5px] text-subtle">sort by</span>
+        <Segmented size="sm" value={sort} onChange={setSort} options={SORT_OPTS.map((o) => ({ ...o }))} />
+      </div>
+      {q.isLoading ? <div className="space-y-2 px-5 pb-5">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="h-8" />)}</div>
+        : q.error ? <div className="px-5 pb-5">{isNotFound(q.error) ? <Unavailable what="Customers" /> : <ErrorState error={q.error} />}</div>
+          : !q.data?.customers.length ? <div className="px-5 pb-5"><EmptyState icon={<Users />} title="No customers match">Try another filter.</EmptyState></div> : (
+            <div className="max-h-[640px] overflow-auto">
+              <table className="w-full min-w-[860px] text-[12.5px]">
+                <thead className="sticky top-0 z-10 border-y border-border bg-surface-2 text-left text-[11px] uppercase tracking-wider text-subtle">
+                  <tr><th className="px-5 py-2 font-medium">Customer</th><th className="px-3 py-2 text-right font-medium">Events</th><th className="px-3 py-2 text-right font-medium">Cards</th>
+                    <th className="px-3 py-2 font-medium">Fraud</th><th className="px-3 py-2 text-right font-medium">Flagged</th><th className="px-3 py-2 text-right font-medium">Declined</th>
+                    <th className="px-3 py-2 text-right font-medium">Stepped up</th><th className="px-3 py-2 font-medium">Max score</th><th className="px-3 py-2 text-right font-medium">Spend</th>
+                    <th className="px-5 py-2 text-right font-medium">Active</th></tr>
+                </thead>
+                <tbody>
+                  {q.data.customers.map((c: CustomerRow) => {
+                    const hours = (c.last_us - c.first_us) / 3.6e9;
+                    return (
+                      <tr key={c.customer_id} onClick={() => onCustomer(c.customer_id)} className="cursor-pointer border-b border-border last:border-0 hover:bg-surface-2/60">
+                        <td className="px-5 py-2 font-mono text-[12px] text-accent">{c.customer_id}</td>
+                        <td className="px-3 py-2 text-right num font-medium">{fmtNum(c.events)}</td>
+                        <td className="px-3 py-2 text-right num">{fmtNum(c.cards)}</td>
+                        <td className="px-3 py-2">{c.fraud_events ? <span className="inline-flex flex-wrap items-center gap-1"><span className="num">{fmtNum(c.fraud_events)}</span>{c.fraud_types.map((t) => <Badge key={t} tone="fail">{t.replace(/_/g, " ")}</Badge>)}</span> : <span className="text-subtle">—</span>}</td>
+                        <td className="px-3 py-2 text-right num">{fmtNum(c.flagged)}</td>
+                        <td className="px-3 py-2 text-right num">{fmtNum(c.declined)}</td>
+                        <td className="px-3 py-2 text-right num">{fmtNum(c.challenged)}</td>
+                        <td className="px-3 py-2"><ScoreBar score={c.max_score} className="w-24" /></td>
+                        <td className="px-3 py-2 text-right num">{fmtUsd(c.amount_usd)}</td>
+                        <td className="px-5 py-2 text-right num text-muted">{hours < 48 ? `${fmtNum(hours, 1)} h` : `${fmtNum(hours / 24, 1)} d`}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+      {st?.note && <div className="border-t border-border px-5 py-2.5 text-[11.5px] text-subtle">{st.note}</div>}
     </Card>
   );
 }
@@ -281,7 +406,7 @@ export default function Explorer() {
   return (
     <>
       <PageHeader eyebrow="Explorer" title="Event & decision explorer"
-        subtitle="Look up any event, customer, card or campaign in a run: the transaction, the 54 features it was scored on, the rules that fired and where its latency went." />
+        subtitle="Look up any event, customer, card or campaign in a run: the transaction, the features it was scored on, the rules that fired and where its latency went, and every customer's decision trail." />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Select className="w-full sm:w-[360px]" value={runId} onChange={(v) => setRun(v, { event: null, customer: null })} ariaLabel="Run"
           options={done.map((r) => ({ value: r.run_id, label: <span className="font-mono text-[12.5px]">{r.run_id}</span>, hint: `${r.verdict ?? ""} · ${fmtNum(r.decided)} decisions` }))}
@@ -295,7 +420,7 @@ export default function Explorer() {
       </div>
       {!runId ? <EmptyState icon={<ScanSearch />} title="No completed runs">Run a scenario first; its events and decisions become explorable here.</EmptyState> : (
         <Tabs value={tab || "search"} onValueChange={(t) => setTab(t === "search" ? null : t)}>
-          <TabsList><TabsTrigger value="search">Events</TabsTrigger><TabsTrigger value="campaigns">Campaigns</TabsTrigger></TabsList>
+          <TabsList><TabsTrigger value="search">Events</TabsTrigger><TabsTrigger value="customers">Customers</TabsTrigger><TabsTrigger value="campaigns">Campaigns</TabsTrigger></TabsList>
           <TabsContent value="search" className="mt-4">
             {customer && <CustomerPanel run={runId} cid={customer} onPick={pick} onClose={() => setCustomer(null)} />}
             <div className="grid gap-4">
@@ -308,6 +433,9 @@ export default function Explorer() {
               </Card>
               {event && <DecisionPanel run={runId} eventId={event} onClose={() => setEvent(null)} onCustomer={(c) => setCustomer(c)} />}
             </div>
+          </TabsContent>
+          <TabsContent value="customers" className="mt-4">
+            <Customers run={runId} onCustomer={(c) => setCustomer(c, { tab: null })} />
           </TabsContent>
           <TabsContent value="campaigns" className="mt-4">
             <Campaigns run={runId} onPick={pick} />

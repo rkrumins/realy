@@ -571,9 +571,34 @@ export interface Explanation {
   };
 }
 
+/** One event of a customer's decision trail: what the decision saw (stateful features) and did. */
+export interface TrailRow extends SearchRow {
+  rule_hits?: string[];
+  path?: string | null;
+  features?: Record<string, number> | null;
+  label?: { fraud: boolean; after_days: number } | null;
+  stepup?: "pass" | "fail" | "abandon" | null;
+}
+
 export interface CustomerResponse {
   customer: { customer_id: string; segment: string | number; home_country: string; tenure_days: number; avg_ticket_usd: number } | null;
-  events: SearchRow[];
+  events: TrailRow[];
+  summary?: { events: number; cards: number; fraud_events: number; amount_usd: number; first_us: number; last_us: number;
+    approve: number; challenge: number; review: number; decline: number; max_score: number | null };
+  /** the stateful features shown on the trail, in order */
+  features?: string[];
+}
+
+export interface CustomerRow {
+  customer_id: string; events: number; cards: number; fraud_events: number; fraud_types: string[];
+  flagged: number; declined: number; challenged: number; max_score: number | null; amount_usd: number;
+  first_us: number; last_us: number;
+}
+
+export interface CustomersResponse {
+  customers: CustomerRow[];
+  stats: { customers: number; events?: number; with_2_plus?: number; with_10_plus?: number; median_events?: number;
+    max_events?: number; with_fraud?: number; mixed?: number; multi_card?: number; note?: string };
 }
 
 export interface Campaign {

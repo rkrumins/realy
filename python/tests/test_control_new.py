@@ -153,3 +153,62 @@ def test_spa_fallback(tmp_path, monkeypatch):
     assert "console" in c.get("/runs/some-run").text
     assert c.get("/assets/app.js").text == "console.log(1)"
     assert c.get("/api/nope").status_code == 404
+
+
+def test_decision_view_degrades_instead_of_failing(tmp_path):
+    """Opening an event never 500s on one bad section: a run of a narrower feature schema, a fallback
+    decision without a model score, an unreadable emitter file, a scenario the explainer cannot parse."""
+    c = make_client(tmp_path)
+    runs = tmp_path / "runs"
+    rid = _fixture_run(runs)
+    d = runs / rid
+    # an earlier schema: 54 values instead of today's width
+    pq.write_table(pa.table({"event_id": np.arange(1, 7, dtype=np.uint64),
+                             "values": pa.array([[0.5] * 54] * 6, pa.list_(pa.float32())),
+                             "missing": pa.array([b""] * 6, pa.binary())}), d / "features-0.parquet")
+    (d / "emit-0.parquet").write_bytes(b"not a parquet file")
+    r = c.get(f"/api/runs/{rid}/decisions/4")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["features"]) == 54 and body["decision"]["outcome"] == "DECLINE"
+    assert any(w.startswith("emitter timing:") for w in body["warnings"])
+    assert body["explanation"] is None or "error" in body["explanation"] or body["explanation"].get("policy")
+
+
+def test_unexpected_errors_come_back_as_words_and_are_logged(tmp_path, caplog):
+    from fastapi.testclient import TestClient
+
+    import realy.control.app as app_mod
+    app = app_mod.create_app(runs_dir=tmp_path / "runs", kafka=False, background=False, run_fn=lambda *a, **k: {},
+                             scenario_dir=tmp_path)
+
+    import realy.control.explorer as explorer_mod
+
+    def boom(*a, **k):
+        raise RuntimeError("disk on fire")
+    explorer_mod.Explorer.search, orig = boom, explorer_mod.Explorer.search
+    try:
+        c = TestClient(app, raise_server_exceptions=False)
+        with caplog.at_level("ERROR", logger="realy.console"):
+            r = c.get("/api/runs/any/search")
+    finally:
+        explorer_mod.Explorer.search = orig
+    assert r.status_code == 500 and r.json()["detail"] == "internal error: RuntimeError: disk on fire"
+    assert "disk on fire" in caplog.text and "/api/runs/any/search" in caplog.text
+
+
+def test_customers_and_decision_trail(tmp_path):
+    c = make_client(tmp_path)
+    rid = _fixture_run(tmp_path / "runs")
+    r = c.get(f"/api/runs/{rid}/customers", params={"show": "fraud"}).json()
+    assert r["stats"]["customers"] == 3 and r["stats"]["with_2_plus"] == 3 and r["stats"]["with_fraud"] == 1
+    assert [x["customer_id"] for x in r["customers"]] == ["8"]
+    row = r["customers"][0]
+    assert row["events"] == 2 and row["fraud_events"] == 2 and row["fraud_types"] == ["card_testing"]
+    assert row["flagged"] == 2 and row["declined"] == 1 and row["cards"] == 1
+    assert c.get(f"/api/runs/{rid}/customers", params={"sort": "nope"}).status_code == 400
+    t = c.get(f"/api/runs/{rid}/customers/8").json()
+    assert [e["event_id"] for e in t["events"]] == ["3", "4"]                     # time order
+    assert t["events"][0]["rule_hits"] == ["CARD_TESTING"] and t["events"][0]["path"] == "FULL"
+    assert t["events"][0]["features"] is not None and "cust_count_1h" in t["features"]
+    assert t["summary"]["events"] == 2 and t["summary"]["decline"] == 1 and t["summary"]["review"] == 1
