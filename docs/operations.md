@@ -15,6 +15,76 @@ the cause, and what the code or config now does about it.
   others are healthy.
 * **Kubernetes:** `kubectl -n realy get pods`. Readiness probes gate the Services.
 
+## Startup: what a run does before it measures
+
+Every run walks the same 12 steps. Each is recorded with a status (`pending`, `running`, `done`,
+`skipped`, `failed`, `warn`), timings, a detail line and, where it applies, live progress:
+
+| # | Step | What happens |
+|---|---|---|
+| 1 | World loaded | the synthetic world (customers, cards, devices, merchants) is built or loaded |
+| 2 | Kafka topics | topics are created if missing |
+| 3 | Profiles seeded | customer / merchant profile blobs (`pf:*`) written to Redis for this world |
+| 4 | State provenance | does the running Flink job's state belong to this world? Known match: warm. Another world, or unknown: fresh |
+| 5 | Online store | fresh state: the `fs:*` stream blobs are cleared; warm: kept |
+| 6 | Flink job | kept, or cancelled and resubmitted (fresh state), or restored from a savepoint (mode switch) |
+| 7 | Configs applied | scoring and model-server configs published and pushed to the admin endpoints |
+| 8 | History replay | unpaced bulk history (Flink builds state; the gateway skips it), then a paced, **scored** prime segment when the scoring path is cold |
+| 9 | Feature catch-up | until Flink has processed the history (see below) |
+| 10 | Scoring-path prime | until the gateway has scored the prime events |
+| 11 | Warm-up | live traffic, excluded from results |
+| 12 | Measure | the measured window |
+
+**Where you see it:**
+- **Live page:** a **Startup** panel with the checklist, durations, progress bars and ETA. It
+  collapses to "prepared in N s" once the run measures.
+- **Overview:** the "running now" card shows the active step.
+- **Run log:** one consistent line per transition and every 5 s of progress, for example
+  `[startup 9/12] feature catch-up: 71% (412,330/583,063 events), 9,800/s, ETA 17 s · committed lag 230,511 (offsets commit at each checkpoint)`.
+- **Run directory:** `startup.json`, rewritten atomically. The console reads it for the active run
+  whoever started it (console, CLI, Kubernetes Job).
+- **Report:** a `startup` section with the time spent per step.
+
+**Catch-up is measured from Flink, not from committed offsets.**
+- **Why not committed offsets:** Flink commits consumer offsets to Kafka only when a checkpoint
+  completes. A fresh job has nothing committed until its first checkpoint, and checkpoints are slow
+  while a replay backpressures the job. A committed-offset lag therefore sits at the whole backlog
+  and then drops in jumps, although Flink is processing all along.
+- **What is used instead:** progress is the number of records that entered the job's last keyed
+  stage (Flink REST vertex metrics), counted from the moment the history started.
+- **Committed offsets:** still checked as the durability confirmation, and waited for at most two
+  checkpoint intervals once processing is complete.
+- **Lag measured from the right start:** partitions with no committed offset yet are counted from
+  where the job started, not from the oldest event the topic retains.
+
+**Readiness gates before the measured window:**
+- **What is checked:** the feature job has caught up, and the Flink job is fully RUNNING.
+- **Where results are kept:** `manifest.json` (`gates`).
+- **On failure:** the report FAILs with the reason, instead of measuring silently on stale or
+  missing features.
+
+## Live topology states
+
+Every node of the Live topology map has an explicit state, computed by the console
+(`python/realy/control/pipeline_state.py`) from the startup steps and component probes:
+
+| State | Colour | When |
+|---|---|---|
+| down | red | the component is unreachable, or the Flink job a run needs is missing / failed |
+| starting | blue, dashed | a Flink job is being submitted, initialising or restarting, or is younger than 30 s |
+| warming | indigo, with progress | the run is replaying history, catching up or priming (with the reason and %) |
+| ready | latency colour | healthy; coloured by live p99 as a share of the budget |
+| degraded | amber | Flink backpressured while measuring, or checkpoints failing |
+
+Latency colours use **live events only**:
+- the Flink job records history events on separate `*_backfill` stages, shown as "bulk load" on the
+  Flink→Redis edge;
+- a node escalates to amber or red only after 3 consecutive seconds;
+- online-store freshness (`store_update_lag`) is judged against its own SLO
+  (`REALY_FRESHNESS_SLO_MS`, default 1,000 ms: amber from 250 ms), not against the e2e budget.
+
+The same data is at `GET /api/pipeline` and in every `status` message on the live WebSocket.
+
 ## Controlling live runs
 
 One run at a time per pipeline is enforced, whoever starts it:
@@ -133,6 +203,9 @@ decision were silently never scored; in production, skipped fraud checks):
 |---|---|---|
 | Report flags a high **schedule lag** | the emitter host cannot keep up (CPU starved), so events leave late | open-loop pacing records intended vs sent time; late events count against the run ([architecture](architecture.md)) instead of silently lowering the load |
 | First run after `make up` fails its p99, with seconds of latency in the first ~15 s | cold JVMs (JIT) and a just-submitted Flink job compete for CPU | the runner detects a cold pipeline (gateway scored < 20k events, or Flink job < 90 s old) and primes it with 30 s of unmeasured history events at the scenario's rate (`REALY_PRIME_S`; scored by the gateway or Flink, then discarded) before measuring (`cold pipeline ... priming` in the log; `auto_prime` in the manifest). Disable with `REALY_AUTO_PRIME=0`. Not applied to `flink_state: fresh` (exact verification) or the sync rail |
+| Flink and Redis red for the first minutes of every run | the map judged the history replay's catch-up lag (seconds) against the e2e budget, and could not tell starting / warming from slow | explicit node states (starting, warming with progress, down); history metrics on separate `*_backfill` stages; freshness on its own SLO; 3 s hysteresis ([Live topology states](#live-topology-states)) |
+| "waiting for realy-flink-…: lag 582349" stuck, then jumps | committed offsets move only at checkpoints, and uncommitted partitions counted from the topic's oldest retained event | catch-up progress from Flink's processed-record count; lag measured from the job's start ([Startup](#startup-what-a-run-does-before-it-measures)) |
+| First run after a restart fails its p99 | a fresh-state backfill is skipped by the gateway, so the gateway and model were measured with cold JVMs | a cold scoring path gets a paced, scored prime segment at the end of the history |
 | False positives at the start of every run | velocity features begin empty (cold start), so "first card use" looks novel | `traffic.backfill_days` replays unpaced history first and excludes it from results |
 | Detection and feature agreement much worse after switching scenarios (e.g. `IMPOSSIBLE_TRAVEL` on 4% of good customers, features 79% exact) | warm Flink state and Redis blobs built by **another world**: entity ids repeat across seeds, so a card's history belongs to someone else | the feature job's provenance (`realy:flink-job:<pipeline>`: job id, consumer group, world) decides; another or unknown world → fresh state, blobs cleared, 1 day of history replayed; `verify` fails below 98% exact-set agreement ([details](feature-store-and-inference.md#whose-state-is-it-provenance-and-world-switches)) |
 | Backfill "waiting for realy-flink" for 15 minutes, then the run continues | the wait used a consumer group no job consumed (the kept job had been started fresh, as `realy-flink-<run>`) | the wait uses the group from the job's provenance record; a catch-up timeout now FAILs the report ("feature state did not catch up") instead of passing as caught up |

@@ -131,6 +131,28 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
 
     worker = RunWorker(store, runs_dir, scenario_dir, run_fn=run_fn, verify_fn=verify_fn, log_sink=hub.add_log,
                        remote_abort=remote_abort)
+    from .pipeline_state import ACTIVE_PHASES, PipelineProbes, pipeline_status
+    from .topology import build as build_topology
+    probes = PipelineProbes()
+
+    def _pipeline(st: dict[str, Any], lease: dict[str, Any] | None) -> dict[str, Any]:
+        """Node states + startup steps for the active run, whoever started it (console, CLI, Job)."""
+        cur = st.get("current") or {}
+        run_id, phase, topology = cur.get("run_id"), cur.get("phase"), cur.get("topology")
+        if not run_id and lease and lease.get("run_id"):
+            run_id = lease["run_id"]
+            rd = runs_dir / run_id
+            try:
+                phase = json.loads((rd / "heartbeat").read_text()).get("phase")
+            except (OSError, ValueError):
+                phase = None
+            try:
+                topology = json.loads((rd / "manifest.json").read_text()).get("topology")
+            except (OSError, ValueError):
+                topology = None
+        probes.active = phase in ACTIVE_PHASES
+        return pipeline_status(runs_dir, run_id, phase, topology, probes.data, build_topology)
+
     scheduler = Scheduler(store, worker)
     summary_cache: dict[str, tuple[float, dict]] = {}
 
@@ -147,13 +169,21 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             worker.start()
             scheduler.start()
 
+            probes.start()
+
             async def status_ticker() -> None:
                 while True:
                     await asyncio.sleep(1.0)
                     lease = await asyncio.to_thread(_lease_holder)
-                    hub.publish({"type": "status", **worker.status(), "kafka": hub.connected, "lease": lease})
+                    st = worker.status()
+                    try:
+                        pipe = await asyncio.to_thread(_pipeline, st, lease)
+                    except Exception:  # noqa: BLE001 - status must keep ticking
+                        pipe = None
+                    hub.publish({"type": "status", **st, "kafka": hub.connected, "lease": lease, "pipeline": pipe})
             task = asyncio.create_task(status_ticker())
         yield
+        probes.stop()
         if task:
             task.cancel()
         hub.shutdown()
@@ -357,6 +387,13 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                 out["result"] = "unreachable"
         return out
 
+
+    @app.get("/api/pipeline")
+    def pipeline() -> dict[str, Any]:
+        """Per-node states (down / starting / warming / ready / degraded) and the active run's startup
+        steps. Also pushed every second on the live WebSocket as `status.pipeline`."""
+        return _pipeline(worker.status(), _lease_holder())
+
     @app.post("/api/runs/abort")
     def abort_many(body: BulkAbortRequest) -> dict[str, Any]:
         """Abort several runs at once: explicit ids, and/or `all` (running + queued). With `all`, a run
@@ -469,7 +506,12 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:
-        return {**worker.status(), "kafka": hub.connected, "kafka_error": hub.last_error, "lease": _lease_holder()}
+        st, lease = worker.status(), _lease_holder()
+        try:
+            pipe = _pipeline(st, lease)
+        except Exception:  # noqa: BLE001
+            pipe = None
+        return {**st, "kafka": hub.connected, "kafka_error": hub.last_error, "lease": lease, "pipeline": pipe}
 
     @app.get("/api/live/history")
     def live_history(run_id: str | None = None, seconds: int = 300) -> dict[str, Any]:

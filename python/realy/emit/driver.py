@@ -253,6 +253,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     prime_rate = float(plan.extra.get("prime_tps") or 0.0)
     backfilled = primed = 0
     seg_i, seg_t0, seg_n = -1, 0.0, 0
+    last_progress = time.monotonic()
     while not stop.is_set():
         try:
             item = q.get(timeout=0.5)
@@ -284,6 +285,9 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
             for _, lb in item[5]:
                 producer.produce(LABELS, lb, headers=[h for h in bf_hdr if h[0] == "x-run-id"])
             producer.poll(0)
+            if results is not None and time.monotonic() - last_progress >= 0.5:
+                last_progress = time.monotonic()
+                results.put(("backfill_progress", plan.shard, backfilled))
         elif item[0] == "backfill_done":
             break
         elif item[0] == "error":

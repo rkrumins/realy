@@ -1,3 +1,4 @@
+import { ActiveStartupStep } from "@/components/startup";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, ArrowRight, CheckCircle2, Database, Gauge, Layers, Radio, Rocket, Timer, Zap } from "lucide-react";
 import { Link, useNavigate } from "react-router";
@@ -43,6 +44,7 @@ function NowRunning() {
           <div>
             <div className="flex items-center gap-2 text-[11.5px] font-semibold uppercase tracking-[0.12em] text-accent"><Dot tone="accent" pulse />Running now · {cur.phase?.toLowerCase()}</div>
             <div className="mt-0.5 font-mono text-[14px] font-medium text-fg">{cur.scenario}</div>
+            <ActiveStartupStep startup={status?.pipeline?.startup} />
           </div>
         </div>
         <div className="text-[13px] text-muted"><div className="text-[11px] uppercase tracking-wider text-subtle">throughput</div><span className="text-[18px] font-semibold text-fg num">{fmtNum(tps)}</span> TPS</div>

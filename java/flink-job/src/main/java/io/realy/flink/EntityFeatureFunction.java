@@ -89,6 +89,9 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
                 long asOf = EntityAggregator.lastEventUs(next);
                 long w0 = BenchClock.nowUs();
                 long ingested = env.ingestUs;
+                // history replay (x-backfill) is a bulk load measured on its own stages: live freshness and
+                // write latency must describe live events only (object reuse: read the flag now, not in the callback)
+                String sfx = env.backfill ? "_backfill" : "";
                 StoreBlob blob = storeState
                         ? new StoreBlob(schemaVersion, asOf, w0, vals, e.getEventId(), next)
                         : new StoreBlob(schemaVersion, asOf, w0, vals);
@@ -97,10 +100,10 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
                 store.setAll(List.of(StoreBlob.streamKey(entity, key)), List.of(bytes), ttlSeconds)
                         .whenComplete((v, err) -> {
                             long done = BenchClock.nowUs();
-                            metrics.recordUs("feature_store_write", done - w0);
+                            metrics.recordUs("feature_store_write" + sfx, done - w0);
                             // Freshness of the online store: how long a new event stays invisible to the
                             // gateway (Kafka pickup by Flink -> entity blob durable in Redis).
-                            metrics.recordUs("store_update_lag", done - ingested);
+                            metrics.recordUs("store_update_lag" + sfx, done - ingested);
                         });
             }
         }

@@ -336,6 +336,8 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
         reasons.append(f"only {compliance:.2%} of events within {budget.e2e_p99_ms:.0f} ms (< {budget.min_compliance:.0%})")
     if sust and not sust.get("sustainable", True):
         reasons.append("not sustainable (backlog growing or p99 drifting)")
+    if (man.get("gates") or {}).get("flink_running") is False:
+        reasons.append("the Flink feature job was not fully RUNNING when the measured window started")
     if man.get("backfill_caught_up") is False:
         lag = man.get("backfill_lag")
         reasons.append(f"feature state did not catch up after the backfill (lag {lag if lag is not None and lag >= 0 else 'unknown'}):"
@@ -371,6 +373,12 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     rep.update({"summary": summary, "stages": overall, "levels": levels, "funnel": funnel, "backlog": backlog,
                 "e2e_p99_by_second": series_p99, "e2e_p50_by_second": series_p50, "tail_attribution": tail,
                 "sustainability": sust, "detection": detection, "service": service, "resources": res})
+    from ..runner.startup import read as read_startup
+    startup = read_startup(run_dir)
+    if startup:
+        rep["startup"] = startup
+        rep["summary"]["prepare_s"] = round(sum(s_.get("duration_s") or 0 for s_ in startup.get("steps", [])
+                                                if s_.get("id") != "measure"), 1)
     expect = scenario.expect.get("verdict")
     if expect:
         rep["summary"]["expected_verdict"] = expect
@@ -586,6 +594,12 @@ def _f(v: Any, d: int = 2) -> str:
     return str(v)
 
 
+def _startup_item(x: dict[str, Any]) -> str:
+    took = "skipped" if x["status"] == "skipped" else f"{x.get('duration_s') or 0:.1f} s"
+    flag = "" if x["status"] in ("done", "skipped") else f" ({x['status']})"
+    return f"{x['label'].lower()} {took}{flag}"
+
+
 def render_text(rep: dict[str, Any]) -> str:
     s = rep["summary"]
     lines = [f"=== {rep['run_id']} ({rep['topology']}) : {s['verdict']} ===",
@@ -595,6 +609,9 @@ def render_text(rep: dict[str, Any]) -> str:
              f"hot-path p99 {_f(s['hot_path_p99_ms'])} ms  within budget {s['within_budget']:.2%}"]
     if s["reasons"]:
         lines.append("reasons: " + "; ".join(s["reasons"]))
+    if rep.get("startup"):
+        steps = [x for x in rep["startup"].get("steps", []) if x.get("id") != "measure" and x.get("status") != "pending"]
+        lines.append(f"startup: prepared in {s.get('prepare_s', 0):.1f} s: " + ", ".join(_startup_item(x) for x in steps))
     lines.append(f"{'step':40s} {'p50':>8s} {'p90':>8s} {'p99':>8s} {'p99.9':>8s} {'max':>8s}  (ms)")
     for k in STEP_ORDER:
         st = rep["stages"].get(k)

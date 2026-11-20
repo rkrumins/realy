@@ -27,6 +27,7 @@ The console UI is a client of this API; scripts and CI can use it too. Live Open
 | `POST` | `/api/live/model` |  | JSON | Live Model |
 | `POST` | `/api/live/rate` |  | RateRequest | Live Rate |
 | `POST` | `/api/live/scoring` |  | JSON | Live Scoring |
+| `GET` | `/api/pipeline` |  |  | Per-node states (down / starting / warming / ready / degraded) and the active run's startup steps. Also pushed every second on the live WebSocket as `status.pipeline`. |
 | `POST` | `/api/queue/clear` | `?reason` |  | Clear Queue |
 | `POST` | `/api/runs/abort` |  | BulkAbortRequest | Abort several runs at once: explicit ids, and/or `all` (running + queued). With `all`, a run another process holds the pipeline lease for is aborted too. |
 | `POST` | `/api/runs/{ident}/abort` | `?reason` |  | Abort Run |

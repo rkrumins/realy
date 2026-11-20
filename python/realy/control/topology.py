@@ -4,6 +4,7 @@ receives. A metric ref is {"source": <emitter|collector|gateway|model|flink>, "c
 sum of that counter across instances) or {"source", "stage"} (rate = stage sample count, p99 = max p99)."""
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -22,13 +23,26 @@ def _s(source: str, stage: str) -> dict[str, str]:
     return {"source": source, "stage": stage}
 
 
+# Freshness of the online store (Flink pickup -> blob durable in Redis) is not a hot-path latency: it
+# decides how stale the gateway's features can be. It gets its own SLO (warn at 25%, hot at 100%)
+# instead of a share of the e2e budget, which painted every replay red.
+FRESHNESS_SLO_MS = float(os.environ.get("REALY_FRESHNESS_SLO_MS", "1000"))
+SLO_STAGES = {"store_update_lag": FRESHNESS_SLO_MS}
+
+
 def node(id_: str, label: str, kind: str, col: int, row: int, rate=None, p99=None, sub: str | None = None) -> dict:
-    return {"id": id_, "label": label, "kind": kind, "column": col, "row": row, "rate": rate, "p99": p99,
-            "subtitle": sub}
+    out = {"id": id_, "label": label, "kind": kind, "column": col, "row": row, "rate": rate, "p99": p99,
+           "subtitle": sub}
+    if p99 and p99.get("stage") in SLO_STAGES:
+        out["slo_ms"] = SLO_STAGES[p99["stage"]]
+    return out
 
 
-def edge(a: str, b: str, label: str = "", rate=None, p99=None) -> dict:
-    return {"from": a, "to": b, "label": label, "rate": rate, "p99": p99}
+def edge(a: str, b: str, label: str = "", rate=None, p99=None, bulk=None) -> dict:
+    out = {"from": a, "to": b, "label": label, "rate": rate, "p99": p99}
+    if bulk:
+        out["bulk"] = bulk    # history replay rate on this hop (shown while warming, never judged)
+    return out
 
 
 def build(topology: str) -> dict[str, Any]:
@@ -99,7 +113,8 @@ def build(topology: str) -> dict[str, Any]:
             e += [edge("emitter", "events", "produce", emitted),
                   edge("events", "gateway", "consume", _s("collector", "ingress"), _s("collector", "ingress")),
                   edge("events", "flink", "consume")]
-        e += [edge("flink", "redis", "write", _s("flink", "feature_store_write"), _s("flink", "feature_store_write")),
+        e += [edge("flink", "redis", "write", _s("flink", "feature_store_write"), _s("flink", "feature_store_write"),
+                   bulk=_s("flink", "feature_store_write_backfill")),
               edge("redis", "gateway", "lookup", None, _s("gateway", "feature_lookup")),
               edge("gateway", "model", "infer", _c("model", "requests"), _s("gateway", "model_call")),
               edge("gateway", "decisions", "audit", _c("gateway", "decisions"), _s("gateway", "audit_ack")),

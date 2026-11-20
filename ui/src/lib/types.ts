@@ -70,6 +70,46 @@ export interface Status {
   lease?: LeaseHolder | null;
   kafka?: boolean;
   kafka_error?: string | null;
+  pipeline?: PipelineStatus | null;
+}
+
+/** Explicit per-node state from the console (pipeline_state.py): never "red" just because a run is warming. */
+export type NodeStateName = "down" | "starting" | "warming" | "ready" | "degraded";
+export interface NodeState {
+  state: NodeStateName;
+  reason: string;
+  progress: number | null;
+}
+export interface StartupProgress {
+  done: number;
+  total: number;
+  unit: string;
+  rate: number | null;
+  eta_s: number | null;
+}
+export interface StartupStep {
+  id: string;
+  label: string;
+  index: number;
+  status: "pending" | "running" | "done" | "skipped" | "failed" | "warn";
+  detail: string;
+  started_at: number | null;
+  ended_at: number | null;
+  duration_s?: number;
+  progress: StartupProgress | null;
+}
+export interface StartupSnapshot {
+  started_at: number;
+  updated_at: number;
+  active: string | null;
+  steps: StartupStep[];
+}
+export interface PipelineStatus {
+  topology: string;
+  run_id: string | null;
+  phase: string | null;
+  nodes: Record<string, NodeState>;
+  startup: StartupSnapshot | null;
 }
 
 export interface BulkAbortResult {
@@ -383,6 +423,8 @@ export interface TopologyNode {
   rate: MetricRef | null;
   p99: MetricRef | null;
   subtitle?: string | null;
+  /** own SLO for this node's p99 (e.g. online-store freshness) instead of a share of the e2e budget */
+  slo_ms?: number;
 }
 export interface TopologyEdge {
   from: string;
@@ -390,6 +432,8 @@ export interface TopologyEdge {
   label?: string;
   rate: MetricRef | null;
   p99?: MetricRef | null;
+  /** history-replay rate on this hop, shown while warming and never judged */
+  bulk?: MetricRef | null;
 }
 export interface TopologyResponse {
   topology: string;

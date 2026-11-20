@@ -75,6 +75,31 @@ def state_provenance(rest: str | None, r=None) -> dict:
     return out
 
 
+def job_progress(rest: str | None, jid: str | None = None) -> dict | None:
+    """The feature job's own view of its progress, from the Flink REST API: state, start time and the
+    records that have entered its LAST keyed stage (`read-records` of the last `features:*` vertex),
+    i.e. events that went through every earlier stage. Unlike committed Kafka offsets (written only
+    when a checkpoint completes, so they trail by a checkpoint or far more under backpressure), this
+    moves continuously. None when no job runs or Flink is unreachable."""
+    if not rest:
+        return None
+    try:
+        with httpx.Client(base_url=rest, timeout=10) as c:
+            running = _running(c)
+            if not running:
+                return None
+            j = next((x for x in running if x["jid"] == jid), running[0]) if jid else running[0]
+            d = c.get(f"/jobs/{j['jid']}").json()
+    except (httpx.HTTPError, ValueError, KeyError):
+        return None
+    verts = d.get("vertices") or []
+    feats = [v for v in verts if str(v.get("name", "")).startswith("features:")]
+    last = feats[-1] if feats else (verts[-1] if verts else {})
+    return {"jid": j["jid"], "name": j.get("name"), "state": d.get("state"), "start_ms": d.get("start-time"),
+            "processed": int((last.get("metrics") or {}).get("read-records") or 0), "stage": last.get("name"),
+            "vertices_running": sum(1 for v in verts if v.get("status") == "RUNNING"), "vertices": len(verts)}
+
+
 def _running(c: httpx.Client) -> list[dict]:
     jobs = c.get("/jobs/overview").json().get("jobs", [])
     return [j for j in jobs if j["state"] in ("RUNNING", "CREATED", "INITIALIZING", "RESTARTING")

@@ -98,8 +98,11 @@ def ensure_topics(replication: int | None = None, partitions_override: int | Non
     return [t.topic for t in new]
 
 
-def group_lag(group: str, topic: str) -> int | None:
-    """Total committed-offset lag of a consumer group on a topic (None if the group has no offsets)."""
+def group_lag(group: str, topic: str, since_ms: int | None = None) -> int | None:
+    """Total committed-offset lag of a consumer group on a topic (None if the group has no offsets).
+    A partition with no committed offset yet counts from `since_ms` (e.g. when the consumer started)
+    when given, else from the earliest retained offset; without it, a new group's lag would include
+    every older event the topic still retains."""
     from confluent_kafka import ConsumerGroupTopicPartitions, TopicPartition
     admin = AdminClient({"bootstrap.servers": bootstrap()})
     md = admin.list_topics(topic, timeout=10).topics[topic]
@@ -109,11 +112,21 @@ def group_lag(group: str, topic: str) -> int | None:
     if all(o < 0 for o in committed.values()):
         return None
     c = Consumer({"bootstrap.servers": bootstrap(), "group.id": f"lagprobe-{group}"})
+    base: dict[int, int] = {}
+    if since_ms is not None and any(committed.get(p, -1) < 0 for p in md.partitions):
+        try:
+            for tp in c.offsets_for_times([TopicPartition(topic, p, int(since_ms)) for p in md.partitions], timeout=10):
+                base[tp.partition] = tp.offset
+        except Exception:  # noqa: BLE001 - fall back to the earliest offset
+            base = {}
     lag = 0
     for p in md.partitions:
         lo, hi = c.get_watermark_offsets(TopicPartition(topic, p), timeout=10)
         off = committed.get(p, -1)
-        lag += hi - (off if off >= 0 else lo)
+        if off < 0:
+            b0 = base.get(p, -1)
+            off = b0 if b0 >= 0 else (hi if p in base else lo)   # offsets_for_times -1: nothing after since_ms
+        lag += max(0, hi - off)
     c.close()
     return lag
 

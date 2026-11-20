@@ -118,11 +118,28 @@ export function resolveP99(ref: MetricRef | null, snaps: Snapshot[]): number | n
 export type Heat = "idle" | "good" | "warn" | "hot";
 /** End-to-end style stages are judged against the whole budget; a single component against its share. */
 const WHOLE = new Set(["e2e", "hot_path"]);
-export function heat(p99: number | null, budget: number, stage?: string): Heat {
+export function heat(p99: number | null, budget: number, stage?: string, sloMs?: number): Heat {
   if (p99 === null || !Number.isFinite(p99)) return "idle";
+  if (sloMs) {
+    // a node with its own SLO (online-store freshness): warn at a quarter of it, hot beyond it
+    const s = p99 / Math.max(sloMs, 1e-9);
+    return s < 0.25 ? "good" : s < 1 ? "warn" : "hot";
+  }
   const share = p99 / Math.max(budget, 1e-9);
   const [warn, hot] = stage && WHOLE.has(stage) ? [0.8, 1] : [0.25, 0.5];
   if (share < warn) return "good";
   if (share < hot) return "warn";
   return "hot";
+}
+
+const SEVERITY: Record<Heat, number> = { idle: 0, good: 1, warn: 2, hot: 3 };
+/**
+ * Hysteresis: a node only escalates to warn / hot when the last `n` samples all agree (a single slow
+ * second does not paint it red); it de-escalates at once. `history` is mutated (per-node ring).
+ */
+export function steadyHeat(history: Heat[], next: Heat, n = 3): Heat {
+  history.push(next);
+  while (history.length > n) history.shift();
+  if (history.length < n) return SEVERITY[next] > SEVERITY.good ? "good" : next;
+  return history.reduce((a, b) => (SEVERITY[b] < SEVERITY[a] ? b : a));
 }

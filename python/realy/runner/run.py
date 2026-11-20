@@ -55,6 +55,7 @@ class RunHandle:
     phase: str = "PREPARE"
     live: dict[str, Any] = field(default_factory=dict)
     service_errors: float = 0.0   # this run's gateway pipeline errors + Flink async timeouts (1 s windows summed)
+    startup: Any = None           # runner.startup.Startup: the structured startup sequence (console Live panel)
 
     def __post_init__(self) -> None:
         ctx = mp.get_context("spawn")
@@ -91,7 +92,11 @@ def new_run_id(sc: Scenario) -> str:
     return f"{sc.name}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
 
-def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str], None], world: str | None = None) -> None:
+def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str], None], world: str | None = None,
+                   startup: Any = None) -> None:
+    from .startup import Startup
+    st = startup or Startup(None, lambda _m: None)
+    st.start("config")
     scoring = sc.scoring_config()
     model_cfg = sc.model_server_config()
     msgs = [
@@ -111,18 +116,38 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
                 log(f"{name} config applied ({len(body)} keys)")
             except Exception as e:  # noqa: BLE001
                 log(f"warn: could not push {name} config via admin HTTP ({e}); relying on bench.control")
+    st.finish("config", "scoring + model-server config published (bench.control) and pushed to the admin endpoints")
     if sc.flink_state == "fresh":
+        st.start("store", "clearing online-store stream blobs (fresh state)")
         try:
             from .seed import clear_stream_blobs
-            log(f"fresh state: removed {clear_stream_blobs():,} online-store stream blobs")
+            n = clear_stream_blobs()
+            log(f"fresh state: removed {n:,} online-store stream blobs")
+            st.finish("store", f"removed {n:,} stream blobs (fs:*); profiles (pf:*) kept")
         except Exception as e:  # noqa: BLE001
             log(f"warn: could not clear online-store stream blobs ({e})")
+            st.finish("store", f"could not clear stream blobs: {e}", "warn")
+    else:
+        st.skip("store", "warm state: stream blobs kept")
     if sc.topology == "flink-inline" or sc.topology.startswith("gateway"):
+        from .flink import ensure_jobs, job_progress
+        before = job_progress(ep.flink_rest)
+        st.start("flink", "cancelling the running job, submitting a fresh one" if sc.flink_state == "fresh"
+                 else "checking the running job")
         try:
-            from .flink import ensure_jobs
-            ensure_jobs(sc, ep.flink_rest, log, run_id=run_id, world=world)
+            jid = ensure_jobs(sc, ep.flink_rest, log, run_id=run_id, world=world)
+            if jid and before and before["jid"] == jid:
+                st.finish("flink", f"kept job {jid[:8]} ({before.get('name')}, warm state)")
+            elif jid:
+                st.finish("flink", f"job {jid[:8]} RUNNING" + (" with fresh state" if sc.flink_state == "fresh"
+                                                               else ", state carried over by savepoint"))
+            else:
+                st.skip("flink", "no Flink REST endpoint configured")
         except Exception as e:  # noqa: BLE001
             log(f"warn: flink job management skipped: {e}")
+            st.finish("flink", f"job management failed: {e}", "failed")
+    else:
+        st.skip("flink", f"{sc.topology}: no Flink job")
 
 
 def _metrics_monitor(handle: RunHandle, sc: Scenario, stop_evt: threading.Event, log) -> None:
@@ -314,6 +339,96 @@ def plan_history(backfill_days: float | None, cold_reasons: list[str], base_tps:
     return segs
 
 
+def describe_history_short(segs: list[dict[str, Any]]) -> str:
+    modes = [s["mode"] for s in segs]
+    if modes == ["bulk", "prime"]:
+        return "bulk replay (builds feature state), then a paced, scored prime"
+    return {"bulk": "bulk replay (builds feature state; not scored)",
+            "prime": "paced, scored prime (warms the scoring path)"}.get(modes[0], "") if len(modes) == 1 else ""
+
+
+def wait_features_caught_up(rest: str | None, group: str, expected: int, base: dict[str, Any] | None, max_lag: int,
+                            timeout_s: float, startup: Any, log: Callable[[str], None],
+                            stop: Callable[[], bool] | None = None, poll_s: float = 2.0,
+                            commit_grace_s: float | None = None) -> dict[str, Any]:
+    """Wait until the feature job has processed the run's history.
+
+    Progress comes from Flink itself (records that entered the job's last keyed stage, as a delta from
+    `base`, the count before the history was sent), so it moves continuously. Committed Kafka offsets
+    only move when a checkpoint completes: they are the durability confirmation, measured from the
+    job's start for partitions not committed yet, and waited for at most `commit_grace_s` (default:
+    two checkpoint intervals + 5 s) once processing is complete. Without a Flink REST endpoint (or if
+    the job restarts mid-wait) committed offsets are the only signal."""
+    from ..common.kafka import group_lag
+    from .flink import job_progress
+    topic = "payments.events.raw"
+    if commit_grace_s is None:
+        commit_grace_s = 2 * float(os.environ.get("FLINK_CHECKPOINT_MS", "10000")) / 1000 + 5
+    jid = (base or {}).get("jid")
+    since_ms = (base or {}).get("start_ms")
+    base_n = int((base or {}).get("processed") or 0)
+    t0 = time.time()
+    samples: list[tuple[float, int]] = []
+    lag: int | None = None
+    last_lag_t = 0.0
+    done_at: float | None = None
+    mode = "flink" if base else "committed"
+    startup.start("catchup", f"waiting for the feature job to process {expected:,} history events")
+    while time.time() - t0 < timeout_s:
+        if stop is not None and stop():
+            return {"ok": False, "stopped": True, "lag": lag, "mode": mode}
+        now = time.time()
+        processed: int | None = None
+        if mode == "flink":
+            jp = job_progress(rest, jid)
+            if jp is None or jp["jid"] != jid or jp["processed"] < base_n:
+                mode = "committed"      # job gone / restarted: its counters no longer measure this history
+                log(f"  feature job {str(jid)[:8]} restarted or unreachable: progress from committed offsets only")
+            else:
+                processed = min(expected, jp["processed"] - base_n)
+        if now - last_lag_t >= 5.0 or (processed is not None and processed >= expected - max_lag):
+            try:
+                lag = group_lag(group, topic, since_ms)
+            except Exception:  # noqa: BLE001
+                lag = None
+            last_lag_t = now
+        commit = (f"committed lag {lag:,} (offsets commit at each checkpoint)" if lag is not None
+                  else "no offsets committed yet (first checkpoint pending)")
+        if processed is not None:
+            samples.append((now, processed))
+            samples = [x for x in samples if now - x[0] <= 10.0]
+            rate = (samples[-1][1] - samples[0][1]) / (samples[-1][0] - samples[0][0]) if len(samples) > 1 and samples[-1][0] > samples[0][0] else None
+            eta = (expected - processed) / rate if rate and rate > 0 else None
+            startup.progress("catchup", processed, expected, "events", rate, eta, commit)
+            if processed >= expected - max_lag:
+                done_at = done_at or now
+                if lag is not None and lag <= max_lag:
+                    detail = f"{processed:,} / {expected:,} processed; committed lag {lag:,}"
+                    startup.finish("catchup", detail)
+                    return {"ok": True, "mode": mode, "processed": processed, "lag": lag, "detail": detail}
+                if now - done_at >= commit_grace_s:
+                    detail = (f"{processed:,} / {expected:,} processed; committed offsets still trail ({commit}) "
+                              "and catch up at the next checkpoint")
+                    startup.finish("catchup", detail)
+                    return {"ok": True, "mode": mode, "processed": processed, "lag": lag, "detail": detail}
+        else:
+            if lag is not None:
+                startup.progress("catchup", max(0, expected - lag), expected, "events", None, None,
+                                 "progress from committed offsets (no Flink metrics)")
+                if lag <= max_lag:
+                    detail = f"committed lag {lag:,}"
+                    startup.finish("catchup", detail)
+                    return {"ok": True, "mode": mode, "lag": lag, "detail": detail}
+        t_next = time.time() + poll_s
+        while time.time() < t_next:
+            if stop is not None and stop():
+                return {"ok": False, "stopped": True, "lag": lag, "mode": mode}
+            time.sleep(0.2)
+    detail = f"timed out after {timeout_s:.0f} s; " + (f"committed lag {lag:,}" if lag is not None else "no committed offsets")
+    startup.finish("catchup", detail, "failed")
+    return {"ok": False, "mode": mode, "lag": lag, "detail": detail}
+
+
 def history_days(segs: list[dict[str, Any]], mode: str | None = None) -> float:
     return float(sum(s["days"] for s in segs if mode in (None, s["mode"])))
 
@@ -350,6 +465,13 @@ class _Run:
         self.bf_got = 0
         self.bf_events = 0
         self.bf_primed = 0
+        self.bf_progress: dict[int, int] = {}
+        from .startup import Startup
+        self.startup = Startup(run_dir, log)
+        handle.startup = self.startup
+        self.flink_base: dict[str, Any] | None = None
+        self.hist_expected = 0
+        self.gates: dict[str, Any] = {}
         self.history: list[dict[str, Any]] = []
         self.primes = False
         self.n_ems = 0
@@ -407,6 +529,15 @@ class _Run:
             self.emit_summ[idx] = val
         elif kind == "collector":
             self.coll_summ[idx] = val
+        elif kind == "backfill_progress":
+            self.bf_progress[idx] = int(val)
+            if self.history:
+                done = sum(self.bf_progress.values())
+                el = max(1e-3, time.time() - (self.startup.steps["history"]["started_at"] or time.time()))
+                rate = done / el
+                total = max(self.hist_expected, done)
+                self.startup.progress("history", done, total, "events", rate,
+                                      (total - done) / rate if rate > 0 else None, describe_history_short(self.history))
         elif kind == "backfill":
             self.bf_got += 1
             if isinstance(val, dict):
@@ -441,26 +572,44 @@ class _Run:
                          "duration_s": sc.traffic.duration_s, "created_at": self.t0,
                          "owner": self.lease.info.get("owner"), "pipeline": self.lease.info.get("pipeline")}
         self.write_manifest()
+        st = self.startup
+        st.start("world", f"{sc.world_dir.name}")
         self.world = load_or_build(sc.world, sc.seed, sc.world_dir)
         log(f"world {sc.world_dir.name}: {self.world.n_customers:,} customers, hash {self.world.content_hash[:12]}")
+        st.finish("world", f"{self.world.n_customers:,} customers, hash {self.world.content_hash[:12]}")
         self.check("prepare")
+        st.start("topics")
         created = ensure_topics()
         if created:
             log(f"created topics: {', '.join(created)}")
+        st.finish("topics", f"created {', '.join(created)}" if created else "all present")
+        st.start("profiles")
         try:
             from .seed import seed_profiles
             n = seed_profiles(self.world)
             if n:
                 log(f"seeded {n:,} profile blobs into the online store")
+            st.finish("profiles", f"seeded {n:,} customer / merchant profile blobs" if n else "already seeded for this world")
         except Exception as e:  # noqa: BLE001
             log(f"warn: profile seeding skipped ({e})")
+            st.finish("profiles", f"skipped: {e}", "warn")
         self.check("prepare")
-        world_switch_state(sc, self.world.content_hash, log, ep.flink_rest)
+        st.start("provenance", "which world built the running feature state?")
+        dec = world_switch_state(sc, self.world.content_hash, log, ep.flink_rest)
+        if dec.get("reason"):
+            st.finish("provenance", f"fresh state: {dec['reason']}")
+        elif sc.flink_state == "fresh":
+            st.finish("provenance", "fresh state requested by the scenario")
+        else:
+            st.finish("provenance", f"warm state kept: built from this world ({dec.get('why') or 'recorded'})")
         prof = sc.traffic.profile
         self.base_tps = prof.tps if prof.kind != "step" else (prof.start_tps or prof.tps)
         self.ts = auto_time_scale(self.world, self.base_tps) if sc.traffic.time_scale == "auto" else float(sc.traffic.time_scale)
         log(f"time scale {self.ts:.1f} sim-s per wall-s (natural rate {natural_rate_total(self.world):.1f} ev/sim-s)")
-        apply_topology(sc, self.run_id, ep, log, world=self.world.content_hash)
+        apply_topology(sc, self.run_id, ep, log, world=self.world.content_hash, startup=st)
+        from .flink import job_progress
+        # Flink's processed-record count before any history is sent: catch-up progress is the delta
+        self.flink_base = job_progress(ep.flink_rest) if sc.topology != "echo-kafka" else None
         self.sleep(float(os.environ.get("REALY_CONFIG_SETTLE_S", "2")), "config settle")
         self.sync = sc.topology == "gateway-grpc"
         # the sync rail replays a compiled dataset (no history path); REALY_AUTO_PRIME=0 disables priming
@@ -474,6 +623,13 @@ class _Run:
             log(f"history: {describe_history(self.history, self.base_tps, rate)}"
                 + (f" (cold scoring path: {'; '.join(cold)})" if history_days(self.history, "prime") else ""))
         self.primes = bool(history_days(self.history, "prime"))
+        self.hist_expected = int(history_days(self.history) * rate * 86_400)
+        if not self.history:
+            st.skip("history", "sync rail: no history path" if self.sync else "no backfill and the scoring path is warm")
+            st.skip("catchup", "no history to catch up on")
+        if not self.primes:
+            st.skip("prime", "sync rail" if self.sync else "scoring path already warm"
+                    + (f" ({'; '.join(cold)})" if cold else ""))
         self.gw_before = _gateway_decisions(ep.gateway_admin) if self.primes else None
         self.sim0 = sim_start_us(sc)
         if self.sync:
@@ -560,46 +716,80 @@ class _Run:
 
     def backfill(self) -> None:
         if self.sync:
+            self._gates_and_go()
             return
-        sc, ep, log, h = self.sc, self.ep, self.log, self.h
+        sc, ep, log, h, st = self.sc, self.ep, self.log, self.h, self.startup
         self.phase("BACKFILL" if sc.traffic.backfill_days else "PREPARE")
+        if self.history:
+            st.start("history", describe_history_short(self.history))
         while self.bf_got < len(self.plans):
             self.check("backfill")
             self.pump(0.5)
         bf = self.bf_events
+        timeout = float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900"))
+        stopped = lambda: bool(h.abort_reason)  # noqa: E731
         if bf:
             log(f"history: {bf:,} events emitted ({sc.traffic.backfill_days:.3g} sim days"
                 + (f"; {self.bf_primed:,} paced and scored" if self.bf_primed else "") + ")")
-            from ..common.kafka import wait_group_caught_up
-            timeout = float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900"))
-            stopped = lambda: bool(h.abort_reason)  # noqa: E731
+            st.progress("history", bf, bf, "events")
+            st.finish("history", f"{bf:,} events sent" + (f" ({bf - self.bf_primed:,} bulk + {self.bf_primed:,} scored prime)"
+                                                         if self.bf_primed else " (bulk, not scored)"))
             if sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc"):
                 grp = feature_group(sc, self.run_id, log)
                 max_lag = max(500, bf // 200)
-                lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max_lag, timeout_s=timeout,
-                                           log=log, stop=stopped)
+                res = wait_features_caught_up(ep.flink_rest, grp, bf, self.flink_base, max_lag, timeout, st, log, stopped)
                 self.check("backfill catch-up")
-                ok = 0 <= lag <= max_lag
+                ok = bool(res.get("ok"))
                 self.manifest["backfill_caught_up"] = ok
-                self.manifest["backfill_lag"] = lag
-                if ok:
-                    log(f"backfill: feature job caught up (group {grp}, lag {lag:,})")
-                else:
-                    log(f"WARN backfill: feature job NOT caught up after {timeout:.0f} s (group {grp}, lag "
-                        f"{lag if lag >= 0 else 'unknown'}): measured-window features are stale and the report will say so")
+                self.manifest["backfill_lag"] = res.get("lag") if res.get("lag") is not None else -1
+                self.manifest["catchup"] = res
+                if not ok:
+                    log(f"WARN backfill: feature job NOT caught up after {timeout:.0f} s ({res.get('detail')}): "
+                        "measured-window features are stale and the report will say so")
+            else:
+                st.skip("catchup", f"{sc.topology}: no feature job")
             if self.bf_primed and sc.topology in ("gateway-kafka", "echo-kafka"):
-                wait_gateway_primed(ep, self.gw_before, self.bf_primed, timeout, log, stop=stopped)
+                st.start("prime", f"waiting for the gateway to score the {self.bf_primed:,} prime events")
+                primed = wait_gateway_primed(ep, self.gw_before, self.bf_primed, timeout, log, stop=stopped)
                 self.check("prime catch-up")
+                n = _gateway_decisions(ep.gateway_admin)
+                scored = f"; gateway has scored {n - (self.gw_before or 0):,} since" if n is not None and self.gw_before is not None else ""
+                st.finish("prime", (f"{self.bf_primed:,} events scored{scored}" if primed
+                                    else "the gateway did not confirm the prime within its timeout"),
+                          "done" if primed else "warn")
+                self.gates["gateway_primed"] = bool(primed)
+            elif self.bf_primed:
+                st.finish("prime", f"{self.bf_primed:,} events scored inline by Flink")
+        self.manifest["backfill_events"] = bf
+        self._gates_and_go()
+
+    def _gates_and_go(self) -> None:
+        """Readiness gates before the measured window, recorded (manifest + startup) and never silent."""
+        sc, ep = self.sc, self.ep
+        if sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc") and ep.flink_rest:
+            from .flink import job_progress
+            jp = job_progress(ep.flink_rest)
+            self.gates["flink_running"] = bool(jp and jp.get("state") == "RUNNING"
+                                               and jp.get("vertices_running") == jp.get("vertices"))
+            if not self.gates["flink_running"]:
+                self.log(f"WARN gate: Flink feature job not fully RUNNING at measure start ({jp})")
+        if "backfill_caught_up" in self.manifest:
+            self.gates["features_caught_up"] = bool(self.manifest["backfill_caught_up"])
+        self.manifest["gates"] = self.gates
+        if self.sync:            # the sync rail's start time was fixed when its emitter started
+            self.write_manifest()
+            return
         t_start = now_us() + 3_000_000
         self.start_v.value = t_start
         self.manifest["t_start_us"] = t_start
-        self.manifest["backfill_events"] = bf
         self.write_manifest()
         self.go.set()
 
     def measure(self) -> None:
         sc, h = self.sc, self.h
         self.phase("WARMUP")
+        st = self.startup
+        st.start("warmup", f"{sc.traffic.warmup_s:.0f} s of live traffic, excluded from results")
         t_start = self.manifest["t_start_us"]
         last_print = 0.0
         while len(self.emit_summ) < self.n_ems:
@@ -608,6 +798,8 @@ class _Run:
             el = (now_us() - t_start) / 1e6
             if h.phase == "WARMUP" and el >= sc.traffic.warmup_s:
                 self.phase("MEASURE")
+                st.finish("warmup")
+                st.start("measure", f"{sc.traffic.duration_s - sc.traffic.warmup_s:.0f} s measured")
             if time.time() - last_print > 5 and el > 0:
                 last_print = time.time()
                 self.log(_live_line(h, el))
@@ -616,6 +808,8 @@ class _Run:
                 self.check("measure")
                 break
         self.emission_end_us = now_us()
+        if st.steps["measure"]["status"] == "running":
+            st.finish("measure", "emission complete")
 
     def _emitters_alive(self) -> bool:
         if self.sync_thread is not None:
@@ -634,6 +828,7 @@ class _Run:
         if aborted_at_start:
             log(f"ABORTING ({h.abort_kind}): {h.abort_reason}")
             self.phase("ABORTING")
+            self.startup.fail_running(f"aborted ({h.abort_kind}): {h.abort_reason}")
         h.stop.set()
         if self.go is not None:
             self.go.set()          # release children still waiting for the measured phase (they see stop)
@@ -744,13 +939,13 @@ def world_switch_decision(prev_world: str | None, world: str, flink_state: str, 
     return "fresh", backfill_days or default_backfill_days, reason
 
 
-def world_switch_state(sc: Scenario, world_hash: str, log: Callable[[str], None], flink_rest: str | None) -> None:
+def world_switch_state(sc: Scenario, world_hash: str, log: Callable[[str], None], flink_rest: str | None) -> dict[str, Any]:
     """Decide fresh vs warm from the provenance record of the job running now (flink.state_provenance).
     Nothing is recorded here: ensure_jobs records a job only once it is RUNNING, so a run that dies
     before its state was reset leaves no record claiming it was."""
     from .flink import desired_mode, state_provenance
     if desired_mode(sc) is None:
-        return
+        return {"state": sc.flink_state, "reason": None, "why": f"{sc.topology}: no feature job"}
     try:
         prov = state_provenance(flink_rest)
     except Exception as e:  # noqa: BLE001
@@ -762,6 +957,7 @@ def world_switch_state(sc: Scenario, world_hash: str, log: Callable[[str], None]
         log(f"world switch: {reason}: starting Flink state fresh and clearing online-store stream blobs, "
             f"{bf:g} sim day(s) of history warm it (REALY_WORLD_SWITCH_BACKFILL_DAYS)")
         sc.flink_state, sc.traffic.backfill_days = state, bf
+    return {"state": sc.flink_state, "reason": reason, "why": prov.get("why", "")}
 
 
 def feature_group(sc: Scenario, run_id: str, log: Callable[[str], None] = print) -> str:

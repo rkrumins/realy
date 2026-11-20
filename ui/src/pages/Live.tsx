@@ -11,6 +11,7 @@ import { PipelineBanner, StopAllButton } from "@/components/run-controls";
 import { DistributionEditor } from "@/components/editors";
 import { DecisionFeed, LogConsole } from "@/components/feeds";
 import { TopologyMap, useTopology } from "@/components/Topology";
+import { StartupPanel } from "@/components/startup";
 import { Badge, Dot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -268,15 +269,18 @@ export default function Live() {
         <Kpi icon={<Clock />} label="Degraded" value={fmtPct(degraded, 2)} sub="rules-only fallback" tone={isNum(degraded) && degraded > 0.01 ? "warn" : undefined} />
       </div>
 
+      {cur && <StartupPanel startup={status?.pipeline?.startup} phase={cur.phase} />}
+
       <Card className="mt-5">
-        <CardHeader title="Pipeline topology" subtitle="Live events/s and p99 per hop; colour = share of the e2e latency budget"
+        <CardHeader title="Pipeline topology"
+          subtitle="Live events/s and p99 per hop. Colour = state (starting, warming, down) or, when ready, the share of the latency budget (freshness: its own SLO)"
           actions={graph && <Badge tone="neutral" className="font-mono">{graph.topology}</Badge>} />
         <CardBody>
           {!active && !cur ? (
             <div className="relative">
-              <TopologyMap graph={graph} snapshots={[]} budgetMs={budget} active={false} className="opacity-60" />
+              <TopologyMap graph={graph} snapshots={[]} budgetMs={budget} active={false} className="opacity-60" states={status?.pipeline?.nodes} />
             </div>
-          ) : <TopologyMap graph={graph} snapshots={snaps} budgetMs={budget} active />}
+          ) : <TopologyMap graph={graph} snapshots={snaps} budgetMs={budget} active states={status?.pipeline?.nodes} />}
         </CardBody>
       </Card>
 
