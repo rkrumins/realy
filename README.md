@@ -157,6 +157,7 @@ The docs are rendered in the console (**Docs**) and on GitHub.
 | `models/` | proxy model weights and the Triton model repository (ONNX MLP, XGBoost FIL) |
 | `deploy/` | one multi-target Dockerfile, the compose stack, Kubernetes (Kustomize base + components + `local` / `dev` / `gke-l4`) |
 | `docs/` | guides; `docs/reference/` is generated from the code |
+| `.claude/skills/premium-console/` | a reusable Claude Code skill distilled from the console: design system, component kit, page patterns, live channel, FastAPI service, runnable templates and a scaffold script for building other operator UIs to the same standard (copy it to `~/.claude/skills/` to use it in any project) |
 
 ## Tests
 
