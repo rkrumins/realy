@@ -51,7 +51,8 @@ def _timed(fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------------- probes
 def probe_kafka() -> dict[str, Any]:
     from confluent_kafka.admin import AdminClient
-    a = AdminClient({"bootstrap.servers": endpoints()["kafka"], "socket.timeout.ms": int(TIMEOUT * 1000)})
+    from ..common.kafka import security_config
+    a = AdminClient({"bootstrap.servers": endpoints()["kafka"], "socket.timeout.ms": int(TIMEOUT * 1000), **security_config()})
     md = a.list_topics(timeout=TIMEOUT)
     present = [t for t in RELEVANT_TOPICS if t in md.topics]
     status = "up" if len(present) == len(RELEVANT_TOPICS) else "degraded"
@@ -148,9 +149,10 @@ def kafka_detail() -> dict[str, Any]:
     from confluent_kafka import Consumer, ConsumerGroupTopicPartitions, TopicPartition
     from confluent_kafka.admin import AdminClient
     bs = endpoints()["kafka"]
-    a = AdminClient({"bootstrap.servers": bs})
+    from ..common.kafka import security_config
+    a = AdminClient({"bootstrap.servers": bs, **security_config()})
     md = a.list_topics(timeout=TIMEOUT)
-    c = Consumer({"bootstrap.servers": bs, "group.id": "realy-console-probe", "enable.auto.commit": False})
+    c = Consumer({"bootstrap.servers": bs, "group.id": "realy-console-probe", "enable.auto.commit": False, **security_config()})
     ends: dict[str, dict[int, int]] = {}
     topics = []
     for name in RELEVANT_TOPICS:

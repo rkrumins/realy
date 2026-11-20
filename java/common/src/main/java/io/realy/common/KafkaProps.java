@@ -17,6 +17,43 @@ public final class KafkaProps {
         return Env.str("KAFKA_BOOTSTRAP", "localhost:9092");
     }
 
+    /** Environment variable -> Kafka client property, for a cluster you bring (TLS / SASL). The Python
+     *  side reads the same variables (realy/common/kafka.py SECURITY_ENV). Unset: PLAINTEXT. */
+    private static final String[][] SECURITY = {
+        {"KAFKA_SECURITY_PROTOCOL", "security.protocol"},
+        {"KAFKA_SASL_MECHANISM", "sasl.mechanism"},
+        {"KAFKA_SASL_JAAS_CONFIG", "sasl.jaas.config"},
+        {"KAFKA_SSL_TRUSTSTORE_LOCATION", "ssl.truststore.location"},
+        {"KAFKA_SSL_TRUSTSTORE_PASSWORD", "ssl.truststore.password"},
+        {"KAFKA_SSL_TRUSTSTORE_TYPE", "ssl.truststore.type"},
+        {"KAFKA_SSL_KEYSTORE_LOCATION", "ssl.keystore.location"},
+        {"KAFKA_SSL_KEYSTORE_PASSWORD", "ssl.keystore.password"},
+        {"KAFKA_SSL_KEY_PASSWORD", "ssl.key.password"},
+        {"KAFKA_SSL_ENDPOINT_IDENTIFICATION", "ssl.endpoint.identification.algorithm"},
+    };
+
+    /** The security properties set in the environment (with SASL user / password composed into a JAAS line). */
+    public static Properties security() {
+        return security(System.getenv());
+    }
+
+    static Properties security(java.util.Map<String, String> env) {
+        Properties p = new Properties();
+        for (String[] kv : SECURITY) {
+            String v = env.get(kv[0]);
+            if (v != null && !v.isBlank()) p.put(kv[1], v);
+        }
+        String user = env.get("KAFKA_SASL_USERNAME");
+        if (user != null && !user.isBlank() && !p.containsKey("sasl.jaas.config")) {
+            String mech = p.getProperty("sasl.mechanism", "PLAIN");
+            String module = mech.startsWith("SCRAM") ? "org.apache.kafka.common.security.scram.ScramLoginModule"
+                    : "org.apache.kafka.common.security.plain.PlainLoginModule";
+            p.put("sasl.jaas.config", module + " required username=\"" + user + "\" password=\""
+                    + env.getOrDefault("KAFKA_SASL_PASSWORD", "") + "\";");
+        }
+        return p;
+    }
+
     public static Properties producer(String clientId) {
         Properties p = new Properties();
         p.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap());
@@ -32,6 +69,7 @@ public final class KafkaProps {
         p.put(ProducerConfig.BUFFER_MEMORY_CONFIG, Long.toString(256L << 20));
         p.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, Env.str("KAFKA_DELIVERY_TIMEOUT_MS", "30000"));
         p.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, "10000");
+        p.putAll(security());
         return p;
     }
 
@@ -50,6 +88,7 @@ public final class KafkaProps {
         p.put(ConsumerConfig.FETCH_MAX_WAIT_MS_CONFIG, Env.str("KAFKA_FETCH_MAX_WAIT_MS", "100"));
         p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, Env.str("KAFKA_MAX_POLL_RECORDS", "2000"));
         p.put(ConsumerConfig.MAX_PARTITION_FETCH_BYTES_CONFIG, Integer.toString(4 << 20));
+        p.putAll(security());
         return p;
     }
 }

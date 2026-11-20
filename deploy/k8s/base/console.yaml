@@ -49,6 +49,7 @@ spec:
             - name: REALY_CONSOLE_TOKEN
               valueFrom: { secretKeyRef: { name: realy-console, key: token, optional: true } }
             - { name: REALY_SHUTDOWN_GRACE_S, value: "60" }
+            - { name: PYTHONFAULTHANDLER, value: "1" }      # native crashes print every thread's stack
             - name: REALY_OWNER        # names this console in the pipeline lease (who holds the pipeline)
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
           volumeMounts:

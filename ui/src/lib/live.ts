@@ -18,7 +18,31 @@ export interface LogLine {
 
 type Bucket = Map<string, Snapshot>; // key = source:instance
 
-class LiveStore {
+/** What GET /api/runs/{id}/telemetry returns (control/replay.py). */
+export interface Telemetry {
+  run: {
+    run_id: string; scenario: string; topology: string | null; budget: { e2e_p99_ms?: number } | null; base_tps: number | null;
+    warmup_s: number | null; duration_s: number | null; started_at: number | null; measure_started_at: number | null;
+    ended_at: number | null; verdict: string | null; complete: boolean; first_us?: number; last_us?: number;
+  };
+  metrics: Record<string, Snapshot[]>;
+  logs: LogLine[];
+  startup: { started_at: number; steps: { id: string; label: string; index: number; status: string; detail: string; started_at: number | null; ended_at: number | null }[] } | null;
+  markers: { t: number; kind: string; label: string }[];
+  decisions: LiveDecision[];
+  note?: string;
+}
+
+/**
+ * The live telemetry store. The default instance (`live`) follows the pipeline over the WebSocket; a
+ * replay instance (`new LiveStore({ replay: true })`) never connects: it is loaded with a past run's
+ * telemetry and read "as of" its `clock`, so the Live page renders a past run with the same components.
+ */
+export class LiveStore {
+  readonly replay: boolean;
+  /** replay cursor (epoch seconds); null = now */
+  clock: number | null = null;
+  telemetry: Telemetry | null = null;
   status: Status | null = null;
   connected = false;
   kafka = false;
@@ -35,9 +59,13 @@ class LiveStore {
   private stopped = false;
   private authListeners = new Set<() => void>();
 
+  constructor(opts: { replay?: boolean } = {}) {
+    this.replay = Boolean(opts.replay);
+  }
+
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
-    if (this.listeners.size === 1 && !this.ws) this.connect();
+    if (this.listeners.size === 1 && !this.ws && !this.replay) this.connect();
     return () => {
       this.listeners.delete(fn);
     };
@@ -48,6 +76,26 @@ class LiveStore {
   onAuthRequired(fn: () => void) {
     this.authListeners.add(fn);
     return () => this.authListeners.delete(fn);
+  }
+
+  /** Replay: take a run's whole recorded telemetry. */
+  load(t: Telemetry) {
+    this.telemetry = t;
+    this.seconds.clear();
+    this.latest.clear();
+    for (const snaps of Object.values(t.metrics || {})) for (const s of snaps) this.ingest(s, false);
+    this.decisions = [...(t.decisions || [])].sort((a, b) => Number(b.ts_us) - Number(a.ts_us));
+    this.logs = [...(t.logs || [])].sort((a, b) => a.ts - b.ts);
+    this.lastRunId = t.run.run_id;
+    this.clock = t.run.measure_started_at ?? (t.run.first_us ? t.run.first_us / 1e6 : null);
+    this.version++;
+    this.listeners.forEach((f) => f());
+  }
+
+  setClock(t: number) {
+    this.clock = t;
+    this.version++;
+    this.listeners.forEach((f) => f());
   }
 
   private notify() {
@@ -174,8 +222,10 @@ class LiveStore {
     if (!b) {
       b = new Map();
       this.seconds.set(sec, b);
-      const cutoff = sec - KEEP_S;
-      for (const k of this.seconds.keys()) if (k < cutoff) this.seconds.delete(k);
+      if (!this.replay) {
+        const cutoff = sec - KEEP_S;
+        for (const k of this.seconds.keys()) if (k < cutoff) this.seconds.delete(k);
+      }
     }
     b.set(key, s);
     if (notify) this.notify();
@@ -189,8 +239,8 @@ class LiveStore {
 
 export const live = new LiveStore();
 
-export function useLiveVersion(): number {
-  return useSyncExternalStore(live.subscribe, live.getVersion, live.getVersion);
+export function useLiveVersion(store: LiveStore = live): number {
+  return useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion);
 }
 
 // ------------------------------------------------------------------ derived series
@@ -235,8 +285,9 @@ export const STAGE_SERIES: { key: string; label: string; sources: string[]; name
   { key: "egress", label: "egress", sources: ["collector"], names: ["egress"] },
 ];
 
-export function buildSeries(windowS = 300, runId: string | null = focusRunId()): LivePoint[] {
-  const secs = [...live.seconds.keys()].sort((a, b) => a - b);
+export function buildSeries(windowS = 300, runId: string | null = focusRunId(), store: LiveStore = live): LivePoint[] {
+  const all = [...store.seconds.keys()].sort((a, b) => a - b);
+  const secs = store.clock !== null ? all.filter((x) => x <= store.clock!) : all;
   if (!secs.length) return [];
   const end = secs[secs.length - 1];
   const start = end - windowS;
@@ -245,7 +296,7 @@ export function buildSeries(windowS = 300, runId: string | null = focusRunId()):
   for (const sec of secs) {
     if (sec < start - 5) {
       // still advance running totals so backlog is right at the window start
-      const b = live.seconds.get(sec)!;
+      const b = store.seconds.get(sec)!;
       for (const [k, s] of b) {
         if (!runMatch(s, runId)) continue;
         if (s.source === "emitter" && s.counters.emitted_total !== undefined) totals.set(k, s.counters.emitted_total);
@@ -253,7 +304,7 @@ export function buildSeries(windowS = 300, runId: string | null = focusRunId()):
       }
       continue;
     }
-    const b = live.seconds.get(sec)!;
+    const b = store.seconds.get(sec)!;
     let emitted: number | null = null, acked: number | null = null, decided: number | null = null;
     let e2e50: number | null = null, e2e99: number | null = null, e2e999: number | null = null, sched: number | null = null;
     let degraded: number | null = null, approve: number | null = null, review: number | null = null, decline: number | null = null;
@@ -323,7 +374,34 @@ export function latestOf(source: string, maxAgeS = 4): Snapshot[] {
   return [...live.latest.values()].filter((s) => s.source === source && now - s.ts_us <= maxAgeS * 1e6);
 }
 
-export function logsFor(runId: string | null): LogLine[] {
-  if (!runId) return live.logs.slice(-500);
-  return live.logs.filter((l) => !l.run_id || l.run_id === runId).slice(-800);
+export function logsFor(runId: string | null, store: LiveStore = live): LogLine[] {
+  const upTo = store.clock;
+  const logs = upTo !== null ? store.logs.filter((l) => l.ts <= upTo) : store.logs;
+  if (!runId) return logs.slice(-500);
+  return logs.filter((l) => !l.run_id || l.run_id === runId).slice(-800);
+}
+
+/** The newest snapshot of every instance at most `maxAgeS` old at the store's clock (now when live). */
+export function snapshotsAt(store: LiveStore, runId: string | null, maxAgeS = 5): Snapshot[] {
+  const keep = (s: Snapshot) => (s.source !== "emitter" && s.source !== "collector") || !runId || s.run_id === runId;
+  if (store.clock === null) {
+    const all = [...store.latest.values()];
+    const now = Math.max(Date.now() * 1000, ...all.map((s) => s.ts_us));
+    return all.filter((s) => now - s.ts_us <= maxAgeS * 1e6 && keep(s));
+  }
+  const out = new Map<string, Snapshot>();
+  const end = Math.floor(store.clock);
+  for (let sec = end; sec > end - maxAgeS; sec--) {
+    const b = store.seconds.get(sec);
+    if (!b) continue;
+    for (const [k, s] of b) if (!out.has(k) && keep(s)) out.set(k, s);
+  }
+  return [...out.values()];
+}
+
+/** Decisions seen up to the store's clock, newest first. */
+export function decisionsAt(store: LiveStore): LiveDecision[] {
+  if (store.clock === null) return store.decisions;
+  const upTo = store.clock * 1e6;
+  return store.decisions.filter((d) => Number(d.ts_us) <= upTo);
 }

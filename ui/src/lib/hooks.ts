@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { api, isNotFound } from "./api";
-import { buildSeries, live, useLiveVersion } from "./live";
+import { buildSeries, live, LiveStore, useLiveVersion } from "./live";
 import type { CurrentRun, EnvResponse, HealthStatus, Status } from "./types";
 
 /** The run in progress on the pipeline, whoever started it (this console, the CLI, a Job, another console). */
@@ -16,9 +16,9 @@ export function useStatus(): Status | null {
   return live.status ?? q.data ?? null;
 }
 
-export function useLiveSeries(windowS = 300, runId?: string | null) {
-  const v = useLiveVersion();
-  return useMemo(() => buildSeries(windowS, runId === undefined ? undefined : runId), [v, windowS, runId]); // eslint-disable-line react-hooks/exhaustive-deps
+export function useLiveSeries(windowS = 300, runId?: string | null, store: LiveStore = live) {
+  const v = useLiveVersion(store);
+  return useMemo(() => buildSeries(windowS, runId === undefined ? undefined : runId, store), [v, windowS, runId, store]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 export function useEnv() {

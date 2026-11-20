@@ -1170,7 +1170,8 @@ class RunLog:
         self.sink(line)
         if self._f is None:
             return
-        ts = time.strftime("%H:%M:%S", time.localtime()) + f".{int(time.time() * 1000) % 1000:03d}"
+        now = time.time()
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{int(now * 1000) % 1000:03d}Z"
         with self._lock:
             try:
                 for part in str(line).splitlines() or [""]:
@@ -1185,8 +1186,16 @@ class RunLog:
                 self._f = None
 
 
+def _log_ts(t: str) -> float | None:
+    """Epoch seconds of a run.log timestamp (`2026-11-20T17:52:15.123Z`)."""
+    try:
+        return datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 def read_run_log(run_dir: Path, offset: int = 0, max_lines: int = 5000) -> tuple[list[dict[str, Any]], int]:
-    """Lines of `run.log` from byte `offset`: ([{"t": "HH:MM:SS.mmm", "line": ...}], next offset)."""
+    """Lines of `run.log` from byte `offset`: ([{"t": "...Z", "ts": epoch s, "line": ...}], next offset)."""
     p = Path(run_dir) / "run.log"
     try:
         with open(p, "rb") as f:
@@ -1198,7 +1207,8 @@ def read_run_log(run_dir: Path, offset: int = 0, max_lines: int = 5000) -> tuple
     out = []
     for raw in data[:end].decode("utf-8", "replace").splitlines()[-max_lines:]:
         t, _, rest = raw.partition(" ")
-        out.append({"t": t, "line": rest} if len(t) == 12 and t[2] == ":" else {"t": None, "line": raw})
+        ts = _log_ts(t) if t.endswith("Z") else None
+        out.append({"t": t, "ts": ts, "line": rest} if ts is not None else {"t": None, "ts": None, "line": raw})
     return out, offset + end
 
 

@@ -21,9 +21,9 @@ def test_run_log_round_trip_and_partial_lines(tmp_path):
     assert seen == ["[startup 1/13] world loaded", "two\nlines"]
     lines, off = read_run_log(tmp_path)
     assert [x["line"] for x in lines] == ["[startup 1/13] world loaded", "two", "lines"]
-    assert all(x["t"] and x["t"][2] == ":" for x in lines)
+    assert all(x["t"].endswith("Z") and abs(x["ts"] - time.time()) < 60 for x in lines)
     with open(tmp_path / "run.log", "a") as f:
-        f.write("12:00:00.000 half a li")            # still being written: not handed out yet
+        f.write("2026-01-01T12:00:00.000Z half a li")            # still being written: not handed out yet
     more, off2 = read_run_log(tmp_path, off)
     assert more == [] and off2 == off
 

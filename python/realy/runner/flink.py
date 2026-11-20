@@ -110,7 +110,17 @@ def state_provenance(rest: str | None, r=None) -> dict:
     with httpx.Client(base_url=rest, timeout=10) as c:
         running = _running(c)
     if not running:
-        out["why"] = "no feature job running"
+        # the job is gone (JobManager restarted or crashed, cancelled by hand): its state is still known
+        # if it left a retained checkpoint and the online store still holds the blobs it wrote
+        rec = job_record(r)
+        ckpt = latest_retained_checkpoint(rec.get("jid")) if rec and rec.get("jid") else None
+        if ckpt and _store_has_stream_blobs(r):
+            out.update(world=rec.get("world"), group=rec.get("group"), recoverable=ckpt,
+                       lineage=rec.get("lineage") or {"runs": [], "count": 0, "unknown": True},
+                       why=f"job {rec['jid'][:8]} is gone; its retained checkpoint is restorable")
+            return out
+        out["why"] = "no feature job running" + (" (its retained checkpoint exists but the online store lost its "
+                                                 "blobs)" if ckpt else "")
         return out
     out["running"] = running[0]["jid"]
     rec = job_record(r)
@@ -124,6 +134,18 @@ def state_provenance(rest: str | None, r=None) -> dict:
         out["lineage"] = rec.get("lineage") or {"runs": [], "count": 0, "unknown": True}
         out["why"] = "recorded"
     return out
+
+
+def _store_has_stream_blobs(r=None) -> bool:
+    """Whether the online store still holds Flink-written stream blobs (a restarted Redis without
+    persistence holds none: restoring Flink state alone would leave the gateway reading nothing)."""
+    try:
+        from .seed import redis_client
+        r = r or redis_client()
+        cursor, keys = r.scan(0, match="fs:*", count=20000)
+        return bool(keys) or bool(cursor and r.scan(cursor, match="fs:*", count=20000)[1])
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def job_progress(rest: str | None, jid: str | None = None) -> dict | None:

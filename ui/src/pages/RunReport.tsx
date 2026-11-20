@@ -2,7 +2,7 @@ import { BaseRateAndImpact, Insights, LabelCoverage, ModelEvaluation, StepUpCard
 import { StartupPanel } from "@/components/startup";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ArrowLeft, Copy, Database, Download, FileCode2, FileText, GitCompareArrows, Microscope, ScanSearch, ShieldAlert, ShieldCheck, ShieldX, Target,
+  Activity, ArrowLeft, Copy, Database, Download, FileCode2, FileText, GitCompareArrows, Microscope, ScanSearch, ShieldAlert, ShieldCheck, ShieldX, Target,
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -67,6 +67,7 @@ function Hero({ d }: { d: RunDetail }) {
           )}
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => nav(`/live?run=${encodeURIComponent(d.run_id)}`)} data-testid="open-in-live"><Activity />Open in Live</Button>
           <Button variant="secondary" onClick={() => nav(`/explorer?run=${encodeURIComponent(d.run_id)}`)}><ScanSearch />Explore decisions</Button>
           <Button variant="secondary" onClick={() => nav(`/compare?a=${encodeURIComponent(d.run_id)}`)}><GitCompareArrows />Compare</Button>
           <Dropdown>

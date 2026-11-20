@@ -73,3 +73,20 @@ def test_latest_retained_checkpoint(tmp_path: Path):
     assert latest_retained_checkpoint(jid, str(tmp_path), "file:///checkpoints") == f"file:///checkpoints/{jid}/chk-12"
     assert latest_retained_checkpoint("nope", str(tmp_path)) is None
     assert latest_retained_checkpoint(jid, "") is None
+
+
+def test_a_lost_job_with_a_retained_checkpoint_keeps_its_state(tmp_path, monkeypatch):
+    import realy.runner.flink as fl
+    jid = "deadbeef00"
+    (tmp_path / jid / "chk-41").mkdir(parents=True)
+    (tmp_path / jid / "chk-41" / "_metadata").write_bytes(b"x")
+    monkeypatch.setattr(fl, "CHECKPOINTS_LOCAL", str(tmp_path))
+    monkeypatch.setattr(fl, "_running", lambda c: [])
+    rec = {"jid": jid, "group": "realy-flink", "world": "world/fs-abc", "lineage": {"runs": ["r1"], "count": 1}}
+    monkeypatch.setattr(fl, "job_record", lambda r=None: rec)
+    monkeypatch.setattr(fl, "_store_has_stream_blobs", lambda r=None: True)
+    p = fl.state_provenance("http://flink:8081")
+    assert p["world"] == "world/fs-abc" and p["recoverable"].endswith(f"{jid}/chk-41") and p["lineage"]["count"] == 1
+    monkeypatch.setattr(fl, "_store_has_stream_blobs", lambda r=None: False)
+    p = fl.state_provenance("http://flink:8081")
+    assert p["world"] is None and "lost its blobs" in p["why"]

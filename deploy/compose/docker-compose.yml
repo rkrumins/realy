@@ -236,6 +236,8 @@ services:
       REALY_CONSOLE_TOKEN: ${REALY_CONSOLE_TOKEN:-}
       REALY_OWNER: console
       REALY_MODELS: /models
+      # a crash in a native extension (librdkafka, Arrow) prints every thread's Python stack to the log
+      PYTHONFAULTHANDLER: "1"
       # on `docker compose stop/down` the running run is aborted and given this long to drain and
       # write its partial report (stop_grace_period below must be longer)
       REALY_SHUTDOWN_GRACE_S: "60"

@@ -66,11 +66,16 @@ What the job guarantees, and where it is set:
 | Task failures | restart with exponential backoff (1 s → 60 s, jitter 0.1, reset after 10 min), forever: a dependency outage must not end the job | cluster config (`restart-strategy.*`) |
 | TaskManager out of memory | the JVM exits (`taskmanager.jvm-exit-on-oom`) and the container restarts (`restart: unless-stopped`); a TaskManager that hangs anyway fails its health check (registered with the JobManager?) | compose / Kubernetes |
 | JobManager loss | Kubernetes: JobManager HA (`high-availability.type: kubernetes`) recovers the job and its checkpoints. Compose (no HA): the runner restores from the retained checkpoint | Kubernetes manifests, runner |
-| Online-store writes | bounded in flight (`STORE_MAX_IN_FLIGHT`, 5000 per subtask: a slow Redis backpressures the job instead of filling the heap); **drained before every checkpoint completes**, so a completed checkpoint means Redis holds every write for the events before it; a write that failed declines the checkpoint; a store failing for `STORE_FAIL_AFTER_MS` (30 s) fails the task, and the restart replays from the last checkpoint once the store is back | `StoreWriter` |
-| The Redis client | rejects commands while disconnected, bounds its queue (`REDIS_REQUEST_QUEUE`) and times commands out (`REDIS_COMMAND_TIMEOUT_MS`, 2 s): an outage becomes errors, never heap growth | `RedisOnlineStore` |
+| Online-store writes | bounded in flight (`STORE_MAX_IN_FLIGHT`, 1000 per subtask: a slow Redis backpressures the job instead of filling the heap); **drained before every checkpoint completes**, so a completed checkpoint means Redis holds every write for the events before it; a timed-out write is retried once (SET is idempotent), a write that still failed declines the checkpoint; a store failing for `STORE_FAIL_AFTER_MS` (30 s) fails the task, and the restart replays from the last checkpoint once the store is back | `StoreWriter` |
+| The Redis client | rejects commands while disconnected, bounds its queue (`REDIS_REQUEST_QUEUE`) and times commands out (`REDIS_COMMAND_TIMEOUT_MS`: 2 s for the gateway, 10 s for the Flink writer, whose writes are off the decision path): an outage becomes errors, never heap growth | `RedisOnlineStore` |
 | A full store | Redis runs `noeviction`: writes fail loudly instead of evicting feature state; the runner's health watch aborts the run at 97% of `maxmemory` with the reason (warns at 85%) | compose / Kubernetes, `runner/infra.py` |
 | A store that lost its data | the health watch aborts the run when Redis restarts or its profiles vanish mid-run (its features would be wrong from there) | `runner/infra.py` |
 | Rescaling | max parallelism fixed at 128 (`--max-parallelism`): the number of key groups, the upper bound for rescaling keyed state; changing it makes old savepoints unrestorable | `FraudJob.configure` |
+
+**Sizing the in-flight bound.** Across all subtasks the bound is also the depth of Redis's queue, so it
+must stay well below Redis's throughput × the command timeout. Measured: 5000 per subtask × 14 subtasks
+during a bulk replay (~40k writes/s) queued for more than 2 s, writes timed out and checkpoints were
+declined; 1000 per subtask keeps the queue around a third of a second and every checkpoint completed.
 
 Every Flink job restart during a run is recorded in the run's manifest (`health.flink_restarts`,
 `health.flink_last_failure`) and logged with its cause.

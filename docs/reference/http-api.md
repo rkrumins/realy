@@ -85,6 +85,12 @@ The console UI is a client of this API; scripts and CI can use it too. Live Open
 | `GET` | `/api/runs/{run_id}/search` | `?q, ?kind, ?limit` |  | Events matching a query. Terms are ANDed (`channel:ECOM fraud:account_takeover`), commas mean OR (`outcome:DECLINE,CHALLENGE`); a bare number matches any id. Kinds: see /api/explorer/views. |
 | `GET` | `/api/usecases` |  |  | The typology registry (contracts/usecases + user typologies). |
 
+## replay
+
+| Method | Path | Query | Body | Description |
+|---|---|---|---|---|
+| `GET` | `/api/runs/{run_id}/telemetry` |  |  | Everything Live showed for a run: snapshots, log, startup, markers and a decision sample. |
+
 ## topology
 
 | Method | Path | Query | Body | Description |

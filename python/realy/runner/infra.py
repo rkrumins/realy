@@ -175,7 +175,9 @@ class InfraSampler:
             from confluent_kafka import Consumer
 
             from ..common.kafka import bootstrap
-            consumer = Consumer({"bootstrap.servers": bootstrap(), "group.id": "infraprobe", "enable.auto.commit": False})
+            from ..common.kafka import security_config
+            consumer = Consumer({"bootstrap.servers": bootstrap(), "group.id": "infraprobe", "enable.auto.commit": False,
+                                 **security_config()})
         except Exception:  # noqa: BLE001
             consumer = None
         if self.flink_rest:

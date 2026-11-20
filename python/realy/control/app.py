@@ -163,7 +163,8 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         shows its progress, startup, charts and log the same way."""
         cur = st.get("current")
         if cur:
-            return {**cur, "local": True, "owner": (lease or {}).get("owner")}
+            return {**cur, "local": True, "owner": (lease or {}).get("owner"),
+                    "measure_started_at": _measure_start(cur.get("run_id"))}
         if not lease or not lease.get("run_id"):
             return None
         rid = str(lease["run_id"])
@@ -182,7 +183,22 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         return {"job_id": None, "run_id": rid, "scenario": lease.get("scenario") or hit["man"].get("scenario"),
                 "phase": hb.get("phase") or lease.get("phase") or "PREPARE", "abort_reason": None, "abort_kind": None,
                 "started_at": lease.get("started_at") or hit["man"].get("created_at"), "rate_multiplier": 1.0,
-                **hit["info"], "local": False, "owner": lease.get("owner")}
+                **hit["info"], "local": False, "owner": lease.get("owner"), "measure_started_at": _measure_start(rid)}
+
+    measure_cache: dict[str, tuple[float, float | None]] = {}
+
+    def _measure_start(run_id: str | None) -> float | None:
+        """When live traffic started (t_start_us in the manifest): warm-up and measurement are timed from
+        here, not from the launch (a 2M-customer world spends minutes preparing first)."""
+        if not run_id:
+            return None
+        hit = measure_cache.get(run_id)
+        if hit is not None and (hit[1] is not None or time.time() - hit[0] < 2):
+            return hit[1]
+        t = (_json(runs_dir / run_id / "manifest.json") or {}).get("t_start_us")
+        val = t / 1e6 if t else None
+        measure_cache[run_id] = (time.time(), val)
+        return val
 
     def _tail_remote_log(active: dict[str, Any] | None) -> None:
         """Stream the run log of a run this console did not start (its runner writes runs/<id>/run.log)."""
@@ -244,7 +260,10 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                               "explorer, environment and docs.")
     app.state.store, app.state.hub, app.state.worker, app.state.scheduler = store, hub, worker, scheduler
     app.add_middleware(auth_mod.AuthMiddleware)
-    for r in (auth_mod.router, env_mod.router, topology_mod.router, docs_mod.router, explorer_router(runs_dir)):
+    ex_router = explorer_router(runs_dir)
+    from .replay import make_router as replay_router
+    for r in (auth_mod.router, env_mod.router, topology_mod.router, docs_mod.router, ex_router,
+              replay_router(runs_dir, ex_router.explorer)):
         app.include_router(r)
 
     @app.get("/api/health")

@@ -65,6 +65,7 @@ public final class FraudJob {
                 .setProperty("max.poll.records", "2000")
                 .setProperty("commit.offsets.on.checkpoint", "true")
                 .setProperty("partition.discovery.interval.ms", "60000")
+                .setProperties(io.realy.common.KafkaProps.security())
                 .build();
         DataStream<Envelope> events = env.fromSource(source, WatermarkStrategy.noWatermarks(), "events.raw")
                 .uid("source").name("payments.events.raw");
@@ -190,6 +191,7 @@ public final class FraudJob {
                 "transaction.timeout.ms", "600000").entrySet()) {
             props.setProperty(kv.getKey(), kv.getValue());
         }
+        props.putAll(io.realy.common.KafkaProps.security());
         String topic = p.get("decisions-topic", "payments.decisions");
         boolean eos = p.getBoolean("exactly-once", false);
         var b = KafkaSink.<DecisionBytes>builder()

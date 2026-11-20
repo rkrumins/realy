@@ -61,6 +61,27 @@ Everything about the run in progress, refreshed every second over a WebSocket:
 **Abort** (in the control drawer) stops the run cleanly: the runner drains, writes a partial report
 and marks the run aborted.
 
+**Any run in progress, whoever started it.** A run started from the CLI, `make live-test`, a
+Kubernetes Job or another console gets the same Live view: the console describes it from the pipeline
+lease and its run directory (manifest, heartbeat, scenario) and streams its log from the runner's
+`run.log`. A note says where it came from; Abort reaches it wherever it runs.
+
+**Preparing vs running.** Before traffic starts, the bar under the title shows the active startup step
+and its progress ("preparing for 6 min · step 9/13: feature catch-up · ETA 4 min"); warm-up and
+measurement are timed from the start of traffic, not from the launch, so a large world's minutes of
+history replay never read as an overrunning run.
+
+**Replay a past run.** Pick any finished run in the run selector (or open `/live?run=<id>&t=<seconds>`,
+also linked from the report). The page renders that run's recorded telemetry with the same panels: the
+topology, every chart, the decision feed, the startup steps as they stood at that moment and the run
+log. A scrubber plays it at 1×, 10× or 60×, and jumps to its phases (backfill, warm-up, measure,
+drain), rate changes and aborts. Runs only keep one run per pipeline at a time (two load generators on
+one pipeline would measure each other), so replay is how runs are compared moment by moment.
+
+**Overlay the previous run.** "Overlay previous" draws the last run of the same scenario as dashed
+series on the throughput and latency charts, aligned on the start of traffic: a regression is visible
+while the run is still going, before the report's gate.
+
 ## Runs
 
 ![Runs](img/runs-dark.png)
@@ -99,22 +120,54 @@ curves. The typical use is the same scenario and seed on two topologies or confi
 
 ![Explorer](img/explorer-dark.png)
 
-Look up any event in a run. Search by event id, `customer:<id>`, `card:<id>`, `campaign:<id>`,
-`fraud:<kind>` or `outcome:DECLINE`; with an empty search you get recent events and the frauds.
-A decision opens with:
+Look up any event, entity or campaign of a run, for every use case: card present, online payments,
+transfers and APP scams, ATM cash-out, account takeover and the rest. What each view shows is data
+(`contracts/explorer.yaml`), so a new entity column, context column or lens needs no UI code.
 
-* **Transaction:** amount, payment type, channel, merchant and country, device and IP.
-* **Features:** all 54 features it was scored on, grouped by entity (customer, card, device, IP,
-  merchant, terminal, payee, profile, derived), with missing and defaulted values flagged.
-* **Decision:** outcome, score, model version, path (model, or rules-only fallback when a deadline
-  fired), the rules that fired, and the revision history (provisional then final).
-* **Ground truth:** the fraud label and typology, if any.
-* **Span waterfall:** every span from emit to collect, tagged with its clock domain. Cross-domain
-  gaps are Kafka transit.
+**Search.** By id (a bare number is tried as every kind of id and says which it matched), or with
+kinds: `customer:`, `card:`, `account:`, `device:`, `ip:` (dotted or numeric), `merchant:`,
+`terminal:`, `payee:`, `campaign:`, `event:`, `type:TRANSFER`, `channel:ECOM,IN_APP`, `entry:`,
+`fraud:account_takeover` (or `any` / `none`), `outcome:DECLINE,CHALLENGE`, `rule:MULE_FAN_IN`,
+`path:RULES_ONLY_FALLBACK`, `country:`, `ipcountry:`, `role:`, `label:fraud`. Terms are ANDed and
+commas mean OR: `channel:ECOM fraud:account_takeover outcome:APPROVE` finds the takeovers that got
+through online.
 
-The **Campaigns** tab lists the run's fraud campaigns, and selecting one shows its events in order;
-the first decline is where the campaign was stopped. Selecting a customer shows their world profile
-(segment, home country, tenure, average ticket) and their events in the run.
+**Lenses.** One click sets the search, the entity list and its filter for a use case: Card present,
+Online payments (devices shared by many cards), Transfers & APP scams (payees paid by many senders:
+the mule shape), ATM cash-out (terminals), Account takeover, Shared devices, Merchants (ranked by
+common point of purchase), Stopped payments, and one per typology of the run.
+
+**Entities.** Customers, cards, accounts, devices, IPs, merchants, terminals and payees, each with
+events, how many customers / cards / devices stand behind it, fraud, flagged, declined, stepped up,
+max score and amount. Filters: with fraud, genuine + fraud, shared, flagged, and for merchants and
+terminals **common point**: the cards used there (history included) that later saw fraud elsewhere,
+ranked by lift over the base rate. In fraud-eval the top merchant is the breached one: 6 of its 11
+cards later had merchant-breach fraud, 52× the base rate.
+
+**An entity's trail.** Every event of the entity in time order: amount, payment type, truth (and when
+it was reported), score (a rules-only fallback shows "rules only", never 0; genuine customers' tiny
+probabilities keep their magnitude, e.g. `3e-5`), outcome with the step-up's fate, rules fired, the
+entity's own state features as they built up, and **what it saw**: the columns that matter for that
+kind of payment (a transfer: payee, new payee, transfers in 1 h, sent in 24 h, the payee's senders; an
+online card payment: device, IP and its country, 3DS, CVV / AVS, scheme score; card present: entry
+mode, PIN, cryptogram, terminal; ATM: terminal, ATM count and sum). A feature that was defaulted
+because the payment lacks the entity shows "n/a", never a fake 0. Every id links to that entity's
+trail (customer → their device → everyone on that device). Click a row to open the decision in place:
+policy branch, the rules that fired with the values they saw, score and model version, the step-up's
+fate and every feature. Above the trail: the world profile (a customer's cards, devices and regular
+payees; a card's owner; a device outside the customer registry), totals including fraud $ paid and
+good customers stopped, and the most frequent related entities. Long trails page.
+
+**A decision** opens with the transaction (authorisation signals included: 3DS, PIN, cryptogram, CVV
+/ AVS, scheme score; every id a link), the 62 features it was scored on grouped by entity with n/a
+for defaulted ones, the decision (outcome, score or why there is none, model version, path, rules,
+reason codes, revisions), the label story, the explanation (policy path, rules with values, model
+attribution) and the span waterfall.
+
+**Campaigns** lists the run's fraud campaigns with how far each got: stepped up, declined, stopped,
+fraud paid out before the first stop, and $ paid (approved plus passed step-ups and reviews that do
+not hold the payment). Selecting one shows its events with each one's role, marks the genuine story
+events (a victim's own payments) and where the campaign was stopped.
 
 ## Scenarios
 

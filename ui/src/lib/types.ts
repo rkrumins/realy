@@ -37,6 +37,8 @@ export interface CurrentRun {
   /** true: started by this console; false: started elsewhere and described from the lease + run directory */
   local?: boolean;
   owner?: string | null;
+  /** when live traffic started (s); warm-up and measurement are timed from here, not from the launch */
+  measure_started_at?: number | null;
 }
 
 export interface Job {
