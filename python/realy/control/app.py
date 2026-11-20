@@ -164,7 +164,7 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         cur = st.get("current")
         if cur:
             return {**cur, "local": True, "owner": (lease or {}).get("owner"),
-                    "measure_started_at": _measure_start(cur.get("run_id"))}
+                    "measure_started_at": _measure_start(cur.get("run_id"), cur.get("phase"))}
         if not lease or not lease.get("run_id"):
             return None
         rid = str(lease["run_id"])
@@ -180,17 +180,19 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                 "warmup_s": man.get("warmup_s") if man.get("warmup_s") is not None else (sc.get("traffic") or {}).get("warmup_s"),
                 "base_tps": base, "budget": sc.get("budget")}}
         hb = _json(rd / "heartbeat") or {}
+        phase = hb.get("phase") or lease.get("phase") or "PREPARE"
         return {"job_id": None, "run_id": rid, "scenario": lease.get("scenario") or hit["man"].get("scenario"),
-                "phase": hb.get("phase") or lease.get("phase") or "PREPARE", "abort_reason": None, "abort_kind": None,
+                "phase": phase, "abort_reason": None, "abort_kind": None,
                 "started_at": lease.get("started_at") or hit["man"].get("created_at"), "rate_multiplier": 1.0,
-                **hit["info"], "local": False, "owner": lease.get("owner"), "measure_started_at": _measure_start(rid)}
+                **hit["info"], "local": False, "owner": lease.get("owner"), "measure_started_at": _measure_start(rid, phase)}
 
     measure_cache: dict[str, tuple[float, float | None]] = {}
 
-    def _measure_start(run_id: str | None) -> float | None:
+    def _measure_start(run_id: str | None, phase: str | None = None) -> float | None:
         """When live traffic started (t_start_us in the manifest): warm-up and measurement are timed from
-        here, not from the launch (a 2M-customer world spends minutes preparing first)."""
-        if not run_id:
+        here, not from the launch (a 2M-customer world spends minutes preparing first). Before warm-up the
+        manifest holds a provisional value (replaced when traffic really starts), so nothing is reported."""
+        if not run_id or (phase or "").upper() in ("PREPARE", "BACKFILL", ""):
             return None
         hit = measure_cache.get(run_id)
         if hit is not None and (hit[1] is not None or time.time() - hit[0] < 2):

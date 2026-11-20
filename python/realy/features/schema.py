@@ -105,8 +105,15 @@ class FeatureSchema:
             return -1
 
 
-@lru_cache(maxsize=4)
-def load_schema(path: str | Path = SCHEMA_PATH) -> FeatureSchema:
+def load_schema(path: str | Path | None = None) -> FeatureSchema:
+    """The feature schema: `path`, else $FEATURE_SCHEMA (the same override the Java services honour),
+    else contracts/features/feature_schema.yaml. Cached per path."""
+    import os
+    return _load_schema(str(path or os.environ.get("FEATURE_SCHEMA") or SCHEMA_PATH))
+
+
+@lru_cache(maxsize=8)
+def _load_schema(path: str) -> FeatureSchema:
     raw = yaml.safe_load(Path(path).read_text())
     feats: list[FeatureSpec] = []
     for i, f in enumerate(raw["features"]):
