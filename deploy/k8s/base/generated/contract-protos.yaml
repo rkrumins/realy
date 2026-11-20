@@ -206,26 +206,28 @@ data:
     \ rule_set_yaml = 16;            // full rule set (hot reload)\n  AuditFailure\
     \ audit_on_failure = 17;\n  bool self_inclusion = 18;             // add current\
     \ event to online-store aggregates (gateway)\n  bool echo = 19;              \
-    \         // calibration: decide immediately, no features/model\n}\n\n// Enable/disable\
-    \ a service's Kafka ingress (topology switching without restarts). On enable the\n\
-    // consumer seeks to the end of the topic, so a new run never processes an old\
-    \ backlog.\nmessage IngressCommand {\n  bool kafka_enabled = 1;\n}\n\nmessage\
-    \ RateCommand {\n  double tps = 1;          // absolute target (0 = keep)\n  double\
-    \ multiplier = 2;   // relative change (0 = keep)\n}\n\nenum RunPhase {\n  RUN_PHASE_UNSPECIFIED\
-    \ = 0;\n  PREPARE = 1;\n  WARMUP = 2;\n  MEASURE = 3;\n  DRAIN = 4;\n  COMPLETE\
-    \ = 5;\n  ABORTED = 6;\n}\n\nmessage ControlMessage {\n  string run_id = 1;\n\
-    \  sfixed64 issued_at_us = 2;\n  uint64 version = 3;\n  string target = 4;   \
-    \    // \"*\" | \"gateway\" | \"flink\" | \"model\" | \"emitter\"\n  oneof cmd\
-    \ {\n    ScoringConfig scoring = 10;\n    ModelServerConfig model_server = 11;\n\
-    \    RateCommand rate = 12;\n    RunPhase phase = 13;\n    IngressCommand ingress\
-    \ = 14;\n  }\n}\n\n// ---------------- live telemetry (`bench.metrics`, 1 s windows)\
-    \ ----------------\nmessage StageStat {\n  string name = 1;\n  uint64 count =\
-    \ 2;\n  double p50_ms = 3;\n  double p90_ms = 4;\n  double p99_ms = 5;\n  double\
-    \ p999_ms = 6;\n  double max_ms = 7;\n}\n\nmessage MetricsSnapshot {\n  string\
-    \ run_id = 1;\n  string source = 2;       // \"emitter\" | \"collector\" | \"\
-    gateway\" | \"model\" | \"flink\"\n  string instance = 3;\n  sfixed64 ts_us =\
-    \ 4;      // window end\n  uint32 window_ms = 5;\n  map<string, double> counters\
-    \ = 6;\n  repeated StageStat stages = 7;\n  RunPhase phase = 8;\n}\n"
+    \         // calibration: decide immediately, no features/model\n  float challenge_threshold\
+    \ = 20;       // > 0 overrides the rule set's thresholds.challenge (step-up band)\n\
+    }\n\n// Enable/disable a service's Kafka ingress (topology switching without restarts).\
+    \ On enable the\n// consumer seeks to the end of the topic, so a new run never\
+    \ processes an old backlog.\nmessage IngressCommand {\n  bool kafka_enabled =\
+    \ 1;\n}\n\nmessage RateCommand {\n  double tps = 1;          // absolute target\
+    \ (0 = keep)\n  double multiplier = 2;   // relative change (0 = keep)\n}\n\n\
+    enum RunPhase {\n  RUN_PHASE_UNSPECIFIED = 0;\n  PREPARE = 1;\n  WARMUP = 2;\n\
+    \  MEASURE = 3;\n  DRAIN = 4;\n  COMPLETE = 5;\n  ABORTED = 6;\n}\n\nmessage ControlMessage\
+    \ {\n  string run_id = 1;\n  sfixed64 issued_at_us = 2;\n  uint64 version = 3;\n\
+    \  string target = 4;       // \"*\" | \"gateway\" | \"flink\" | \"model\" | \"\
+    emitter\"\n  oneof cmd {\n    ScoringConfig scoring = 10;\n    ModelServerConfig\
+    \ model_server = 11;\n    RateCommand rate = 12;\n    RunPhase phase = 13;\n \
+    \   IngressCommand ingress = 14;\n  }\n}\n\n// ---------------- live telemetry\
+    \ (`bench.metrics`, 1 s windows) ----------------\nmessage StageStat {\n  string\
+    \ name = 1;\n  uint64 count = 2;\n  double p50_ms = 3;\n  double p90_ms = 4;\n\
+    \  double p99_ms = 5;\n  double p999_ms = 6;\n  double max_ms = 7;\n}\n\nmessage\
+    \ MetricsSnapshot {\n  string run_id = 1;\n  string source = 2;       // \"emitter\"\
+    \ | \"collector\" | \"gateway\" | \"model\" | \"flink\"\n  string instance = 3;\n\
+    \  sfixed64 ts_us = 4;      // window end\n  uint32 window_ms = 5;\n  map<string,\
+    \ double> counters = 6;\n  repeated StageStat stages = 7;\n  RunPhase phase =\
+    \ 8;\n}\n"
   realy__bench__v1__trace.proto: "// In-band per-event benchmark telemetry. Travels\
     \ as the `x-bench-trace` Kafka header\n// (or ScoreRequest.trace on gRPC) and\
     \ is returned inside DecisionRecord.trace.\nsyntax = \"proto3\";\n\npackage realy.bench.v1;\n\
@@ -326,26 +328,29 @@ data:
     \nimport \"realy/payments/v1/transaction.proto\";\nimport \"realy/features/v1/features.proto\"\
     ;\nimport \"realy/bench/v1/trace.proto\";\n\noption java_package = \"io.realy.contracts.scoring.v1\"\
     ;\noption java_multiple_files = true;\n\nenum Outcome {\n  OUTCOME_UNSPECIFIED\
-    \ = 0;\n  APPROVE = 1;\n  REVIEW = 2;\n  DECLINE = 3;\n}\n\nenum IngressMode {\n\
-    \  INGRESS_MODE_UNSPECIFIED = 0;\n  SYNC_GRPC = 1;\n  SYNC_HTTP = 2;\n  ASYNC_KAFKA_GATEWAY\
-    \ = 3;\n  ASYNC_FLINK_INLINE = 4;\n}\n\nenum DecisionPath {\n  PATH_FULL = 0;\
-    \                // features + model + rules\n  PATH_RULES_ONLY_FALLBACK = 1;\
-    \ // model/feature deadline or error -> rules only\n  PATH_PROVISIONAL = 2;  \
-    \       // sync answer given before scoring finished\n  PATH_FINAL_AFTER_PROVISIONAL\
-    \ = 3;\n  PATH_ECHO = 4;                // calibration topology, no processing\n\
-    }\n\nmessage RuleHit {\n  string rule_id = 1;\n  Outcome action = 2;\n  string\
-    \ reason = 3;\n}\n\nmessage ModelResult {\n  string model_name = 1;\n  string\
-    \ model_version = 2;\n  string deployment = 3;\n  float score = 4;\n  repeated\
-    \ float raw_outputs = 5;\n  fixed64 input_hash = 6;\n  bool timed_out = 7;\n \
-    \ bool errored = 8;\n  uint32 batch_size = 9;\n}\n\n// System-of-record for a\
-    \ decision: everything needed to reproduce, audit, or train.\nmessage DecisionRecord\
-    \ {\n  fixed64 event_id = 1;\n  Outcome outcome = 2;\n  float score = 3;\n  repeated\
-    \ string reason_codes = 4;\n  repeated RuleHit rule_hits = 5;\n  ModelResult model\
-    \ = 6;\n  string policy_version = 7;\n  string rule_set_version = 8;\n  DecisionPath\
-    \ path = 9;\n  bool degraded = 10;\n  IngressMode ingress_mode = 11;\n  string\
-    \ instance_id = 12;\n  sfixed64 decided_at_us = 13;\n  uint32 revision = 14; \
-    \         // 0 = first decision, 1 = final after provisional\n  realy.payments.v1.TransactionEvent\
-    \ event = 15;\n  realy.features.v1.FeatureVector features = 16;\n  realy.bench.v1.BenchTrace\
+    \ = 0;\n  APPROVE = 1;\n  REVIEW = 2;\n  DECLINE = 3;\n  CHALLENGE = 4;   // step\
+    \ up before approving: 3DS / SCA challenge online, PIN prompt in store, in-app\n\
+    \                   // confirmation of a transfer; the payment continues only\
+    \ if the customer passes\n}\n\nenum IngressMode {\n  INGRESS_MODE_UNSPECIFIED\
+    \ = 0;\n  SYNC_GRPC = 1;\n  SYNC_HTTP = 2;\n  ASYNC_KAFKA_GATEWAY = 3;\n  ASYNC_FLINK_INLINE\
+    \ = 4;\n}\n\nenum DecisionPath {\n  PATH_FULL = 0;                // features\
+    \ + model + rules\n  PATH_RULES_ONLY_FALLBACK = 1; // model/feature deadline or\
+    \ error -> rules only\n  PATH_PROVISIONAL = 2;         // sync answer given before\
+    \ scoring finished\n  PATH_FINAL_AFTER_PROVISIONAL = 3;\n  PATH_ECHO = 4;    \
+    \            // calibration topology, no processing\n}\n\nmessage RuleHit {\n\
+    \  string rule_id = 1;\n  Outcome action = 2;\n  string reason = 3;\n}\n\nmessage\
+    \ ModelResult {\n  string model_name = 1;\n  string model_version = 2;\n  string\
+    \ deployment = 3;\n  float score = 4;\n  repeated float raw_outputs = 5;\n  fixed64\
+    \ input_hash = 6;\n  bool timed_out = 7;\n  bool errored = 8;\n  uint32 batch_size\
+    \ = 9;\n}\n\n// System-of-record for a decision: everything needed to reproduce,\
+    \ audit, or train.\nmessage DecisionRecord {\n  fixed64 event_id = 1;\n  Outcome\
+    \ outcome = 2;\n  float score = 3;\n  repeated string reason_codes = 4;\n  repeated\
+    \ RuleHit rule_hits = 5;\n  ModelResult model = 6;\n  string policy_version =\
+    \ 7;\n  string rule_set_version = 8;\n  DecisionPath path = 9;\n  bool degraded\
+    \ = 10;\n  IngressMode ingress_mode = 11;\n  string instance_id = 12;\n  sfixed64\
+    \ decided_at_us = 13;\n  uint32 revision = 14;          // 0 = first decision,\
+    \ 1 = final after provisional\n  realy.payments.v1.TransactionEvent event = 15;\n\
+    \  realy.features.v1.FeatureVector features = 16;\n  realy.bench.v1.BenchTrace\
     \ trace = 17;\n  uint32 feature_schema_version = 18;\n}\n"
   realy__scoring__v1__scoring_service.proto: "syntax = \"proto3\";\n\npackage realy.scoring.v1;\n\
     \nimport \"realy/payments/v1/transaction.proto\";\nimport \"realy/bench/v1/trace.proto\"\

@@ -16,6 +16,7 @@ class Outcome(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     APPROVE: _ClassVar[Outcome]
     REVIEW: _ClassVar[Outcome]
     DECLINE: _ClassVar[Outcome]
+    CHALLENGE: _ClassVar[Outcome]
 
 class IngressMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -36,6 +37,7 @@ OUTCOME_UNSPECIFIED: Outcome
 APPROVE: Outcome
 REVIEW: Outcome
 DECLINE: Outcome
+CHALLENGE: Outcome
 INGRESS_MODE_UNSPECIFIED: IngressMode
 SYNC_GRPC: IngressMode
 SYNC_HTTP: IngressMode

@@ -32,7 +32,7 @@ ADDED_COLUMNS = [
     ("fresh_entity", "Array(LowCardinality(String))"), ("fresh_age_us", "Array(Int64)"), ("fresh_found", "Array(UInt8)"),
 ]
 ENUM = {
-    "outcome": ["OUTCOME_UNSPECIFIED", "APPROVE", "REVIEW", "DECLINE"],
+    "outcome": ["OUTCOME_UNSPECIFIED", "APPROVE", "REVIEW", "DECLINE", "CHALLENGE"],
     "path": ["FULL", "RULES_ONLY_FALLBACK", "PROVISIONAL", "FINAL_AFTER_PROVISIONAL", "ECHO"],
     "ingress": ["UNSPECIFIED", "SYNC_GRPC", "SYNC_HTTP", "ASYNC_KAFKA_GATEWAY", "ASYNC_FLINK_INLINE"],
     "payment_type": ["UNSPECIFIED", "CARD_PURCHASE", "ATM_WITHDRAWAL", "TRANSFER", "CARD_REFUND"],
@@ -213,7 +213,7 @@ CREATE TABLE IF NOT EXISTS realy.decisions (
   -- audit WAL append: decided -> durably appended by the broker (1 ms resolution: LogAppendTime is ms)
   lat_audit_append_us Int32,
   rule_ids Array(LowCardinality(String)),          -- every CEL rule that fired, in evaluation order
-  rule_actions Array(LowCardinality(String)),      -- its action (APPROVE = allow-list, REVIEW, DECLINE)
+  rule_actions Array(LowCardinality(String)),      -- its action (APPROVE = allow-list, REVIEW, DECLINE, CHALLENGE)
   fresh_entity Array(LowCardinality(String)),      -- per entity looked up in the online store ...
   fresh_age_us Array(Int64),                       -- ... age of its stored values when scored (-1 = none)
   fresh_found Array(UInt8),                        -- ... whether a stored blob existed

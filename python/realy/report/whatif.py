@@ -57,6 +57,8 @@ def load(run_dir: Path, sample_mod: int = 1) -> dict[str, Any]:
         # the run approved still knows how each would have ended
         "challenge": stepup.for_run(run_dir, ids, events["is_fraud"].to_numpy()[ei].astype(bool),
                                     events["fraud_type"].to_numpy()[ei]),
+        # which payments a REVIEW actually holds (contracts/insights.yaml review_holds): card auths are not
+        "review_holds": stepup.review_holds(events["payment_type"].to_numpy()[ei]),
     }
 
 
@@ -94,9 +96,10 @@ def evaluate(data: dict[str, Any], rules_yaml: str, review: float | None = None,
     flagged, declined = outcome >= 2, outcome == 3
     legit = ~y
     amt = data["amount"]
-    fin = stepup.final(outcome, data["challenge"]) if "challenge" in data else outcome
+    fin = stepup.final(outcome, data["challenge"], data.get("review_holds")) if "challenge" in data else outcome
     let_through = (fin == stepup.APPROVED)          # approved outright or after passing a step-up
-    stopped = (fin == stepup.DECLINED) | (fin == stepup.ABANDONED)
+    paid = np.isin(fin, stepup.PAID)                # ... or reviewed after the money moved (card auths)
+    stopped = np.isin(fin, stepup.STOPPED)
     challenged = outcome == stepup.CHALLENGED
     res = {"rules": rules.version, "model": data.get("model_version", "as served"), "review": rules.review, "decline": rules.decline,
            "challenge": rules.challenge, "events": int(n),
@@ -114,13 +117,17 @@ def evaluate(data: dict[str, Any], rules_yaml: str, review: float | None = None,
            "legit_declined_rate": float(declined[legit].mean()) if legit.any() else None,
            # fraud that got paid: approved outright or after passing a step-up (a REVIEW counts as caught)
            "fraud_usd_approved": float(amt[y & let_through].sum() / 100), "fraud_usd_total": float(amt[y].sum() / 100),
+           # ... plus fraud reviewed only after it was paid (a review cannot hold a card authorisation)
+           "fraud_usd_paid": float(amt[y & paid].sum() / 100),
+           "reviews": int((outcome == 2).sum()), "legit_reviewed": int(((outcome == 2) & legit).sum()),
            "by_rule": {}, "by_type": {}}
     ft = data["fraud_type"]
     for t in sorted(set(int(x) for x in ft[y])):
         m = y & (ft == t)
         res["by_type"][int(t)] = {"events": int(m.sum()), "recall_flagged": float(flagged[m].mean()),
                                   "recall_declined": float(declined[m].mean()), "recall_stopped": float(stopped[m].mean()),
-                                  "usd_approved": float(amt[m & let_through].sum() / 100)}
+                                  "usd_approved": float(amt[m & let_through].sum() / 100),
+                                  "usd_paid": float(amt[m & paid].sum() / 100)}
     for rid, idx in sorted(per_rule.items()):
         ix = np.asarray(idx)
         res["by_rule"][rid] = {"fires": int(ix.size), "fraud": int(y[ix].sum()), "precision": float(y[ix].mean()),
@@ -129,12 +136,12 @@ def evaluate(data: dict[str, Any], rules_yaml: str, review: float | None = None,
 
 
 def render(rows: list[tuple[str, dict[str, Any]]]) -> str:
-    keys = ("recall_flagged", "recall_declined", "recall_stopped", "precision_flagged", "false_positive_rate",
-            "legit_declined_rate", "legit_challenge_rate", "fraud_usd_approved", "lost_sales_usd")
+    keys = ("recall_flagged", "recall_stopped", "precision_flagged", "false_positive_rate",
+            "legit_declined_rate", "legit_challenge_rate", "fraud_usd_paid", "lost_sales_usd")
     out = [f"{'variant':34s} " + " ".join(f"{k[:16]:>16s}" for k in keys)]
     for name, r in rows:
         out.append(f"{name[:34]:34s} " + " ".join(
-            f"{r[k]:16.4f}" if isinstance(r.get(k), float) and not k.endswith("_usd") and k != "fraud_usd_approved"
+            f"{r[k]:16.4f}" if isinstance(r.get(k), float) and "usd" not in k
             else f"{r.get(k) or 0:16,.0f}"
             for k in keys))
     changed = sorted({k for _, r in rows for k in r["by_rule"]})

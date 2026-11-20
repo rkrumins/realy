@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/controls";
 import { Select } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { fmtCompact, fmtMs, fmtNum, fmtPct, isNum } from "@/lib/format";
+import { fmtCompact, fmtMs, fmtNum, fmtPct, fmtUsd, isNum } from "@/lib/format";
 import type { Detection, RunSummary } from "@/lib/types";
 
 const ROWS: { label: string; get: (r: RunSummary) => number | null; fmt: (v: number | null) => string; better: "lower" | "higher" }[] = [
@@ -38,8 +38,9 @@ function Delta({ a, b, better, pct = true }: { a: number | null; b: number | nul
   );
 }
 
-const DET: { k: keyof Detection; label: string; better: "lower" | "higher" }[] = [
+const DET: { k: keyof Detection; label: string; better: "lower" | "higher"; usd?: boolean }[] = [
   { k: "recall_flagged", label: "Recall (flagged)", better: "higher" }, { k: "recall_declined", label: "Recall (declined)", better: "higher" },
+  { k: "recall_stopped", label: "Fraud stopped", better: "higher" }, { k: "fraud_usd_paid", label: "Fraud $ paid", better: "lower", usd: true },
   { k: "precision_flagged", label: "Precision", better: "higher" }, { k: "false_positive_rate", label: "False-positive rate", better: "lower" },
 ];
 
@@ -172,13 +173,15 @@ export default function Compare() {
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 {DET.map((m) => {
                   const va = c.detection.a?.[m.k] as number | null | undefined, vb = c.detection.b?.[m.k] as number | null | undefined;
+                  if (!isNum(va) && !isNum(vb)) return null;   // e.g. step-up metrics on reports from before step-up
+                  const f = (v: number | null | undefined) => (m.usd ? fmtUsd(v) : fmtPct(v, 1));
                   return (
                     <Card key={m.k} className="p-4">
                       <div className="text-[11.5px] font-medium uppercase tracking-wider text-subtle">{m.label}</div>
                       <div className="mt-2 flex items-baseline gap-3 num">
-                        <span className="text-[18px] font-semibold" style={{ color: SERIES[0] }}>{fmtPct(va, 1)}</span>
-                        <span className="text-[18px] font-semibold" style={{ color: SERIES[1] }}>{fmtPct(vb, 1)}</span>
-                        <span className="ml-auto text-[12.5px]"><Delta a={va ?? null} b={vb ?? null} better={m.better} pct={false} /></span>
+                        <span className="text-[18px] font-semibold" style={{ color: SERIES[0] }}>{f(va)}</span>
+                        <span className="text-[18px] font-semibold" style={{ color: SERIES[1] }}>{f(vb)}</span>
+                        <span className="ml-auto text-[12.5px]"><Delta a={va ?? null} b={vb ?? null} better={m.better} pct={!!m.usd} /></span>
                       </div>
                     </Card>
                   );

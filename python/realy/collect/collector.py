@@ -118,7 +118,7 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
     DR = decision_pb2.DecisionRecord
     sec: dict[str, list[int]] = {k: [] for k in ("e2e", "ingress", "hot_path", "egress")}
     sec_stage: dict[str, list[int]] = {}
-    sec_outcomes = {1: 0, 2: 0, 3: 0}
+    sec_outcomes = {1: 0, 2: 0, 3: 0, 4: 0}
     sec_count = 0
     sec_degraded = 0
     next_metrics = (now_us() // 1_000_000 + 1) * 1_000_000
@@ -271,6 +271,7 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             mprod.produce(METRICS, snapshot_json(run_id, "collector", f"c{index}", now, 1000, counters={
                 "decided": sec_count, "decided_total": unique, "duplicates_total": dups,
                 "approve": sec_outcomes.get(1, 0), "review": sec_outcomes.get(2, 0), "decline": sec_outcomes.get(3, 0),
+                "challenge": sec_outcomes.get(4, 0),
                 "degraded": sec_degraded, "foreign_total": foreign,
                 # decision record size (audit topic + ClickHouse sizing) and the collector's own CPU
                 "decision_bytes": sec_bytes, "cpu_ms": own_cpu - cpu_prev, "cpus": 1}, stages=stages))
@@ -278,7 +279,7 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             mprod.poll(0)
             sec = {k: [] for k in sec}
             sec_stage = {}
-            sec_outcomes = {1: 0, 2: 0, 3: 0}
+            sec_outcomes = {1: 0, 2: 0, 3: 0, 4: 0}
             sec_count = sec_degraded = 0
             next_metrics += 1_000_000
         if drain.is_set():

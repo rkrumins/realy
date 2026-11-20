@@ -16,22 +16,26 @@ flowchart LR
   F --> R["CEL rules<br/>every rule evaluated"]
   M --> P{"policy"}
   R --> P
-  P --> O["APPROVE / REVIEW / DECLINE<br/>+ reason codes"]
+  P --> O["APPROVE / CHALLENGE / REVIEW / DECLINE<br/>+ reason codes"]
 ```
 
-**Policy precedence** (`RuleSet.decide`, identical in Java and in the Python verifier):
+**Policy precedence** (`RuleSet.decide` in Java, `realy.policy` in Python; `pulsebench verify`
+proves they agree on every decision):
 
 | Order | Condition | Outcome |
 |---|---|---|
 | 1 | any DECLINE rule fired | DECLINE |
 | 2 | any ALLOW rule fired | APPROVE |
 | 3 | score ≥ decline threshold (0.90) | DECLINE |
-| 4 | any REVIEW rule fired | REVIEW |
-| 5 | score ≥ review threshold (0.55) | REVIEW |
-| 6 | otherwise | APPROVE |
+| 4 | any CHALLENGE rule fired | CHALLENGE if the payment can be stepped up, else REVIEW |
+| 5 | score ≥ challenge threshold (0.55), payment can be stepped up | CHALLENGE |
+| 6 | any REVIEW rule fired | REVIEW |
+| 7 | score ≥ review threshold (0.55) | REVIEW |
+| 8 | otherwise | APPROVE |
 
 The model and the rules see exactly the same vector. The thresholds come from the rule set and can
-be overridden live (`ScoringConfig.review_threshold` / `decline_threshold`).
+be overridden live (`ScoringConfig.review_threshold` / `challenge_threshold` / `decline_threshold`).
+Rows 4–5 exist only in rule sets with step-up (`baseline-v4`); see [Step-up](#step-up-challenge).
 
 **When the model misses its deadline,** the rules decide alone on the **rules-only fallback**
 path: the score is ignored and the decision is flagged `degraded`. The report counts these
@@ -79,7 +83,8 @@ Amounts in stream features are USD **minor** units (cents); `amount_usd` is doll
 
 ## Rules
 
-Rule set `baseline-v3` (`rules/baseline.yaml`, CEL; `baseline-v1` / `-v2` kept for comparison). Every rule is evaluated for every event and
+Rule set `baseline-v4` (`rules/baseline.yaml`, CEL; `baseline-v1` / `-v2` / `-v3` kept for comparison:
+v4 is v3 with step-up, see [Step-up](#step-up-challenge)). Every rule is evaluated for every event and
 recorded (`rule_ids`), so precision is measurable per rule. Measured on the out-of-sample evaluation
 run (fraud-eval, seed 1337, run under `baseline-v2`):
 
@@ -528,6 +533,81 @@ What happened:
 The fix is a decision-history feature: declines on this card in the last hour. That is a feature-DSL
 change (an aggregator over `payments.decisions`), not a rule.
 
+## Step-up (CHALLENGE)
+
+**What it is.** A card authorisation cannot wait for an analyst: the terminal or checkout needs an
+answer within a second or two. The in-line controls a card issuer really has are a decline and a
+**step-up**: a 3DS / SCA challenge online (a one-time code or app approval), a PIN prompt in store
+("insert card and enter PIN"). For a transfer the same idea is an in-app confirmation with a scam
+warning. The payment continues only if the payer completes it.
+
+**In the policy:**
+- **Actions and threshold:** a rule can answer `CHALLENGE`, and `thresholds.challenge` opens a
+  score band that steps a payment up instead of reviewing it.
+- **Which payments can be stepped up** is data: `challenge.when`, a CEL expression over `event` in
+  the rule set. In v4, a payment can be stepped up when:
+  - it is an online card payment, or chip / contactless in store;
+  - and it is not recurring, card-on-file, ATM, magstripe, keyed, a wallet token or a transfer.
+- **Fallback:** a CHALLENGE rule on a payment that cannot be stepped up becomes a REVIEW.
+
+**Who passes is a property of the payer, not of the pipeline.** Every event carries a latent
+step-up result (pass / fail / abandon), drawn by the instrument (`python/realy/challenge.py`) and
+never sent to the system under test. The rates come from the scenario's `fraud.challenge` (genuine
+customers: 90% pass, 2% fail, 8% give up), else from each typology's `challenge` block:
+
+| Payer | Pass |
+|---|---|
+| card testing, bots, merchant breach, counterfeit | 2–5% (no code, no PIN) |
+| account takeover | 35% (a phished one-time code, a SIM swap) |
+| lost / stolen card | 3% (no PIN) |
+| APP scam | 85% (the victim authorises their own payment) |
+| bust-out | 98% (it is the customer) |
+
+The draw is a pure function of the event id and the scenario seed, so the report, the verifier,
+what-ifs and the Explorer agree, and a what-if can replay step-ups the run never issued.
+
+**What a REVIEW does, honestly** (`contracts/insights.yaml` `review_holds`, default transfers only):
+- A transfer can be held until an analyst has called the customer.
+- A reviewed card authorisation is approved, and the case is worked afterwards.
+
+The report therefore separates:
+- **fraud stopped:** declined, failed or abandoned a step-up, or held for review;
+- **fraud $ paid:** approved outright, after passing a step-up, or as a card payment reviewed after
+  the fact.
+
+Reports before this change counted every REVIEW as caught.
+
+**baseline-v4.** v3 with the card review band (score 0.55–0.90) and the card review rules
+(`CARD_TESTING_MERCHANT`, `VELOCITY_CARD_5M`, `VELOCITY_CARD_10M_DISTINCT`, `CONTACTLESS_SPLIT`,
+`ATO_NEW_DEVICE_HIGH_AMOUNT`) stepped up.
+
+How it was decided:
+- **Tuning:** on fraud-train (seed 7).
+- **Transfers stay held for review.** An in-app confirmation let 4–10× more APP-scam money through
+  than a held review, because victims pass it.
+- **The band stays at 0.55.** At 0.65 more card testing got through.
+- **Confirmation:** out of sample on fraud-eval (seed 1337, every event, `pulsebench rules-whatif`):
+
+| fraud-eval | baseline-v3 | **baseline-v4** |
+|---|---|---|
+| fraud stopped | 0.854 | **0.889** |
+| fraud $ paid | $493,355 | **$386,804** (−22%) |
+| merchant breach stopped | 0.34 ($89k paid) | **0.83** ($15k) |
+| account takeover stopped | 0.43 ($109k paid) | **0.52** ($90k) |
+| card testing stopped | 0.80 ($59k paid) | **0.84** ($46k) |
+| good customers sent to review | 4,774 | **2,541** |
+| good customers stepped up | 0 | 0.76% |
+| good customers who gave up (lost sales) | 0 | 176 ($119,660) |
+| APP scam, ATM cash-out, bust-out | unchanged | unchanged |
+
+**The trade-off it shows:**
+- **What a challenge stops:** fraud that has no code or PIN.
+- **What it does not stop:** a phished account takeover or a scam victim. The report flags these as
+  "step-up does not stop …".
+- **What it costs:** every good customer challenged is friction, and some of them are a lost sale.
+  The report has a **Step-up** section: who was challenged, who passed, failed or gave up, per
+  typology, with the lost sales and the fraud that got through.
+
 ## How close is this to a real payment flow?
 
 **Realistic:** the shape of the system and the discipline of measuring it.
@@ -561,10 +641,10 @@ change (an aggregator over `payments.decisions`), not a rule.
 - **The model and rules are small:** a proxy MLP (and GBDT) on 54 features and 17 rules. Production
   systems use hundreds to thousands of features, several models by channel or typology, and far
   larger rule estates.
-- **REVIEW is generic.** A card authorisation cannot be held for an analyst. In practice REVIEW
-  maps to a step-up (a 3DS / SCA challenge), approve-and-alert (a "was this you?" message, then a
-  card block), or a decline with referral. For instant transfers it maps to a hold, a Confirmation
-  of Payee check, or a scam warning.
+- **Step-up results are simulated.** CHALLENGE is a real outcome (see [Step-up](#step-up-challenge))
+  with per-population pass / fail / abandon rates, but there is no ACS, no 3DS risk data, no SCA
+  exemptions (low value, transaction-risk analysis), and no approve-and-alert ("was this you?"
+  then a card block). A REVIEW holds transfers only; a reviewed card payment counts as paid.
 
 **Not modelled:**
 - **The authorisation message flow:** ISO 8583 / ISO 20022 messages between acquirer, scheme and
@@ -590,7 +670,7 @@ change (an aggregator over `payments.decisions`), not a rule.
 
 **The most valuable additions**, in order:
 1. **An authorisation layer:** card status, CVV and cryptogram results, and a scheme score as event
-   fields. Add step-up as a decision with its own friction cost and drop-off.
+   fields. (Step-up, with its own friction and drop-off, is in: `baseline-v4`.)
 2. **Decision-history features:** recent declines and step-up failures per card and device (see
    the worked example above).
 3. **An unsupervised anomaly score** served beside the model, plus merchant- and BIN-level spike

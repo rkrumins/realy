@@ -22,8 +22,12 @@ import numpy as np
 
 PASS, FAIL, ABANDON = 0, 1, 2
 RESULTS = {PASS: "pass", FAIL: "fail", ABANDON: "abandon"}
-# final outcome after the step-up (instrument-only codes beyond the pipeline's Outcome enum)
-APPROVED, REVIEWED, DECLINED, CHALLENGED, ABANDONED = 1, 2, 3, 4, 5
+# the payment's fate (instrument-only codes beyond the pipeline's Outcome enum)
+APPROVED, REVIEWED, DECLINED, CHALLENGED, ABANDONED, REVIEWED_PAID = 1, 2, 3, 4, 5, 6
+FATE = {APPROVED: "approved", REVIEWED: "held for review", DECLINED: "declined", ABANDONED: "abandoned at step-up",
+        REVIEWED_PAID: "approved, reviewed afterwards"}
+PAID = (APPROVED, REVIEWED_PAID)                 # the money moved
+STOPPED = (REVIEWED, DECLINED, ABANDONED)        # the money did not move (a held review is worked first)
 
 _M = (1 << 64) - 1
 
@@ -71,16 +75,31 @@ def draw(event_ids: np.ndarray, is_fraud: np.ndarray, fraud_type: np.ndarray, se
     return out
 
 
-def final(outcome: np.ndarray, result: np.ndarray) -> np.ndarray:
-    """The payment's fate after the step-up: CHALLENGE + pass -> APPROVED, + fail -> DECLINED,
-    + abandon -> ABANDONED; every other outcome is unchanged."""
+def final(outcome: np.ndarray, result: np.ndarray, review_holds: np.ndarray | None = None) -> np.ndarray:
+    """The payment's fate: CHALLENGE + pass -> APPROVED, + fail -> DECLINED, + abandon -> ABANDONED;
+    REVIEW -> REVIEWED where a review holds the payment, else REVIEWED_PAID (approved, worked
+    afterwards). `review_holds` None: every review holds (the pipeline's own view)."""
     o = np.asarray(outcome).astype(np.int8).copy()
     ch = o == CHALLENGED
     r = np.asarray(result)
+    rv = o == REVIEWED
     o[ch & (r == PASS)] = APPROVED
     o[ch & (r == FAIL)] = DECLINED
     o[ch & (r == ABANDON)] = ABANDONED
+    if review_holds is not None:
+        o[rv & ~np.asarray(review_holds, bool)] = REVIEWED_PAID
     return o
+
+
+def review_holds(payment_type: np.ndarray, config: dict | None = None) -> np.ndarray:
+    """Per event: does a REVIEW hold this payment (contracts/insights.yaml `review_holds`)?"""
+    from .features.derived import PAYMENT_TYPE
+    if config is None:
+        from .report.insights import load_config
+        config = load_config()
+    names = set(config.get("review_holds", ["TRANSFER"]))
+    codes = [i for i, n in enumerate(PAYMENT_TYPE) if n in names]
+    return np.isin(np.asarray(payment_type), codes)
 
 
 def for_run(run_dir: Any, event_ids: np.ndarray, is_fraud: np.ndarray, fraud_type: np.ndarray) -> np.ndarray:

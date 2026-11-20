@@ -128,6 +128,7 @@ Piecewise-linear inverse CDF: quantiles[i] in [0,1] ascending, ms[i] the value a
 | `audit_on_failure` | `AuditFailure` | 17 | `"SPOOL_LOCAL"` |  |
 | `self_inclusion` | `bool` | 18 | `true` | add current event to online-store aggregates (gateway) |
 | `echo` | `bool` | 19 | `false` | calibration: decide immediately, no features/model |
+| `challenge_threshold` | `float` | 20 |  | > 0 overrides the rule set's thresholds.challenge (step-up band) |
 
 ### `IngressCommand`
 

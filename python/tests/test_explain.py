@@ -30,14 +30,24 @@ def test_policy_branches_mirror_the_decision_precedence():
     assert policy_path([], 0.6, 0.55, 0.9, "REVIEW", "FULL")["branch"] == "score review"
     p = policy_path([], None, 0.55, 0.9, "APPROVE", "RULES_ONLY_FALLBACK")
     assert p["branch"] == "approve" and "without the model" in p["why"]
+    # step-up: a CHALLENGE rule, and the challenge band, only for payments that can be stepped up
+    assert policy_path(mk("CHALLENGE"), 0.1, 0.55, 0.9, "CHALLENGE", "FULL")["branch"] == "challenge rule"
+    p = policy_path(mk("CHALLENGE"), 0.1, 0.55, 0.9, "REVIEW", "FULL", challengeable=False)
+    assert p["branch"] == "challenge rule, not challengeable" and "review instead" in p["why"]
+    assert policy_path([], 0.6, 0.55, 0.9, "CHALLENGE", "FULL", challenge=0.55)["branch"] == "score challenge"
+    p = policy_path([], 0.6, 0.55, 0.9, "REVIEW", "FULL", challenge=0.55, challengeable=False)
+    assert p["branch"] == "score review" and "cannot be stepped up" in p["why"]
     # the branch agrees with the verifier's decide() on random cases
     rng = np.random.default_rng(1)
-    for _ in range(200):
-        acts = [a for a in ("DECLINE", "REVIEW") if rng.random() < 0.3]
+    code = {"decline rule": 3, "score decline": 3, "challenge rule": 4, "challenge rule, not challengeable": 2,
+            "score challenge": 4, "review rule": 2, "score review": 2, "approve": 1}
+    for _ in range(400):
+        acts = [a for a in ("DECLINE", "CHALLENGE", "REVIEW") if rng.random() < 0.3]
         score = float(rng.random())
-        dec = rules.decide([("x", a) for a in acts], score)
-        br = policy_path(mk(*acts), score, rules.review, rules.decline, None, "FULL")["branch"]
-        assert {"decline rule": 3, "score decline": 3, "review rule": 2, "score review": 2, "approve": 1}[br] == dec
+        can = bool(rng.random() < 0.5)
+        dec = rules.decide([("x", a) for a in acts], score, can)
+        p = policy_path(mk(*acts), score, rules.review, rules.decline, None, "FULL", rules.challenge, can)
+        assert code[p["branch"]] == dec and p["expected"] == {1: "APPROVE", 2: "REVIEW", 3: "DECLINE", 4: "CHALLENGE"}[dec]
 
 
 def test_rule_explanations_match_the_verifier_and_show_the_values():

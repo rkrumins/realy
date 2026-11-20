@@ -78,6 +78,7 @@ message ScoringConfig {
   AuditFailure audit_on_failure = 17;
   bool self_inclusion = 18;             // add current event to online-store aggregates (gateway)
   bool echo = 19;                       // calibration: decide immediately, no features/model
+  float challenge_threshold = 20;       // > 0 overrides the rule set's thresholds.challenge (step-up band)
 }
 
 // Enable/disable a service's Kafka ingress (topology switching without restarts). On enable the

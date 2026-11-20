@@ -203,9 +203,10 @@ public final class ScoringOrchestrator {
         List<RuleSet.Hit> hits = rules.evaluate(new FeatureMap(schema, c.features.values()), c.view);
         long pStart = BenchClock.nowUs();
         Spans.add(c.r.trace(), Stage.RULES, hits.size(), rStart, pStart - rStart);
-        Outcome o = rules.decide(hits, res.score());
+        boolean canStepUp = rules.usesChallenge() && rules.challengeable(c.view);
+        Outcome o = rules.decide(hits, res.score(), canStepUp);
         Spans.add(c.r.trace(), Stage.POLICY, o.getNumber(), pStart, BenchClock.nowUs() - pStart);
-        List<String> reasons = reasons(hits, o, res.score(), rules, 0);
+        List<String> reasons = reasons(hits, o, res.score(), rules, 0, canStepUp);
         return build(c, o, res.score(), hits, res, DecisionPath.PATH_FULL, false, 0, reasons);
     }
 
@@ -215,10 +216,11 @@ public final class ScoringOrchestrator {
         RuleSet rules = c.a.rules();
         List<RuleSet.Hit> hits = rules.evaluate(new FeatureMap(schema, c.features.values()), c.view);
         Spans.add(c.r.trace(), Stage.RULES, hits.size(), at, BenchClock.nowUs() - at);
-        Outcome o = rules.decide(hits, Float.NaN);
+        boolean canStepUp = rules.usesChallenge() && rules.challengeable(c.view);
+        Outcome o = rules.decide(hits, Float.NaN, canStepUp);
         boolean timeoutMode = c.a.cfg().getOnDeadline() == OnDeadline.TIMEOUT;
         if (timeoutMode && o == Outcome.APPROVE) o = Outcome.REVIEW;
-        List<String> reasons = reasons(hits, o, Float.NaN, rules, c.fallbackReason);
+        List<String> reasons = reasons(hits, o, Float.NaN, rules, c.fallbackReason, canStepUp);
         if (timeoutMode) reasons = append(reasons, "DEADLINE_EXCEEDED");
         DecisionPath path = pathOverride != null ? pathOverride : DecisionPath.PATH_RULES_ONLY_FALLBACK;
         return build(c, o, Float.NaN, hits, null, path, true, 0, reasons);
@@ -230,11 +232,13 @@ public final class ScoringOrchestrator {
         return out;
     }
 
-    private static List<String> reasons(List<RuleSet.Hit> hits, Outcome o, float score, RuleSet rules, int fb) {
+    private static List<String> reasons(List<RuleSet.Hit> hits, Outcome o, float score, RuleSet rules, int fb,
+                                        boolean canStepUp) {
         var out = new java.util.ArrayList<String>(hits.size() + 2);
         for (RuleSet.Hit h : hits) out.add(h.id());
         if (!Float.isNaN(score)) {
             if (score >= rules.declineThreshold) out.add("SCORE_DECLINE");
+            else if (canStepUp && !Float.isNaN(rules.challengeThreshold) && score >= rules.challengeThreshold) out.add("SCORE_CHALLENGE");
             else if (score >= rules.reviewThreshold) out.add("SCORE_REVIEW");
         }
         switch (fb) {

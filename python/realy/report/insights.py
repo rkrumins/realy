@@ -87,32 +87,73 @@ def build_insights(rep: dict[str, Any], cfg: dict[str, Any], prev: dict[str, Any
 
     # ------------------------------------------------------------------ detection
     fraud_total = d.get("fraud_usd_total") or 0.0
-    approved = d.get("fraud_usd_approved") or 0.0
+    # money that moved: approved, passed a step-up, or reviewed only after payment (card authorisations);
+    # reports before step-up only have "approved"
+    paid_key = "usd_paid" if "fraud_usd_paid" in d else "usd_approved"
+    approved = d.get("fraud_usd_paid", d.get("fraud_usd_approved")) or 0.0
     by_type = d.get("by_type") or {}
     if by_type and approved > 0:
-        worst = max(by_type.items(), key=lambda kv: kv[1].get("usd_approved") or 0)
+        worst = max(by_type.items(), key=lambda kv: kv[1].get(paid_key) or 0)
         name, t = worst
-        share = (t.get("usd_approved") or 0) / approved
+        share = (t.get(paid_key) or 0) / approved
         meta = registry.by_name.get(name) if registry is not None else None
         hint = f"signals: {', '.join(meta.signals[:4])}" if meta and meta.signals else ""
         add("warning" if share > 0.25 else "info", "detection",
-            f"{(meta.title if meta and meta.title else name)} lets the most fraud through: {_usd(t.get('usd_approved'))} "
-            f"({_pct(share, 0)} of the fraud $ approved)",
-            f"{_pct(t.get('recall_declined'), 0)} of its events declined, {_pct(t.get('recall_flagged'), 0)} flagged; "
+            f"{(meta.title if meta and meta.title else name)} lets the most fraud through: {_usd(t.get(paid_key))} "
+            f"({_pct(share, 0)} of the fraud $ {'paid' if paid_key == 'usd_paid' else 'approved'})",
+            f"{_pct(t.get('recall_declined'), 0)} of its events declined, {_pct(t.get('recall_flagged'), 0)} flagged"
+            + (f", {_pct(t.get('recall_stopped'), 0)} stopped" if t.get("recall_stopped") is not None else "") + "; "
             f"{t.get('approved_before_first_decline_mean', 0):.1f} events approved before the first decline per campaign",
-            {"typology": name, "usd_approved": t.get("usd_approved"), "recall_declined": t.get("recall_declined")},
+            {"typology": name, paid_key: t.get(paid_key), "recall_declined": t.get("recall_declined")},
             {"kind": "explorer", "query": f"fraud:{name}"},
             ("open its campaigns in the Explorer and look at what the approved events have in common"
-             + (f"; {hint}" if hint else "")), t.get("usd_approved") or 0)
+             + (f"; {hint}" if hint else "")), t.get(paid_key) or 0)
     floor = float(th.get("typology_decline_floor", 0.5))
     min_ev = int(th.get("typology_min_events", 20))
-    weak = [(n, t) for n, t in by_type.items() if t.get("events", 0) >= min_ev and (t.get("recall_declined") or 0) < floor]
-    for n, t in sorted(weak, key=lambda kv: kv[1].get("recall_declined") or 0)[:3]:
-        add("warning", "detection", f"{n} is declined only {_pct(t.get('recall_declined'), 0)} of the time",
-            f"{t.get('events', 0):,} events in {t.get('campaigns', 0)} campaigns; flagged {_pct(t.get('recall_flagged'), 0)}",
-            {"typology": n, "recall_declined": t.get("recall_declined")}, {"kind": "explorer", "query": f"fraud:{n}"},
+    # "stopped" (declined, failed / abandoned a step-up, held review) where the report has it
+    stop_key, verb = ("recall_stopped", "stopped") if any("recall_stopped" in t for t in by_type.values()) \
+        else ("recall_declined", "declined")
+    weak = [(n, t) for n, t in by_type.items() if t.get("events", 0) >= min_ev and (t.get(stop_key) or 0) < floor]
+    for n, t in sorted(weak, key=lambda kv: kv[1].get(stop_key) or 0)[:3]:
+        add("warning", "detection", f"{n} is {verb} only {_pct(t.get(stop_key), 0)} of the time",
+            f"{t.get('events', 0):,} events in {t.get('campaigns', 0)} campaigns; flagged {_pct(t.get('recall_flagged'), 0)}"
+            + (f", declined {_pct(t.get('recall_declined'), 0)}" if stop_key == "recall_stopped" else ""),
+            {"typology": n, stop_key: t.get(stop_key)}, {"kind": "explorer", "query": f"fraud:{n}"},
             "compare its served features with a caught campaign; a rule or a decision-history feature may be missing",
-            (t.get("usd_approved") or 0) * 0.5)
+            (t.get(paid_key) or 0) * 0.5)
+
+    # ------------------------------------------------------------------ step-up
+    su = d.get("stepup")
+    if su:
+        pass_warn = float(th.get("stepup_pass_warn", 0.25))
+        for n, t in sorted(su.get("by_type", {}).items(), key=lambda kv: -(kv[1].get("usd_passed") or 0)):
+            if t.get("challenged", 0) >= min_ev and t.get("pass", 0) / max(1, t["challenged"]) > pass_warn:
+                meta = registry.by_name.get(n) if registry is not None else None
+                add("warning", "detection",
+                    f"step-up does not stop {(meta.title if meta and meta.title else n)}: {t['pass']:,} of "
+                    f"{t['challenged']:,} challenged passed it ({_usd(t.get('usd_passed'))})",
+                    "its actors can complete the step-up (a phished one-time code, a SIM swap, a victim authorising "
+                    "their own payment), so challenging it only delays the loss",
+                    {"typology": n, "passed": t["pass"], "challenged": t["challenged"], "usd_passed": t.get("usd_passed")},
+                    {"kind": "stepup"}, "decline it, or hold it for review, instead of challenging (Policy Lab / rules-whatif)",
+                    t.get("usd_passed") or 0)
+        legit_n = max(1, int(d.get("legit_events") or 0))
+        ab = int(su.get("legit_abandoned") or 0)
+        if ab:
+            share = ab / legit_n
+            add("warning" if share > float(th.get("stepup_abandon_warn", 0.001)) else "info", "friction",
+                f"{ab:,} good customers gave up at a step-up: {_usd(su.get('lost_sales_usd'))} of lost sales",
+                f"{su.get('legit_challenged', 0):,} good customers challenged ({_pct(su.get('legit_challenge_rate'), 2)}), "
+                f"{su.get('legit_failed', 0):,} failed it",
+                {"legit_abandoned": ab, "lost_sales_usd": su.get("lost_sales_usd"),
+                 "legit_challenge_rate": su.get("legit_challenge_rate")}, {"kind": "stepup"},
+                "narrow the challenge band or the CHALLENGE rules where the challenged payments are mostly good",
+                su.get("lost_sales_usd") or 0)
+        if su.get("fraud_stopped"):
+            add("good", "detection", f"step-up stopped {su['fraud_stopped']:,} fraudulent payments",
+                f"of {su.get('fraud_challenged', 0):,} fraud payments challenged; "
+                f"{_pct(su.get('fraud_challenge_rate'), 1)} of all fraud was challenged",
+                {"fraud_stopped": su["fraud_stopped"]}, {"kind": "stepup"})
 
     rules = d.get("by_rule") or {}
     pfloor, minf = float(th.get("rule_precision_floor", 0.1)), int(th.get("rule_min_fires", 50))

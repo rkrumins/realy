@@ -278,3 +278,58 @@ def test_p99_drift_is_judged_only_where_the_load_is_constant():
     assert _constant_rate_segments(sc, {}, t0, 0, 40) == [(4, 20), (24, 40)]           # each level after its 20% transition
     s = [10.0] * 10 + [20.0] * 10 + [30.0] * 5
     assert _window_medians(s, 0, 25, 10) == [10.0, 20.0]                               # trailing partial window dropped
+
+
+STEP_UP = """
+version: t
+thresholds: {review: 0.5, challenge: 0.6, decline: 0.9}
+challenge:
+  when: "!event.recurring && event.entry_mode in ['ECOM_3DS', 'ECOM_NON_3DS', 'CHIP']"
+rules:
+  - {id: D, action: DECLINE, when: "f.x >= 3.0"}
+  - {id: C, action: CHALLENGE, when: "f.x >= 2.0"}
+  - {id: R, action: REVIEW, when: "f.x >= 1.0"}
+"""
+
+
+def test_step_up_precedence_mirrors_java():
+    """Same cases as RuleSetTest.stepUpPrecedenceAndChallengeability (Java): the two must agree."""
+    import math
+
+    from realy.policy import APPROVE, CHALLENGE, DECLINE, REVIEW, RuleSet
+    r = RuleSet(STEP_UP)
+    assert r.uses_challenge
+    assert r.challengeable({"recurring": False, "entry_mode": "ECOM_3DS"})
+    assert not r.challengeable({"recurring": True, "entry_mode": "ECOM_3DS"})
+    assert not r.challengeable({"recurring": False, "entry_mode": "MAGSTRIPE"})
+    C, R, DC = [("C", "CHALLENGE")], [("R", "REVIEW")], [("D", "DECLINE"), ("C", "CHALLENGE")]
+    assert r.decide(DC, 0.1, True) == DECLINE
+    assert r.decide(C, 0.1, True) == CHALLENGE and r.decide(C, 0.1, False) == REVIEW
+    assert r.decide(C, 0.95, True) == DECLINE
+    assert r.decide([], 0.7, True) == CHALLENGE and r.decide([], 0.7, False) == REVIEW
+    assert r.decide(R, 0.7, True) == CHALLENGE and r.decide(R, 0.1, True) == REVIEW
+    assert r.decide([], 0.55, True) == REVIEW
+    assert r.decide(C, math.nan, True) == CHALLENGE and r.decide([], math.nan, True) == APPROVE
+    assert r.with_thresholds(challenge=0.8).decide([], 0.7, True) == REVIEW
+    from realy.scenario import REPO_ROOT
+    plain = RuleSet((REPO_ROOT / "rules" / "baseline-v3.yaml").read_text())
+    assert not plain.uses_challenge and plain.decide([], 0.7, True) == REVIEW
+
+
+def test_step_up_results_follow_the_population_and_end_the_payment():
+    import numpy as np
+
+    from realy import challenge as C
+    ids = np.arange(1, 100_001, dtype=np.uint64)
+    fr = np.zeros(ids.size, bool)
+    fr[::2] = True
+    ft = np.where(fr, 2, 0)                                   # half the events: account takeover (pass 0.35)
+    r = C.draw(ids, fr, ft, 42, (0.90, 0.08), {2: (0.35, 0.0)})
+    assert abs((r[~fr] == C.PASS).mean() - 0.90) < 0.01 and abs((r[~fr] == C.ABANDON).mean() - 0.08) < 0.01
+    assert abs((r[fr] == C.PASS).mean() - 0.35) < 0.01 and (r[fr] == C.ABANDON).sum() == 0
+    assert (C.draw(ids, fr, ft, 42, (0.90, 0.08), {2: (0.35, 0.0)}) == r).all()        # deterministic
+    assert (C.draw(ids[::-1], fr[::-1], ft[::-1], 42, (0.90, 0.08), {2: (0.35, 0.0)}) == r[::-1]).all()  # order-free
+    assert (C.draw(ids, fr, ft, 43, (0.90, 0.08), {2: (0.35, 0.0)}) != r).any()       # salted by the seed
+    out = np.array([1, 2, 3, 4, 4, 4])
+    res = np.array([C.FAIL, C.FAIL, C.PASS, C.PASS, C.FAIL, C.ABANDON])
+    assert C.final(out, res).tolist() == [1, 2, 3, C.APPROVED, C.DECLINED, C.ABANDONED]

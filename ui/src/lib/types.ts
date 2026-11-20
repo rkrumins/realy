@@ -210,11 +210,19 @@ export interface Detection {
   recall_declined?: number | null;
   precision_flagged?: number | null;
   false_positive_rate?: number | null;
+  /** fraud whose money did not move: declined, failed / abandoned a step-up, or held for review */
+  recall_stopped?: number | null;
   fraud_usd_total?: number;
+  /** approved outright or after passing a step-up */
   fraud_usd_approved?: number;
+  /** ... plus fraud reviewed only after it was paid (a review cannot hold a card authorisation) */
+  fraud_usd_paid?: number;
+  /** payment types a REVIEW holds (contracts/insights.yaml review_holds) */
+  review_holds?: string[] | null;
+  stepup?: StepUp | null;
   by_type?: Record<string, {
-    events: number; campaigns: number; recall_flagged: number; recall_declined: number;
-    approved_before_first_decline_mean: number; usd_approved: number;
+    events: number; campaigns: number; recall_flagged: number; recall_declined: number; recall_stopped?: number;
+    approved_before_first_decline_mean: number; usd_approved: number; usd_paid?: number;
   }>;
   by_rule?: Record<string, { hits: number; fraud: number; legit: number; precision: number; legit_hit_rate: number }>;
   legit_flagged?: number;
@@ -232,6 +240,19 @@ export interface Detection {
   labels?: { maturity_days: number; fraud_events: number; reported: number; coverage: number; by_type: Record<string, number> } | null;
 }
 
+export type StepUpSplit = { pass: number; fail: number; abandon: number };
+
+/** Step-up economics (report.detection.stepup): present when the run issued CHALLENGE. */
+export interface StepUp {
+  challenged: number; legit_challenged: number; fraud_challenged: number;
+  legit_challenge_rate: number; fraud_challenge_rate: number;
+  legit: StepUpSplit; fraud: StepUpSplit;
+  fraud_stopped: number; fraud_passed: number; fraud_usd_passed: number;
+  legit_abandoned: number; lost_sales_usd: number; legit_failed: number;
+  by_type: Record<string, StepUpSplit & { challenged: number; usd_passed: number }>;
+  note: string;
+}
+
 /** A ranked finding (python/realy/report/insights.py). */
 export interface Insight {
   severity: "critical" | "warning" | "info" | "good";
@@ -246,7 +267,7 @@ export interface Insight {
 export interface InsightsConfig {
   production_base_rate?: number;
   label_maturity_days?: number;
-  costs?: { review_cost_usd?: number; reviews_per_analyst_hour?: number; decline_friction_usd?: number; challenge_abandon_rate?: number };
+  costs?: { review_cost_usd?: number; reviews_per_analyst_hour?: number; decline_friction_usd?: number };
   thresholds?: Record<string, number>;
 }
 
@@ -539,7 +560,10 @@ export interface Explanation {
   rule_set?: string;
   rules_source?: "snapshot" | "current";
   served_rule_hits?: string[];
-  policy?: { outcome: string | null; branch: string; why: string; thresholds: { review: number; decline: number } };
+  policy?: { outcome: string | null; expected?: string; branch: string; why: string; challengeable?: boolean;
+    thresholds: { review: number; decline: number; challenge?: number } };
+  /** the instrument's latent step-up result for this payment, and its fate if it was challenged */
+  stepup?: { result: "pass" | "fail" | "abandon"; challenged: boolean; final: string | null };
   rules?: { id: string; action: string; when: string; hit: boolean; reason: string; values: Record<string, unknown>; error?: string }[];
   attribution?: {
     model_version: string | null; score: number; served_score: number; baseline_score: number; logit: number; baseline_logit: number;

@@ -56,3 +56,28 @@ def test_regression_against_the_previous_run():
     ins = build_insights(_rep(), load_config(), prev, registry())
     reg = [x for x in ins if x["area"] == "regression"]
     assert reg and "90 ms vs 60 ms in r1" in reg[0]["title"] and reg[0]["link"] == {"kind": "compare", "a": "r1", "b": "r2"}
+
+
+def test_step_up_findings_name_what_it_does_not_stop_and_what_it_costs():
+    rep = _rep()
+    d = rep["detection"]
+    d.update(fraud_usd_paid=30_000, legit_events=100_000, stepup={
+        "challenged": 2_000, "legit_challenged": 1_500, "fraud_challenged": 500, "legit_challenge_rate": 0.015,
+        "fraud_challenge_rate": 0.3, "legit": {"pass": 1_350, "fail": 30, "abandon": 120},
+        "fraud": {"pass": 150, "fail": 350, "abandon": 0}, "fraud_stopped": 350, "fraud_passed": 150,
+        "fraud_usd_passed": 9_000, "legit_abandoned": 120, "lost_sales_usd": 48_000, "legit_failed": 30,
+        "by_type": {"account_takeover": {"challenged": 200, "pass": 140, "fail": 60, "abandon": 0, "usd_passed": 8_500},
+                    "card_testing": {"challenged": 300, "pass": 10, "fail": 290, "abandon": 0, "usd_passed": 500}}})
+    for t in d["by_type"].values():
+        t["usd_paid"] = t["usd_approved"] + 2_000
+        t["recall_stopped"] = t["recall_declined"] + 0.05
+    ins = build_insights(rep, load_config(), None, registry())
+    titles = [x["title"] for x in ins]
+    assert any(t.startswith("step-up does not stop Account takeover") and "140 of 200" in t for t in titles)
+    assert not any("does not stop" in t and "card testing" in t.lower() for t in titles)      # 3% pass: it works
+    lost = next(x for x in ins if "gave up at a step-up" in x["title"])
+    assert lost["severity"] == "warning" and "$48,000" in lost["title"] and lost["link"] == {"kind": "stepup"}
+    assert any(x["severity"] == "good" and "stopped 350" in x["title"] for x in ins)
+    # money that moved, and "stopped", once the report has them
+    assert any(t.startswith("Bust-out") and "$17,000" in t and "fraud $ paid" in t for t in titles)
+    assert any("bust_out is stopped only 10%" in t for t in titles)

@@ -12,7 +12,12 @@ costs:
   review_cost_usd: 4.0             # analyst cost per payment sent to review
   reviews_per_analyst_hour: 30
   decline_friction_usd: 2.5        # margin and goodwill lost per good payment declined
-  challenge_abandon_rate: 0.08     # good customers who abandon at a step-up (3DS / PIN)
+
+# What a REVIEW does to the payment (payment types, by name). A transfer can be held until an analyst
+# has called the customer; a card authorisation cannot wait (the terminal needs an answer within a
+# second or two): it is approved and the case is worked afterwards, so a reviewed card payment that
+# was fraud is paid out. Fraud "stopped" and "$ paid" in reports and what-ifs follow this.
+review_holds: [TRANSFER]
 
 # Training labels: share of a run's fraud that a training set cut this many days after the window sees.
 label_maturity_days: 30
@@ -28,3 +33,5 @@ thresholds:
   startup_warn_s: 180              # preparation (history, catch-up, prime) longer than this
   label_coverage_warn: 0.85        # share of fraud labelled by the maturity cut
   regression_pct: 10               # vs the previous run of the same scenario
+  stepup_pass_warn: 0.25           # a typology passing step-ups this often is not stopped by them
+  stepup_abandon_warn: 0.001       # good customers abandoning at a step-up, as a share of all good customers

@@ -208,6 +208,7 @@ export interface LivePoint {
   approve: number | null;
   review: number | null;
   decline: number | null;
+  challenge: number | null;
   stages: Record<string, number>; // p99 per stage name (collector/gateway/model/flink)
 }
 
@@ -256,6 +257,7 @@ export function buildSeries(windowS = 300, runId: string | null = focusRunId()):
     let emitted: number | null = null, acked: number | null = null, decided: number | null = null;
     let e2e50: number | null = null, e2e99: number | null = null, e2e999: number | null = null, sched: number | null = null;
     let degraded: number | null = null, approve: number | null = null, review: number | null = null, decline: number | null = null;
+    let challenge: number | null = null;
     let emitterE2e99: number | null = null, emitterE2e50: number | null = null;
     const stages: Record<string, number> = {};
     const add = (v: number | undefined, cur: number | null) => (v === undefined ? cur : (cur ?? 0) + v);
@@ -276,6 +278,7 @@ export function buildSeries(windowS = 300, runId: string | null = focusRunId()):
         approve = add(c.approve, approve);
         review = add(c.review, review);
         decline = add(c.decline, decline);
+        challenge = add(c.challenge, challenge);
         const e = stage(s, "e2e");
         e2e50 = mx(e?.p50_ms, e2e50);
         e2e99 = mx(e?.p99_ms, e2e99);
@@ -307,7 +310,7 @@ export function buildSeries(windowS = 300, runId: string | null = focusRunId()):
     }
     out.push({
       t: sec, emitted, acked, decided, e2e_p50: e2e50, e2e_p99: e2e99, e2e_p999: e2e999, sched_p99: sched,
-      backlog: haveE && haveD ? Math.max(0, em - de) : null, degraded, approve, review, decline,
+      backlog: haveE && haveD ? Math.max(0, em - de) : null, degraded, approve, review, decline, challenge,
       stages: { ...stages, ...merged },
     });
   }

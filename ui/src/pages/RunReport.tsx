@@ -1,4 +1,4 @@
-import { BaseRateAndImpact, Insights, LabelCoverage, ModelEvaluation } from "@/components/insights";
+import { BaseRateAndImpact, Insights, LabelCoverage, ModelEvaluation, StepUpCard } from "@/components/insights";
 import { StartupPanel } from "@/components/startup";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -146,12 +146,17 @@ function Detection({ r }: { r: Report }) {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <Kpi label="Fraud events" value={fmtNum(d.fraud_events)} sub={`${fmtCompact(d.legit_events)} legit`} />
         <Kpi label="Recall (flagged)" value={fmtPct(d.recall_flagged, 1)} tone="accent" />
-        <Kpi label="Recall (declined)" value={fmtPct(d.recall_declined, 1)} />
+        {isNum(d.recall_stopped)
+          ? <Kpi label="Fraud stopped" value={fmtPct(d.recall_stopped, 1)} sub={`declined ${fmtPct(d.recall_declined, 1)} · + failed step-ups, held reviews`} />
+          : <Kpi label="Recall (declined)" value={fmtPct(d.recall_declined, 1)} />}
         <Kpi label="Precision (flagged)" value={fmtPct(d.precision_flagged, 1)} />
         <Kpi label="False-positive rate" value={fmtPct(d.false_positive_rate, 2)} tone={isNum(d.false_positive_rate) && d.false_positive_rate > 0.05 ? "warn" : undefined} />
-        <Kpi label="Fraud $ approved" value={fmtUsd(d.fraud_usd_approved)} sub={`of ${fmtUsd(d.fraud_usd_total)}`} />
+        {isNum(d.fraud_usd_paid)
+          ? <Kpi label="Fraud $ paid" value={fmtUsd(d.fraud_usd_paid)} sub={`of ${fmtUsd(d.fraud_usd_total)}; card reviews are worked after payment`} />
+          : <Kpi label="Fraud $ approved" value={fmtUsd(d.fraud_usd_approved)} sub={`of ${fmtUsd(d.fraud_usd_total)}`} />}
       </div>
       <BaseRateAndImpact r={r} />
+      {d.stepup && <StepUpCard s={d.stepup} />}
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
         <ModelEvaluation d={d} />
         <LabelCoverage d={d} />
@@ -167,11 +172,12 @@ function Detection({ r }: { r: Report }) {
               <div className="mt-3 space-y-2 text-[12px]">
                 <div className="flex items-center gap-2"><span className="w-20 text-muted">flagged</span><MiniBar value={t.recall_flagged} /><span className="w-12 text-right num">{fmtPct(t.recall_flagged, 0)}</span></div>
                 <div className="flex items-center gap-2"><span className="w-20 text-muted">declined</span><MiniBar value={t.recall_declined} tone="pass" /><span className="w-12 text-right num">{fmtPct(t.recall_declined, 0)}</span></div>
+                {isNum(t.recall_stopped) && <div className="flex items-center gap-2" title="declined, failed or abandoned a step-up, or held for review"><span className="w-20 text-muted">stopped</span><MiniBar value={t.recall_stopped} tone="pass" /><span className="w-12 text-right num">{fmtPct(t.recall_stopped, 0)}</span></div>}
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2 border-t border-border pt-3 text-[11.5px]">
                 <div><div className="text-subtle">events</div><div className="font-medium num">{fmtNum(t.events)}</div></div>
                 <div><div className="text-subtle">approved first</div><div className="font-medium num">{fmtNum(t.approved_before_first_decline_mean, 1)}</div></div>
-                <div><div className="text-subtle">$ approved</div><div className="font-medium num">{fmtUsd(t.usd_approved)}</div></div>
+                <div><div className="text-subtle">{isNum(t.usd_paid) ? "$ paid" : "$ approved"}</div><div className="font-medium num">{fmtUsd(isNum(t.usd_paid) ? t.usd_paid : t.usd_approved)}</div></div>
               </div>
             </Card>
           ))}

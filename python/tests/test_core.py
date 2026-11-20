@@ -117,7 +117,9 @@ def test_rules_and_scorer():
     hits = rules.evaluate(f, event_view(ev(T0, 150, False, 1)))
     assert ("CARD_TESTING", "DECLINE") in hits
     assert rules.decide(hits, float("nan")) == 3
-    assert rules.decide([], 0.95) == 3 and rules.decide([], 0.6) == 2 and rules.decide([], 0.1) == 1
+    assert rules.decide([], 0.95) == 3 and rules.decide([], 0.1) == 1
+    # v4: the review band steps up a payment that can be stepped up, and reviews one that cannot
+    assert rules.decide([], 0.6, True) == 4 and rules.decide([], 0.6, False) == 2
     sc = ProxyScorer()
     x = np.zeros((1, len(s.features)), np.float32)
     p = float(sc.score(x)[0])

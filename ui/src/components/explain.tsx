@@ -4,7 +4,7 @@
  * step, what the bank learns and when, and what a training set cut N days later makes of it).
  * Backed by python/realy/explain.py through the Explorer's decision endpoint.
  */
-import { BookOpen, Brain, Check, Gavel, Minus } from "lucide-react";
+import { BookOpen, Brain, Check, Gavel, Minus, ShieldQuestion } from "lucide-react";
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -74,7 +74,25 @@ export function ExplanationCard({ x }: { x?: Explanation | null }) {
           <div className="rounded-xl border border-accent/30 bg-accent/[0.06] p-3.5">
             <div className="text-[11px] uppercase tracking-wider text-subtle">policy path · {x.policy.branch}</div>
             <div className="mt-1 text-[13.5px] font-medium text-fg">{x.policy.outcome}: {x.policy.why}</div>
-            <div className="mt-1 text-[11.5px] text-muted">precedence: DECLINE rule → ALLOW rule → score ≥ {x.policy.thresholds.decline} → REVIEW rule → score ≥ {x.policy.thresholds.review} → approve</div>
+            <div className="mt-1 text-[11.5px] text-muted">
+              precedence: DECLINE rule → ALLOW rule → score ≥ {x.policy.thresholds.decline}
+              {isNum(x.policy.thresholds.challenge) ? <> → CHALLENGE rule → score ≥ {x.policy.thresholds.challenge} (if it can be stepped up)</> : " → CHALLENGE rule"}
+              {" "}→ REVIEW rule → score ≥ {x.policy.thresholds.review} → approve
+              {x.policy.challengeable === false && <span className="text-subtle"> · this payment cannot be stepped up</span>}
+            </div>
+            {x.policy.expected && x.policy.outcome && x.policy.expected !== x.policy.outcome && (
+              <div className="mt-1.5 text-[11.5px] text-warn">re-derived {x.policy.expected}, served {x.policy.outcome} (e.g. a live threshold change or the deadline policy)</div>
+            )}
+          </div>
+        )}
+        {x.stepup && (
+          <div className={cn("rounded-xl border p-3.5 text-[12.5px]", x.stepup.challenged ? "border-info/35 bg-info/[0.06]" : "border-border bg-surface-2/40")}>
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-subtle"><ShieldQuestion className="size-3.5" />step-up</div>
+            <div className="mt-1 text-fg">
+              {x.stepup.challenged ? x.stepup.final
+                : <>not challenged; had it been, the payer would <b>{x.stepup.result}</b> the step-up</>}
+            </div>
+            <div className="mt-0.5 text-[11px] text-subtle">simulated by the instrument from the payer's population (scenario fraud.challenge, the typology's rates); the pipeline never sees it</div>
           </div>
         )}
         <div>
@@ -89,7 +107,7 @@ export function ExplanationCard({ x }: { x?: Explanation | null }) {
                   {r.hit ? <Check className="mt-0.5 size-4 shrink-0 text-accent" aria-label="fired" /> : <Minus className="mt-0.5 size-4 shrink-0 text-subtle" aria-label="did not fire" />}
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-[12.5px] font-medium">{r.id}</span>
-                      <Badge tone={r.action === "DECLINE" ? "fail" : r.action === "REVIEW" ? "warn" : "neutral"}>{r.action}</Badge></div>
+                      <Badge tone={r.action === "DECLINE" ? "fail" : r.action === "REVIEW" ? "warn" : r.action === "CHALLENGE" ? "info" : "neutral"}>{r.action}</Badge></div>
                     <code className="mt-1 block whitespace-pre-wrap break-words font-mono text-[11.5px] text-muted">{r.when}</code>
                     {Object.keys(r.values).length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1.5">

@@ -188,7 +188,7 @@ CREATE TABLE IF NOT EXISTS realy.decisions (
   -- audit WAL append: decided -> durably appended by the broker (1 ms resolution: LogAppendTime is ms)
   lat_audit_append_us Int32,
   rule_ids Array(LowCardinality(String)),          -- every CEL rule that fired, in evaluation order
-  rule_actions Array(LowCardinality(String)),      -- its action (APPROVE = allow-list, REVIEW, DECLINE)
+  rule_actions Array(LowCardinality(String)),      -- its action (APPROVE = allow-list, REVIEW, DECLINE, CHALLENGE)
   fresh_entity Array(LowCardinality(String)),      -- per entity looked up in the online store ...
   fresh_age_us Array(Int64),                       -- ... age of its stored values when scored (-1 = none)
   fresh_found Array(UInt8),                        -- ... whether a stored blob existed
@@ -220,7 +220,7 @@ SELECT
   arrayElement(['UNSPECIFIED', 'POS', 'ECOM', 'ATM', 'MOTO', 'IN_APP', 'ONLINE_BANKING'], toInt32(`event.channel`) + 1) AS channel,
   arrayElement(['UNSPECIFIED', 'CHIP', 'CONTACTLESS', 'MAGSTRIPE', 'MANUAL', 'WALLET_TOKEN', 'ECOM_3DS', 'ECOM_NON_3DS', 'CREDENTIAL_ON_FILE', 'BANK_APP'], toInt32(`event.entry_mode`) + 1) AS entry_mode,
   `event.mcc` AS mcc, `event.merchant_country` AS merchant_country, `event.amount_usd_minor` AS amount_usd_minor,
-  arrayElement(['OUTCOME_UNSPECIFIED', 'APPROVE', 'REVIEW', 'DECLINE'], toInt32(outcome) + 1) AS outcome, score, reason_codes,
+  arrayElement(['OUTCOME_UNSPECIFIED', 'APPROVE', 'REVIEW', 'DECLINE', 'CHALLENGE'], toInt32(outcome) + 1) AS outcome, score, reason_codes,
   arrayElement(['FULL', 'RULES_ONLY_FALLBACK', 'PROVISIONAL', 'FINAL_AFTER_PROVISIONAL', 'ECHO'], toInt32(path) + 1) AS path, degraded,
   arrayElement(['UNSPECIFIED', 'SYNC_GRPC', 'SYNC_HTTP', 'ASYNC_KAFKA_GATEWAY', 'ASYNC_FLINK_INLINE'], toInt32(ingress_mode) + 1) AS ingress_mode, instance_id, policy_version, rule_set_version,
   `model.model_name` AS model_name, `model.model_version` AS model_version, `model.input_hash` AS model_input_hash,
@@ -300,7 +300,7 @@ SELECT
   assumeNotNull(_timestamp_ms) AS appended_at,
   toInt32(greatest(0, toUnixTimestamp64Milli(assumeNotNull(_timestamp_ms)) * 1000 - decided_at_us)) AS lat_audit_append_us,
   `rule_hits.rule_id` AS rule_ids,
-  arrayMap(a -> arrayElement(['OUTCOME_UNSPECIFIED', 'APPROVE', 'REVIEW', 'DECLINE'], toInt32(a) + 1), `rule_hits.action`) AS rule_actions,
+  arrayMap(a -> arrayElement(['OUTCOME_UNSPECIFIED', 'APPROVE', 'REVIEW', 'DECLINE', 'CHALLENGE'], toInt32(a) + 1), `rule_hits.action`) AS rule_actions,
   arrayMap(e -> arrayElement(['UNSPECIFIED', 'CUSTOMER', 'CARD', 'DEVICE', 'IP', 'MERCHANT', 'TERMINAL', 'PAYEE'], toInt32(e) + 1), `features.freshness.entity`) AS fresh_entity,
   arrayMap(u -> if(u > 0, decided_at_us - u, -1), `features.freshness.updated_at_us`) AS fresh_age_us,
   `features.freshness.found` AS fresh_found

@@ -469,7 +469,9 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
     ev = _read(run_dir, "events-*.parquet")
     if ev is None or d is None or not d.num_rows:
         return {}
-    cols = ["event_id", "is_fraud", "fraud_type", "campaign_id", "amount_usd_minor", "event_time_us", "label_delay_us"]
+    from .insights import load_config
+    cols = ["event_id", "is_fraud", "fraud_type", "campaign_id", "amount_usd_minor", "event_time_us", "label_delay_us",
+            "payment_type"]
     ev = ev.select([c for c in cols if c in ev.column_names])
     eid = ev["event_id"].to_numpy()
     order = np.argsort(d_id)
@@ -491,9 +493,11 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
     # what became of each payment after a step-up: the instrument's latent result (realy.challenge)
     from .. import challenge as stepup
     latent = stepup.for_run(run_dir, eid, ev["is_fraud"].to_numpy().astype(bool), ftype)
-    fin = stepup.final(outcome, latent)
-    let_through = have & (fin == stepup.APPROVED)            # paid: approved outright or after the step-up
-    stopped = have & ((fin == stepup.DECLINED) | (fin == stepup.ABANDONED))
+    holds = stepup.review_holds(ev["payment_type"].to_numpy()) if "payment_type" in ev.column_names else None
+    fin = stepup.final(outcome, latent, holds)
+    let_through = have & (fin == stepup.APPROVED)            # approved outright or after the step-up
+    paid = have & np.isin(fin, stepup.PAID)                  # ... or reviewed after the money moved (card auths)
+    stopped = have & np.isin(fin, stepup.STOPPED)            # declined, failed / abandoned the step-up, held review
     res: dict[str, Any] = {
         "fraud_events": int(fraud.sum()), "legit_events": int(legit.sum()),
         "recall_flagged": float(flagged[fraud].mean()) if fraud.any() else None,
@@ -504,6 +508,8 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
         "legit_flagged": int((flagged & legit).sum()), "legit_declined": int((declined & legit).sum()),
         "fraud_flagged": int((flagged & fraud).sum()), "fraud_declined": int((declined & fraud).sum()),
         "fraud_usd_total": float(amt[fraud].sum() / 100), "fraud_usd_approved": float(amt[fraud & let_through].sum() / 100),
+        "fraud_usd_paid": float(amt[fraud & paid].sum() / 100),
+        "review_holds": None if holds is None else sorted(set(load_config().get("review_holds", []))),
         "by_type": {},
         "stepup": _stepup(run_dir, outcome, latent, fin, fraud, legit, ftype, amt),
     }
@@ -556,7 +562,8 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
                                 "recall_flagged": float((oc >= 2).mean()), "recall_declined": float((oc == 3).mean()),
                                 "recall_stopped": float(stopped[m].mean()),
                                 "approved_before_first_decline_mean": float(np.mean(ttd)),
-                                "usd_approved": float(amt[m & let_through].sum() / 100)}
+                                "usd_approved": float(amt[m & let_through].sum() / 100),
+                                "usd_paid": float(amt[m & paid].sum() / 100)}
     return res
 
 
@@ -768,7 +775,14 @@ def render_text(rep: dict[str, Any]) -> str:
     det = rep.get("detection")
     if det and det.get("fraud_events"):
         lines.append(f"detection: recall(flagged) {_f(det['recall_flagged'])}  precision {_f(det['precision_flagged'])}  "
-                     f"FPR {_f(det['false_positive_rate'], 4)}  fraud $ approved {det['fraud_usd_approved']:,.0f} / {det['fraud_usd_total']:,.0f}")
+                     f"FPR {_f(det['false_positive_rate'], 4)}  fraud $ approved {det['fraud_usd_approved']:,.0f} / {det['fraud_usd_total']:,.0f}"
+                     + (f"  stopped {_f(det['recall_stopped'], 3)}  fraud $ paid {det['fraud_usd_paid']:,.0f}"
+                        if det.get("fraud_usd_paid") is not None else ""))
+        su = det.get("stepup")
+        if su:
+            lines.append(f"step-up: {su['challenged']:,} challenged ({su['legit_challenge_rate']:.2%} of good customers); "
+                         f"fraud stopped {su['fraud_stopped']:,}, passed {su['fraud_passed']:,} (${su['fraud_usd_passed']:,.0f}); "
+                         f"good customers gave up {su['legit_abandoned']:,} (${su['lost_sales_usd']:,.0f} of sales)")
         ev_ = det.get("evaluation") or {}
         if ev_:
             lines.append(f"evaluation: {ev_.get('sample')} (model {ev_.get('model_version')}): {ev_.get('reason')}")

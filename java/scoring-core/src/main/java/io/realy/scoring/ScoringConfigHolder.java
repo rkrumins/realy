@@ -30,7 +30,7 @@ public final class ScoringConfigHolder {
     private static Active compile(ScoringConfig c) {
         RuleSet rules = c.getRuleSetYaml().isBlank() ? RuleSet.bundled("baseline") : RuleSet.parse(c.getRuleSetYaml());
         // live threshold tuning without shipping a whole rule set (0 = keep the rule set's thresholds)
-        rules = rules.withThresholds(c.getReviewThreshold(), c.getDeclineThreshold());
+        rules = rules.withThresholds(c.getReviewThreshold(), c.getDeclineThreshold(), c.getChallengeThreshold());
         return new Active(c, rules, new LatencyModel(c.getFeatureLookupDelay()), new LatencyModel(c.getModelExtraDelay()));
     }
 

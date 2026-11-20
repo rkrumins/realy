@@ -3,7 +3,7 @@
  * (in- / out-of-sample, AUCs, fallbacks), label coverage at the training cut, the base-rate
  * projection, and a business view whose cost assumptions are editable here (recomputed live).
  */
-import { AlertOctagon, AlertTriangle, CheckCircle2, Info, Scale, Tags, Wallet } from "lucide-react";
+import { AlertOctagon, AlertTriangle, CheckCircle2, Info, Scale, ShieldQuestion, Tags, Wallet } from "lucide-react";
 import * as React from "react";
 import { Link } from "react-router";
 import { MiniBar } from "@/components/common";
@@ -12,7 +12,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { NumberField } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import { fmtNum, fmtPct, fmtUsd, isNum } from "@/lib/format";
-import type { Detection, Insight, InsightsConfig, Report } from "@/lib/types";
+import type { Detection, Insight, InsightsConfig, Report, StepUp, StepUpSplit } from "@/lib/types";
 
 const SEV: Record<Insight["severity"], { icon: typeof Info; cls: string; ring: string; label: string }> = {
   critical: { icon: AlertOctagon, cls: "text-fail", ring: "border-fail/35 bg-fail/[0.06]", label: "critical" },
@@ -33,6 +33,7 @@ function insightHref(i: Insight, runId: string): string | null {
     case "latency": return "#latency";
     case "verify": return "#verify";
     case "models": return "#evaluation";
+    case "stepup": return "#stepup";
     default: return null;
   }
 }
@@ -151,7 +152,8 @@ export function BaseRateAndImpact({ r }: { r: Report }) {
   const perHr = isNum(measured) && measured > 0 ? (reviews / measured) * 3600 : null;
   const reviewCost = reviews * review;
   const frictionCost = (d.legit_declined ?? 0) * friction;
-  const loss = d.fraud_usd_approved ?? 0;
+  const loss = d.fraud_usd_paid ?? d.fraud_usd_approved ?? 0;      // the money that moved
+  const st = d.stepup;
   const prevented = (d.fraud_usd_total ?? 0) - loss;
   const events = (d.fraud_events ?? 0) + (d.legit_events ?? 0);
   const total = loss + reviewCost + frictionCost;
@@ -186,14 +188,71 @@ export function BaseRateAndImpact({ r }: { r: Report }) {
           <table className="w-full text-[12.5px]">
             <tbody>
               <tr><td className="py-1">fraud prevented</td><td className="text-right num text-pass">{fmtUsd(prevented)}</td></tr>
-              <tr className="border-t border-border"><td className="py-1">fraud lost (approved)</td><td className="text-right num">{fmtUsd(loss)}</td></tr>
+              <tr className="border-t border-border"><td className="py-1">fraud lost (paid{isNum(d.fraud_usd_paid) ? ", incl. card payments reviewed after the fact" : ""})</td><td className="text-right num">{fmtUsd(loss)}</td></tr>
               <tr className="border-t border-border"><td className="py-1">reviews: {fmtNum(reviews)}{isNum(perHr) ? ` (${fmtNum(perHr)}/h → ${fmtNum(perHr / Math.max(perHour, 1), 1)} analysts)` : ""}</td><td className="text-right num">{fmtUsd(reviewCost)}</td></tr>
               <tr className="border-t border-border"><td className="py-1">good customers declined: {fmtNum(d.legit_declined)}</td><td className="text-right num">{fmtUsd(frictionCost)}</td></tr>
+              {st && <tr className="border-t border-border"><td className="py-1">good customers stepped up: {fmtNum(st.legit_challenged)} ({fmtNum(st.legit_failed)} failed it)</td><td className="text-right num text-muted">friction</td></tr>}
               <tr className="border-t border-border font-medium"><td className="py-1.5">total cost</td><td className="text-right num">{fmtUsd(total)} <span className="text-[11.5px] font-normal text-muted">({fmtUsd(events ? (total / events) * 1000 : 0)} per 1,000 payments)</span></td></tr>
             </tbody>
           </table>
+          {st && st.legit_abandoned > 0 && (
+            <div className="mt-2 text-[11.5px] text-muted">not in the total: {fmtNum(st.legit_abandoned)} good customers abandoned at a step-up, {fmtUsd(st.lost_sales_usd)} of sales the merchants lost</div>
+          )}
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+function Split({ x, total }: { x: StepUpSplit; total: number }) {
+  const seg = [["pass", x.pass, "bg-pass/70"], ["fail", x.fail, "bg-fail/70"], ["abandon", x.abandon, "bg-warn/70"]] as const;
+  return (
+    <div>
+      <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-3/60">
+        {seg.map(([k, v, c]) => v > 0 && <div key={k} className={c} style={{ width: `${(v / Math.max(1, total)) * 100}%` }} title={`${k} ${v}`} />)}
+      </div>
+      <div className="mt-1 flex gap-3 text-[11px] text-muted num">
+        {seg.map(([k, v]) => <span key={k}>{k} {fmtNum(v)}</span>)}
+      </div>
+    </div>
+  );
+}
+
+/** Step-up (CHALLENGE) economics: who was challenged, who got through, and what it cost. */
+export function StepUpCard({ s }: { s: StepUp }) {
+  const types = Object.entries(s.by_type);
+  return (
+    <Card id="stepup" className="mt-4 scroll-mt-20">
+      <CardHeader title="Step-up" icon={<ShieldQuestion />}
+        subtitle="3DS / SCA challenges online, PIN prompts in store: a challenge stops fraud that has no OTP or PIN, not a phished account or a scam victim" />
+      <CardBody className="space-y-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div><div className="text-[11.5px] text-muted">challenged</div><div className="text-[18px] font-semibold num">{fmtNum(s.challenged)}</div>
+            <div className="text-[11px] text-subtle num">{fmtPct(s.legit_challenge_rate, 2)} of good customers · {fmtPct(s.fraud_challenge_rate, 1)} of fraud</div></div>
+          <div><div className="text-[11.5px] text-muted">fraud stopped at the step-up</div><div className="text-[18px] font-semibold text-pass num">{fmtNum(s.fraud_stopped)}</div>
+            <div className="text-[11px] text-subtle num">of {fmtNum(s.fraud_challenged)} challenged</div></div>
+          <div><div className="text-[11.5px] text-muted">fraud that passed it</div><div className={cn("text-[18px] font-semibold num", s.fraud_passed > 0 && "text-warn")}>{fmtNum(s.fraud_passed)}</div>
+            <div className="text-[11px] text-subtle num">{fmtUsd(s.fraud_usd_passed)} paid</div></div>
+          <div><div className="text-[11.5px] text-muted">good customers who gave up</div><div className={cn("text-[18px] font-semibold num", s.legit_abandoned > 0 && "text-warn")}>{fmtNum(s.legit_abandoned)}</div>
+            <div className="text-[11px] text-subtle num">{fmtUsd(s.lost_sales_usd)} of lost sales</div></div>
+        </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div><div className="mb-1.5 text-[12px] font-medium text-fg">good customers ({fmtNum(s.legit_challenged)})</div><Split x={s.legit} total={s.legit_challenged} /></div>
+          <div><div className="mb-1.5 text-[12px] font-medium text-fg">fraud ({fmtNum(s.fraud_challenged)})</div><Split x={s.fraud} total={s.fraud_challenged} /></div>
+        </div>
+        {types.length > 0 && (
+          <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
+            {types.map(([name, t]) => (
+              <div key={name}>
+                <div className="mb-1 flex items-baseline justify-between text-[12px]"><span className="font-medium text-fg">{name.replace(/_/g, " ")}</span>
+                  <span className="text-[11px] text-subtle num">{fmtNum(t.challenged)} challenged{t.usd_passed > 0 ? ` · ${fmtUsd(t.usd_passed)} got through` : ""}</span></div>
+                <Split x={t} total={t.challenged} />
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="text-[11px] text-subtle">{s.note}</div>
+      </CardBody>
+    </Card>
   );
 }

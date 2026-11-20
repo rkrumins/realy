@@ -7,7 +7,7 @@ import type { LiveDecision } from "@/lib/types";
 import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
 
-export const OUTCOME_TONE: Record<string, "pass" | "warn" | "fail" | "neutral"> = { APPROVE: "pass", REVIEW: "warn", DECLINE: "fail" };
+export const OUTCOME_TONE: Record<string, "pass" | "warn" | "fail" | "neutral" | "info"> = { APPROVE: "pass", REVIEW: "warn", DECLINE: "fail", CHALLENGE: "info" };
 
 export function OutcomeBadge({ outcome }: { outcome: string | null | undefined }) {
   if (!outcome) return <Badge tone="neutral">no decision</Badge>;

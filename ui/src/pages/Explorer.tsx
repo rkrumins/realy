@@ -19,7 +19,7 @@ import { cn } from "@/lib/cn";
 import { fmtMs, fmtNum, fmtPct, fmtSimTime, fmtUsd, isNum, titleCase } from "@/lib/format";
 import type { DecisionDetail, SearchRow } from "@/lib/types";
 
-const OUTCOME_COLOR: Record<string, string> = { APPROVE: "var(--pass)", REVIEW: "var(--warn)", DECLINE: "var(--fail)" };
+const OUTCOME_COLOR: Record<string, string> = { APPROVE: "var(--pass)", CHALLENGE: "var(--info)", REVIEW: "var(--warn)", DECLINE: "var(--fail)" };
 
 function useParam(k: string) {
   const [p, setP] = useSearchParams();
@@ -190,14 +190,14 @@ function CustomerPanel({ run, cid, onPick, onClose }: { run: string; cid: string
                   const x = active && payload?.[0]?.payload as (typeof pts)[number] | undefined;
                   return x ? <div className="rounded-xl border border-border bg-surface px-3 py-2 text-[12px] shadow-xl"><div className="font-mono">{x.id}</div><div className="text-muted">{fmtUsd(x.amount)} · {x.outcome.toLowerCase()}{x.fraud ? " · fraud" : ""}</div></div> : null;
                 }} />
-                {["APPROVE", "REVIEW", "DECLINE", "none"].map((o) => (
+                {["APPROVE", "CHALLENGE", "REVIEW", "DECLINE", "none"].map((o) => (
                   <Scatter key={o} data={pts.filter((p2) => p2.outcome === o)} fill={OUTCOME_COLOR[o] ?? "var(--fg-subtle)"} isAnimationActive={false}
                     onClick={(d) => onPick((d as unknown as { id: string }).id)} className="cursor-pointer" />
                 ))}
               </ScatterChart>
             </ResponsiveContainer>
             <div className="mt-1 flex gap-4 text-[11px] text-subtle">
-              {["APPROVE", "REVIEW", "DECLINE"].map((o) => <span key={o} className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: OUTCOME_COLOR[o] }} />{o.toLowerCase()}</span>)}
+              {["APPROVE", "CHALLENGE", "REVIEW", "DECLINE"].map((o) => <span key={o} className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: OUTCOME_COLOR[o] }} />{o.toLowerCase()}</span>)}
               <span>click a point to open the decision</span>
             </div>
           </>
