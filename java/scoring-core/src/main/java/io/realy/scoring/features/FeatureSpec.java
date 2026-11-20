@@ -13,7 +13,8 @@ public record FeatureSpec(
         long granularityUs,
         double defaultValue,
         String field,        // profile field
-        String fn) {         // derived function
+        String fn,           // derived: a library function (DerivedFeatures), or null when `expr` is used
+        io.realy.scoring.rules.Cel.Numeric expr) {   // derived: a CEL expression over `event` and `f`
 
     public boolean isStream() {
         return "stream".equals(source);

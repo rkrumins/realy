@@ -26,6 +26,13 @@ public final class Cel {
             .setResultType(SimpleType.BOOL)
             .build();
     private static final CelRuntime RUNTIME = CelRuntimeFactory.standardCelRuntimeBuilder().setOptions(OPTIONS).build();
+    /** Derived features written as expressions (feature_schema.yaml `expr`): same variables, numeric result. */
+    private static final CelCompiler NUMERIC = CelCompilerFactory.standardCelCompilerBuilder()
+            .setOptions(OPTIONS)
+            .addVar("f", MapType.create(SimpleType.STRING, SimpleType.DOUBLE))
+            .addVar("event", MapType.create(SimpleType.STRING, SimpleType.DYN))
+            .setResultType(SimpleType.DYN)       // numbers, or booleans as 1.0 / 0.0 (checked at evaluation)
+            .build();
 
     private Cel() {}
 
@@ -49,6 +56,45 @@ public final class Cel {
 
         public String source() {
             return source;
+        }
+    }
+
+    /** A compiled numeric expression (a derived feature). Thread-safe. */
+    public static final class Numeric {
+        private final String source;
+        private final CelRuntime.Program program;
+
+        Numeric(String source, CelRuntime.Program program) {
+            this.source = source;
+            this.program = program;
+        }
+
+        public double eval(Map<String, ?> vars) {
+            try {
+                Object r = program.eval(vars);
+                if (r instanceof Number n) return n.doubleValue();
+                if (r instanceof Boolean b) return b ? 1.0 : 0.0;
+                throw new IllegalStateException("CEL expression `" + source + "` returned " + r
+                        + " (" + (r == null ? "null" : r.getClass().getSimpleName()) + "): a feature must be a number or a bool");
+            } catch (CelEvaluationException e) {
+                throw new IllegalStateException("CEL evaluation failed for `" + source + "`: " + e.getMessage(), e);
+            }
+        }
+
+        public String source() {
+            return source;
+        }
+    }
+
+    public static Numeric compileNumeric(String expression) {
+        try {
+            CelAbstractSyntaxTree ast = NUMERIC.compile(expression).getAst();
+            return new Numeric(expression, RUNTIME.createProgram(ast));
+        } catch (CelValidationException e) {
+            throw new IllegalArgumentException("invalid CEL expression `" + expression + "` (a feature returns a number "
+                    + "or a bool, e.g. `!event.cvv_match`): " + e.getMessage(), e);
+        } catch (CelEvaluationException e) {
+            throw new IllegalArgumentException("cannot plan CEL `" + expression + "`: " + e.getMessage(), e);
         }
     }
 

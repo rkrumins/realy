@@ -37,6 +37,17 @@ def event_view(ev: dict) -> dict[str, Any]:
     return v
 
 
+_PROGRAMS: dict[str, Any] = {}
+
+
+def _compiled(expr: str) -> Any:
+    p = _PROGRAMS.get(expr)
+    if p is None:
+        import cel
+        p = _PROGRAMS[expr] = cel.compile(expr)
+    return p
+
+
 def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.ndarray) -> None:
     """Fill derived features of float32 vector v in place (other features already filled)."""
     def idx(name: str) -> int:
@@ -45,8 +56,18 @@ def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.n
         except KeyError:
             return -1
 
+    ctx = None
     for s in schema.features:
         if s.source != "derived":
+            continue
+        if s.expr is not None:
+            # expression features: the rules' environment (`event` view + `f`, every feature filled so far)
+            import cel
+            if ctx is None:
+                ctx = cel.Context()
+                ctx.add_variable("event", event_view(ev))
+            ctx.add_variable("f", {o.name: float(v[o.index]) for o in schema.features})
+            v[s.index] = np.float32(float(_compiled(s.expr).execute(ctx)))
             continue
         fn = s.fn
         pt, em = int(ev["payment_type"]), int(ev["entry_mode"])

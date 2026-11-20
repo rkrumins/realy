@@ -310,7 +310,9 @@ def features() -> str:
              f"{len(spec['features'])} features, in model-tensor order (index = position in the tensor). Stream "
              "features are computed by the Flink job (or the gateway's inline path) with bucketed event-time "
              "windows; profile features are seeded into the online store from the synthetic world; derived "
-             "features are computed at scoring time. Semantics: see the header of the schema file and "
+             "features are computed at scoring time, by a library function (`fn`) or a CEL expression over `event` "
+             "and `f` (`expr`, numbers or booleans as 1 / 0: new event-level features need no code). Semantics: see "
+             "the header of the schema file and "
              "[contracts.md](../contracts.md).\n\n"]
     parts.append("## Entities\n\n" + _table(["Entity", "Key"], [[_code(k), _code(v["key"])] for k, v in spec["entities"].items()]) + "\n")
     parts.append("## Filters (CEL over `event`)\n\n" + _table(["Name", "Expression"], [[_code(k), _code(v)] for k, v in spec["filters"].items()]) + "\n")
@@ -322,7 +324,7 @@ def features() -> str:
         elif f["source"] == "profile":
             what, win = f"profile.{f['field']}", ""
         else:
-            what, win = f"fn {f['fn']}()", ""
+            what, win = (f"fn {f['fn']}()" if f.get("fn") else f"expr {f['expr']}"), ""
         rows.append([i, _code(f["name"]), f["source"], f.get("entity", ""), _code(what), win, f.get("default", 0)])
     parts.append("## Features\n\n" + _table(["#", "Name", "Source", "Entity", "Definition", "Window / bucket", "Default"], rows))
     return "".join(parts)

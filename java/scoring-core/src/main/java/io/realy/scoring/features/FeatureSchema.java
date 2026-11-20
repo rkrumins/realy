@@ -71,11 +71,18 @@ public final class FeatureSchema {
                     long w = parseDurationUs(f.get("window").asText());
                     long g = parseDurationUs(f.get("granularity").asText());
                     if (w % g != 0) throw new IllegalArgumentException(name + ": window must be a multiple of granularity");
-                    spec = new FeatureSpec(i, name, src, entity, f.get("agg").asText(), text(f, "value"), filter, w, g, def, null, null);
+                    spec = new FeatureSpec(i, name, src, entity, f.get("agg").asText(), text(f, "value"), filter, w, g, def, null, null, null);
                 }
                 case "profile" -> spec = new FeatureSpec(i, name, src, f.get("entity").asText(), null, null, null, 0, 0, def,
-                        f.get("field").asText(), null);
-                case "derived" -> spec = new FeatureSpec(i, name, src, null, null, null, null, 0, 0, def, null, f.get("fn").asText());
+                        f.get("field").asText(), null, null);
+                case "derived" -> {
+                    String fnName = text(f, "fn");
+                    String expr = text(f, "expr");
+                    if ((fnName == null) == (expr == null))
+                        throw new IllegalArgumentException(name + ": a derived feature needs exactly one of `fn` or `expr`");
+                    spec = new FeatureSpec(i, name, src, null, null, null, null, 0, 0, def, null, fnName,
+                            expr == null ? null : io.realy.scoring.rules.Cel.compileNumeric(expr));
+                }
                 default -> throw new IllegalArgumentException(name + ": unknown source " + src);
             }
             fs.add(spec);

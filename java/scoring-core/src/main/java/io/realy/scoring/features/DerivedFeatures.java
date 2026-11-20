@@ -5,7 +5,8 @@ import io.realy.contracts.payments.v1.PaymentType;
 import io.realy.contracts.payments.v1.TransactionEvent;
 
 /**
- * Fixed library of scoring-time derived features (feature_schema.yaml `fn`). Mirrored by
+ * Scoring-time derived features: a library of functions (feature_schema.yaml `fn`) and CEL expressions
+ * over `event` and `f` (`expr`: new event-level features without code). Mirrored by
  * python/realy/features/derived.py. `profile` holds customer profile attributes (may be null).
  */
 public final class DerivedFeatures {
@@ -19,9 +20,20 @@ public final class DerivedFeatures {
      * derived functions read stream/profile features from {@code v}).
      */
     public static void compute(FeatureSchema schema, TransactionEvent e, CustomerAttrs attrs, float[] v) {
+        java.util.Map<String, Object> vars = null;
         for (FeatureSpec s : schema.features) {
             if (!s.isDerived()) continue;
-            v[s.index()] = (float) value(schema, s.fn(), e, attrs, v);
+            if (s.expr() != null) {
+                // expression features (feature_schema.yaml `expr`): the rules' environment, `event` + `f`;
+                // `f` holds every feature filled so far (stream, profile, and earlier derived ones)
+                if (vars == null) vars = new java.util.HashMap<>(java.util.Map.of("event", EventView.of(e)));
+                java.util.Map<String, Double> f = new java.util.HashMap<>(schema.features.size());
+                for (FeatureSpec o : schema.features) f.put(o.name(), (double) v[o.index()]);
+                vars.put("f", f);
+                v[s.index()] = (float) s.expr().eval(vars);
+            } else {
+                v[s.index()] = (float) value(schema, s.fn(), e, attrs, v);
+            }
         }
     }
 

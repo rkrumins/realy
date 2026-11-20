@@ -36,7 +36,8 @@ class FeatureSpec:
     granularity_us: int = 0
     default: float = 0.0
     field: str | None = None     # profile
-    fn: str | None = None        # derived
+    fn: str | None = None        # derived: a library function (features/derived.py)
+    expr: str | None = None      # derived: a CEL expression over `event` and `f` returning a double
 
     @property
     def n_buckets(self) -> int:
@@ -102,7 +103,12 @@ def load_schema(path: str | Path = SCHEMA_PATH) -> FeatureSchema:
         elif src == "profile":
             kw.update(entity=f["entity"], field=f["field"])
         elif src == "derived":
-            kw.update(fn=f["fn"])
+            if (f.get("fn") is None) == (f.get("expr") is None):
+                raise ValueError(f"{f['name']}: a derived feature needs exactly one of `fn` or `expr`")
+            if f.get("expr") is not None:
+                import cel
+                cel.compile(f["expr"])          # fail at load, not on the first event
+            kw.update(fn=f.get("fn"), expr=f.get("expr"))
         else:
             raise ValueError(f"{f['name']}: unknown source {src}")
         feats.append(FeatureSpec(**kw))

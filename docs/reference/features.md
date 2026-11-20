@@ -2,7 +2,7 @@
 
 # Feature catalog
 
-54 features, in model-tensor order (index = position in the tensor). Stream features are computed by the Flink job (or the gateway's inline path) with bucketed event-time windows; profile features are seeded into the online store from the synthetic world; derived features are computed at scoring time. Semantics: see the header of the schema file and [contracts.md](../contracts.md).
+54 features, in model-tensor order (index = position in the tensor). Stream features are computed by the Flink job (or the gateway's inline path) with bucketed event-time windows; profile features are seeded into the online store from the synthetic world; derived features are computed at scoring time, by a library function (`fn`) or a CEL expression over `event` and `f` (`expr`, numbers or booleans as 1 / 0: new event-level features need no code). Semantics: see the header of the schema file and [contracts.md](../contracts.md).
 
 ## Entities
 
