@@ -58,6 +58,19 @@ spec:
                 state.backend.type: rocksdb
                 execution.checkpointing.incremental: true
                 execution.checkpointing.dir: file:///checkpoints
+                execution.checkpointing.num-retained: 2
+                execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+                execution.checkpointing.tolerable-failed-checkpoints: 3
+                restart-strategy.type: exponential-delay
+                restart-strategy.exponential-delay.initial-backoff: 1 s
+                restart-strategy.exponential-delay.max-backoff: 60 s
+                restart-strategy.exponential-delay.backoff-multiplier: 2.0
+                restart-strategy.exponential-delay.reset-backoff-threshold: 10 min
+                restart-strategy.exponential-delay.jitter-factor: 0.1
+                taskmanager.jvm-exit-on-oom: true
+                taskmanager.network.memory.buffer-debloat.enabled: true
+                state.backend.rocksdb.predefined-options: FLASH_SSD_OPTIMIZED
+                state.backend.rocksdb.use-bloom-filter: true
                 execution.checkpointing.savepoint-dir: file:///checkpoints/savepoints
                 metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
                 metrics.reporter.prom.port: 9249
@@ -115,6 +128,19 @@ spec:
                 state.backend.rocksdb.metrics.estimate-num-keys: true
                 state.backend.rocksdb.metrics.block-cache-usage: true
                 execution.checkpointing.dir: file:///checkpoints
+                execution.checkpointing.num-retained: 2
+                execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+                execution.checkpointing.tolerable-failed-checkpoints: 3
+                restart-strategy.type: exponential-delay
+                restart-strategy.exponential-delay.initial-backoff: 1 s
+                restart-strategy.exponential-delay.max-backoff: 60 s
+                restart-strategy.exponential-delay.backoff-multiplier: 2.0
+                restart-strategy.exponential-delay.reset-backoff-threshold: 10 min
+                restart-strategy.exponential-delay.jitter-factor: 0.1
+                taskmanager.jvm-exit-on-oom: true
+                taskmanager.network.memory.buffer-debloat.enabled: true
+                state.backend.rocksdb.predefined-options: FLASH_SSD_OPTIMIZED
+                state.backend.rocksdb.use-bloom-filter: true
                 metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
                 metrics.reporter.prom.port: 9249
                 metrics.fetcher.update-interval: 2000

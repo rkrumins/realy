@@ -45,8 +45,30 @@ public final class RedisOnlineStore implements OnlineStore {
                 ? RedisClient.create(io.lettuce.core.resource.DefaultClientResources.builder()
                         .ioThreadPoolSize(ioThreads).computationThreadPoolSize(ioThreads).build(), uri)
                 : RedisClient.create(uri);
+        client.setOptions(clientOptions());
         conns = new StatefulRedisConnection[Math.max(1, connections)];
         for (int i = 0; i < conns.length; i++) conns[i] = client.connect(ByteArrayCodec.INSTANCE);
+    }
+
+    /**
+     * Fail fast instead of buffering without bound. Lettuce's defaults queue every command while the
+     * connection is down (an unbounded request queue): a Redis outage then turns into heap growth until
+     * the JVM dies (measured: a TaskManager OutOfMemoryError ~3 min after Redis was OOM-killed). Here a
+     * disconnected client rejects commands, the queue is bounded, and a command that gets no answer
+     * times out, so callers see errors and apply their own policy (Flink: backpressure, then fail the
+     * task and restart from the last checkpoint; gateway: the feature deadline and its fallback).
+     */
+    static io.lettuce.core.ClientOptions clientOptions() {
+        long timeoutMs = io.realy.common.Env.lng("REDIS_COMMAND_TIMEOUT_MS", 2000);
+        return io.lettuce.core.ClientOptions.builder()
+                .autoReconnect(true)
+                .disconnectedBehavior(io.lettuce.core.ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)
+                .requestQueueSize(io.realy.common.Env.integer("REDIS_REQUEST_QUEUE", 100_000))
+                .timeoutOptions(io.lettuce.core.TimeoutOptions.enabled(java.time.Duration.ofMillis(timeoutMs)))
+                .socketOptions(io.lettuce.core.SocketOptions.builder()
+                        .connectTimeout(java.time.Duration.ofMillis(io.realy.common.Env.lng("REDIS_CONNECT_TIMEOUT_MS", 2000)))
+                        .keepAlive(true).build())
+                .build();
     }
 
     private RedisAsyncCommands<byte[], byte[]> cmd() {
@@ -55,6 +77,14 @@ public final class RedisOnlineStore implements OnlineStore {
 
     @Override
     public CompletableFuture<byte[][]> getAll(List<String> keys) {
+        try {
+            return getAll0(keys);
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    private CompletableFuture<byte[][]> getAll0(List<String> keys) {
         var c = cmd();
         @SuppressWarnings("unchecked")
         RedisFuture<byte[]>[] fs = new RedisFuture[keys.size()];
@@ -70,6 +100,14 @@ public final class RedisOnlineStore implements OnlineStore {
 
     @Override
     public CompletableFuture<Void> setAll(List<String> keys, List<byte[]> values, long ttlSeconds) {
+        try {
+            return setAll0(keys, values, ttlSeconds);
+        } catch (RuntimeException e) {          // rejected (disconnected / queue full): an error, not a throw
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    private CompletableFuture<Void> setAll0(List<String> keys, List<byte[]> values, long ttlSeconds) {
         var c = cmd();
         CompletableFuture<?>[] cfs = new CompletableFuture[keys.size()];
         SetArgs args = ttlSeconds > 0 ? SetArgs.Builder.ex(ttlSeconds) : null;

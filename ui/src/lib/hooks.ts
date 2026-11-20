@@ -2,7 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { api, isNotFound } from "./api";
 import { buildSeries, live, useLiveVersion } from "./live";
-import type { EnvResponse, HealthStatus, Status } from "./types";
+import type { CurrentRun, EnvResponse, HealthStatus, Status } from "./types";
+
+/** The run in progress on the pipeline, whoever started it (this console, the CLI, a Job, another console). */
+export function activeRun(status: Status | null | undefined): CurrentRun | null {
+  return status?.active ?? status?.current ?? null;
+}
 
 /** Live status: WS-driven, falls back to polling /api/status while the socket is down. */
 export function useStatus(): Status | null {

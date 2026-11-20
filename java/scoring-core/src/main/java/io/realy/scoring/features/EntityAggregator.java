@@ -2,9 +2,7 @@ package io.realy.scoring.features;
 
 import io.realy.contracts.payments.v1.TransactionEvent;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.HashMap;
@@ -18,7 +16,15 @@ import java.util.Map;
  * python/realy/features/engine.py. The Flink job keeps the blob in RocksDB ValueState<byte[]>.
  */
 public final class EntityAggregator {
-    private static final byte STATE_VERSION = 1;
+    /**
+     * State encodings. v1: fixed-width (8-byte bucket index + two doubles per bucket, 16 bytes per
+     * distinct entry). v2: varints, delta-coded bucket indices and keys, integral values as varints and
+     * other values as raw doubles, so every value round-trips exactly (about 2-3x smaller). Both decode;
+     * v2 is written. The 8-byte last-event time stays at offset 1 in both.
+     */
+    private static final byte STATE_V1 = 1;
+    private static final byte STATE_V2 = 2;
+    private static final byte STATE_VERSION = STATE_V2;
     private static final long NONE = Long.MIN_VALUE;
     private static final long MIN_GEO_DT_US = 60_000_000L;
 
@@ -165,6 +171,16 @@ public final class EntityAggregator {
         }
     }
 
+    /** Re-encode a state blob in the v1 layout (tests: state written by earlier releases). */
+    public byte[] toV1(byte[] stateBytes) {
+        return State.decode(stateBytes, specs).encodeV1(specs);
+    }
+
+    /** Decode any supported layout and re-encode in the current one. */
+    public byte[] reencode(byte[] stateBytes) {
+        return State.decode(stateBytes, specs).encode(specs);
+    }
+
     /** Last event time seen in a state blob (the online-store `as_of`). */
     public static long lastEventUs(byte[] stateBytes) {
         if (stateBytes == null || stateBytes.length < 9) return NONE;
@@ -240,9 +256,10 @@ public final class EntityAggregator {
                 if ("distinct".equals(agg) || "novel".equals(agg)) st.feats[i].seen = new HashMap<>();
             }
             if (bytes == null || bytes.length == 0) return st;
+            if (bytes[0] == STATE_V2) return decodeV2(st, bytes, specs);
+            if (bytes[0] != STATE_V1) return new State().fresh(specs);
             try (var in = new DataInputStream(new ByteArrayInputStream(bytes))) {
-                byte ver = in.readByte();
-                if (ver != STATE_VERSION) return new State().fresh(specs);
+                in.readByte();
                 st.lastEventUs = in.readLong();
                 int nf = in.readUnsignedShort();
                 if (nf != specs.size()) return new State().fresh(specs); // schema changed: reset state
@@ -281,14 +298,60 @@ public final class EntityAggregator {
             return st;
         }
 
+        private static State decodeV2(State st, byte[] bytes, List<FeatureSpec> specs) {
+            var in = new Reader(bytes, 1);
+            st.lastEventUs = in.fixedLong();
+            int nf = (int) in.varLong();
+            if (nf != specs.size()) return new State().fresh(specs);
+            long base = st.lastEventUs;
+            for (int i = 0; i < nf; i++) {
+                Feat f = st.feats[i];
+                long mk = in.varLong();
+                f.maxK = mk == 0 ? NONE : unzig(mk - 1);
+                switch (specs.get(i).agg()) {
+                    case "count", "sum", "max", "avg" -> {
+                        int n = (int) in.varLong();
+                        f.idx = new long[Math.max(4, n)];
+                        f.a = new double[Math.max(4, n)];
+                        f.b = new double[Math.max(4, n)];
+                        long prev = 0;
+                        for (int j = 0; j < n; j++) {
+                            prev = j == 0 ? (f.maxK == NONE ? 0 : f.maxK) + unzig(in.varLong()) : prev + in.varLong();
+                            f.idx[j] = prev;
+                            f.a[j] = in.num();
+                            f.b[j] = in.num();
+                        }
+                        f.size = n;
+                    }
+                    case "distinct", "novel" -> {
+                        int n = (int) in.varLong();
+                        long key = 0;
+                        for (int j = 0; j < n; j++) {
+                            key = j == 0 ? unzig(in.varLong()) : key + in.varLong();
+                            f.seen.put(key, base - unzig(in.varLong()));
+                        }
+                    }
+                    case "time_since_last" -> f.lastTs = in.optTime(base);
+                    case "geo_speed_kmh" -> {
+                        f.lastTs = in.optTime(base);
+                        f.lat = in.rawDouble();
+                        f.lon = in.rawDouble();
+                    }
+                    default -> throw new IllegalStateException("unknown agg");
+                }
+            }
+            return st;
+        }
+
         private State fresh(List<FeatureSpec> specs) {
             return decode(null, specs);
         }
 
-        byte[] encode(List<FeatureSpec> specs) {
-            var bos = new ByteArrayOutputStream(64);
-            try (var out = new DataOutputStream(bos)) {
-                out.writeByte(STATE_VERSION);
+        /** The v1 layout (kept to test that state written by earlier releases still decodes identically). */
+        byte[] encodeV1(List<FeatureSpec> specs) {
+            var bos = new java.io.ByteArrayOutputStream(64);
+            try (var out = new java.io.DataOutputStream(bos)) {
+                out.writeByte(STATE_V1);
                 out.writeLong(lastEventUs);
                 out.writeShort(specs.size());
                 for (int i = 0; i < specs.size(); i++) {
@@ -323,6 +386,155 @@ public final class EntityAggregator {
                 throw new UncheckedIOException(ex);
             }
             return bos.toByteArray();
+        }
+
+        byte[] encode(List<FeatureSpec> specs) {
+            var out = new Writer(48 + specs.size() * 6);
+            out.u8(STATE_VERSION);
+            out.fixedLong(lastEventUs);
+            out.varLong(specs.size());
+            long base = lastEventUs;
+            for (int i = 0; i < specs.size(); i++) {
+                Feat f = feats[i];
+                out.varLong(f.maxK == NONE ? 0 : zig(f.maxK) + 1);
+                switch (specs.get(i).agg()) {
+                    case "count", "sum", "max", "avg" -> {
+                        out.varLong(f.size);
+                        for (int j = 0; j < f.size; j++) {
+                            out.varLong(j == 0 ? zig(f.idx[0] - (f.maxK == NONE ? 0 : f.maxK)) : f.idx[j] - f.idx[j - 1]);
+                            out.num(f.a[j]);
+                            out.num(f.b[j]);
+                        }
+                    }
+                    case "distinct", "novel" -> {
+                        int n = f.seen.size();
+                        out.varLong(n);
+                        long[] keys = new long[n];
+                        int k = 0;
+                        for (long key : f.seen.keySet()) keys[k++] = key;
+                        java.util.Arrays.sort(keys);
+                        for (int j = 0; j < n; j++) {
+                            out.varLong(j == 0 ? zig(keys[0]) : keys[j] - keys[j - 1]);
+                            out.varLong(zig(base - f.seen.get(keys[j])));
+                        }
+                    }
+                    case "time_since_last" -> out.optTime(f.lastTs, base);
+                    case "geo_speed_kmh" -> {
+                        out.optTime(f.lastTs, base);
+                        out.rawDouble(f.lat);
+                        out.rawDouble(f.lon);
+                    }
+                    default -> throw new IllegalStateException("unknown agg");
+                }
+            }
+            return out.toByteArray();
+        }
+    }
+
+    // ------------------------------------------------------------------------------------- codec
+    static long zig(long v) {
+        return (v << 1) ^ (v >> 63);
+    }
+
+    static long unzig(long v) {
+        return (v >>> 1) ^ -(v & 1);
+    }
+
+    /** Growable little buffer: varints, fixed longs and exact numbers (no stream / synchronisation). */
+    static final class Writer {
+        private byte[] buf;
+        private int n;
+
+        Writer(int cap) {
+            buf = new byte[Math.max(16, cap)];
+        }
+
+        private void ensure(int k) {
+            if (n + k > buf.length) buf = java.util.Arrays.copyOf(buf, Math.max(buf.length * 2, n + k));
+        }
+
+        void u8(int b) {
+            ensure(1);
+            buf[n++] = (byte) b;
+        }
+
+        void fixedLong(long v) {       // big-endian, as v1 (lastEventUs() reads it at offset 1)
+            ensure(8);
+            for (int i = 7; i >= 0; i--) buf[n++] = (byte) (v >>> (8 * i));
+        }
+
+        void varLong(long v) {         // unsigned LEB128
+            ensure(10);
+            while ((v & ~0x7FL) != 0) {
+                buf[n++] = (byte) ((v & 0x7F) | 0x80);
+                v >>>= 7;
+            }
+            buf[n++] = (byte) v;
+        }
+
+        void rawDouble(double d) {
+            fixedLong(Double.doubleToRawLongBits(d));
+        }
+
+        /** Integral values (counts, sums of minor units) as a varint, anything else as a raw double. */
+        void num(double d) {
+            long l = (long) d;
+            if (l == d && Math.abs(l) < (1L << 52) && !(d == 0.0 && Double.doubleToRawLongBits(d) != 0L)) {
+                varLong(zig(l) << 1);
+            } else {
+                varLong(1);
+                rawDouble(d);
+            }
+        }
+
+        void optTime(long t, long base) {
+            varLong(t == NONE ? 0 : zig(base - t) + 1);
+        }
+
+        byte[] toByteArray() {
+            return java.util.Arrays.copyOf(buf, n);
+        }
+    }
+
+    static final class Reader {
+        private final byte[] b;
+        private int p;
+
+        Reader(byte[] b, int p) {
+            this.b = b;
+            this.p = p;
+        }
+
+        long fixedLong() {
+            long v = 0;
+            for (int i = 0; i < 8; i++) v = (v << 8) | (b[p++] & 0xFFL);
+            return v;
+        }
+
+        long varLong() {
+            long v = 0;
+            int shift = 0;
+            while (true) {
+                byte x = b[p++];
+                v |= (long) (x & 0x7F) << shift;
+                if ((x & 0x80) == 0) return v;
+                shift += 7;
+            }
+        }
+
+        double rawDouble() {
+            return Double.longBitsToDouble(fixedLong());
+        }
+
+        double num() {
+            long tag = varLong();
+            if ((tag & 1) == 0) return (double) unzig(tag >>> 1);
+            return rawDouble();
+        }
+
+        long optTime(long base) {
+            long v = varLong();
+            return v == 0 ? NONE : base - unzig(v - 1);
         }
     }
 }

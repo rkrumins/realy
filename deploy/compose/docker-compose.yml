@@ -26,15 +26,43 @@ x-jvm-env: &jvm-env
   KAFKA_BOOTSTRAP: kafka:29092
   RUN_SEED: "42"
 
+# One Flink configuration for the JobManager and every TaskManager (docs/dev/flink-job.md explains each
+# group). The job sets its own checkpointing guarantees too (FraudJob.configure); these are the cluster
+# defaults and the parts only the cluster can set:
+#   state       RocksDB, incremental checkpoints, bloom filters for point lookups (a get per event per entity)
+#   failures    restart with exponential backoff forever (a dependency outage must not end the job); a
+#               TaskManager whose heap runs out exits so the container restarts instead of hanging
+#   flow        under backpressure keep about 1 s of data in flight: barriers stay fast, latency bounded
+#   metrics     REST vertex metrics refresh every 2 s (catch-up progress in the console's Startup panel)
+# (no comments inside the block: FLINK_PROPERTIES lines are handed to Flink verbatim)
 x-flink-props: &flink-common |
   jobmanager.rpc.address: flink-jobmanager
   classloader.resolve-order: parent-first
+  taskmanager.numberOfTaskSlots: 4
+  taskmanager.memory.process.size: ${FLINK_TM_MEMORY:-3g}
+  taskmanager.memory.managed.fraction: 0.35
+  taskmanager.memory.jvm-metaspace.size: 512m
   state.backend.type: rocksdb
+  state.backend.rocksdb.predefined-options: FLASH_SSD_OPTIMIZED
+  state.backend.rocksdb.use-bloom-filter: true
+  state.backend.rocksdb.metrics.estimate-num-keys: true
+  state.backend.rocksdb.metrics.block-cache-usage: true
   execution.checkpointing.incremental: true
   execution.checkpointing.dir: file:///checkpoints
+  execution.checkpointing.savepoint-dir: file:///checkpoints/savepoints
+  execution.checkpointing.num-retained: 2
+  execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+  execution.checkpointing.tolerable-failed-checkpoints: 3
+  restart-strategy.type: exponential-delay
+  restart-strategy.exponential-delay.initial-backoff: 1 s
+  restart-strategy.exponential-delay.max-backoff: 60 s
+  restart-strategy.exponential-delay.backoff-multiplier: 2.0
+  restart-strategy.exponential-delay.reset-backoff-threshold: 10 min
+  restart-strategy.exponential-delay.jitter-factor: 0.1
+  taskmanager.jvm-exit-on-oom: true
+  taskmanager.network.memory.buffer-debloat.enabled: true
   metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
   metrics.reporter.prom.port: 9249
-  # REST vertex metrics (catch-up progress in the console's Startup panel) refresh every 2 s, not 10
   metrics.fetcher.update-interval: 2000
 
 services:
@@ -64,6 +92,7 @@ services:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9092' || exit 1"]
       interval: 5s
       retries: 30
+    restart: unless-stopped
 
   kafka-init:
     image: apache/kafka:4.4.0
@@ -77,8 +106,14 @@ services:
     image: redis:8.8-alpine
     ports: ["6379:6379"]
     # io-threads busy-poll; only worth it above ~100k ops/s on dedicated cores
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "3gb",
-              "--maxmemory-policy", "allkeys-lru"]
+    # noeviction: a full store rejects writes (Flink fails the task, the runner's store guardrail aborts
+    # the run with the reason) instead of silently evicting feature state and profiles, which would
+    # corrupt every feature read after it. Persistence is off for benchmarks: a restarted Redis is
+    # reseeded by the next run (profiles) and rebuilt by Flink (stream blobs). REDIS_PERSIST=yes keeps
+    # an append-only file instead.
+    command: ["redis-server", "--save", "", "--appendonly", "${REDIS_PERSIST:-no}", "--appendfsync", "everysec",
+              "--maxmemory", "${REDIS_MAXMEMORY:-3gb}", "--maxmemory-policy", "${REDIS_EVICTION:-noeviction}"]
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -102,6 +137,7 @@ services:
       test: ["CMD-SHELL", "clickhouse-client -q 'EXISTS realy.v_training_dataset' | grep -q 1"]
       interval: 5s
       retries: 60
+    restart: unless-stopped
 
   mock-model:
     build: { <<: *build, target: mock-model }
@@ -111,12 +147,13 @@ services:
       <<: *jvm-env
       # trained proxy (realy train); empty -> bundled hand-set default weights
       MODEL_WEIGHTS: ${MODEL_WEIGHTS:-/models/proxy/fraud_mlp.weights.json}
-      JAVA_OPTS: "-XX:+UseZGC -XX:+ZGenerational -Xmx1g"
+      JAVA_OPTS: "-XX:+UseZGC -XX:+ZGenerational -Xmx1g -XX:+ExitOnOutOfMemoryError"
     # shared with the console: `realy train` writes versioned weights here and `realy deploy-model`
     # hot-swaps them in (ModelServerConfig.weights_path) - retrain -> redeploy -> measure, no rebuild.
     # Seeded from the image's bundled weights the first time the volume is created.
     volumes: ["realy-models:/models"]
     depends_on: { kafka: { condition: service_healthy } }
+    restart: unless-stopped
 
   gateway:
     build: { <<: *build, target: gateway }
@@ -129,11 +166,12 @@ services:
       INGRESS_KAFKA: "false"
       KAFKA_CONSUMERS: "3"
       MIRROR_TO_KAFKA: "true"
-      JAVA_OPTS: "-XX:+UseZGC -XX:+ZGenerational -Xmx2g"
+      JAVA_OPTS: "-XX:+UseZGC -XX:+ZGenerational -Xmx2g -XX:+ExitOnOutOfMemoryError"
     depends_on:
       kafka: { condition: service_healthy }
       redis: { condition: service_healthy }
       mock-model: { condition: service_healthy }
+    restart: unless-stopped
 
   flink-jobmanager:
     build: { <<: *build, target: flink }
@@ -150,6 +188,7 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/overview > /dev/null || exit 1"]
       interval: 5s
       retries: 60
+    restart: unless-stopped
 
   flink-taskmanager:
     build: { <<: *build, target: flink }
@@ -162,20 +201,20 @@ services:
       REDIS_URI: redis://redis:6379
       MODEL_TARGET: mock-model:8001
       RUN_SEED: "42"
-      FLINK_PROPERTIES: |
-        jobmanager.rpc.address: flink-jobmanager
-        classloader.resolve-order: parent-first
-        taskmanager.numberOfTaskSlots: 4
-        taskmanager.memory.process.size: 3g
-        taskmanager.memory.managed.fraction: 0.35
-        taskmanager.memory.jvm-metaspace.size: 512m
-        state.backend.type: rocksdb
-        state.backend.rocksdb.metrics.estimate-num-keys: true
-        state.backend.rocksdb.metrics.block-cache-usage: true
-        execution.checkpointing.dir: file:///checkpoints
-        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
-        metrics.reporter.prom.port: 9249
-    volumes: ["flink-checkpoints:/checkpoints"]
+      # online-store writes per subtask in flight (backpressure beyond), and a longer command timeout than
+      # the gateway's: a write is not on the decision path, a timeout declines the checkpoint
+      STORE_MAX_IN_FLIGHT: "${STORE_MAX_IN_FLIGHT:-1000}"
+      REDIS_COMMAND_TIMEOUT_MS: "${FLINK_REDIS_TIMEOUT_MS:-10000}"
+      FLINK_PROPERTIES: *flink-common
+    volumes: ["flink-checkpoints:/checkpoints", "./flink/tm-health.sh:/opt/realy/tm-health.sh:ro"]
+    restart: unless-stopped
+    # alive = registered with the JobManager (a hung JVM keeps the container up but serves nothing)
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/realy/tm-health.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
 
   # Operator console + API + bench driver (emitters and collectors run here: one clock domain).
   console:
@@ -200,11 +239,14 @@ services:
       # on `docker compose stop/down` the running run is aborted and given this long to drain and
       # write its partial report (stop_grace_period below must be longer)
       REALY_SHUTDOWN_GRACE_S: "60"
+      # retained Flink checkpoints, read-only: a job lost with its JobManager restores from the newest one
+      FLINK_CHECKPOINTS_LOCAL: /flink-checkpoints
     stop_grace_period: 75s
     volumes:
       - realy-runs:/runs
       - realy-data:/data
       - realy-models:/models
+      - flink-checkpoints:/flink-checkpoints:ro
     shm_size: 1g
     depends_on:
       kafka-init: { condition: service_completed_successfully }
@@ -213,12 +255,14 @@ services:
       gateway: { condition: service_healthy }
       mock-model: { condition: service_healthy }
       flink-jobmanager: { condition: service_healthy }
+    restart: unless-stopped
 
   prometheus:
     profiles: [obs]
     image: prom/prometheus:v3.5.0
     ports: ["9090:9090"]
     volumes: ["./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    restart: unless-stopped
 
   grafana:
     profiles: [obs]
@@ -232,6 +276,7 @@ services:
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
 
 volumes:
   flink-checkpoints: {}

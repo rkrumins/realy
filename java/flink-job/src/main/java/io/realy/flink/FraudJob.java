@@ -42,7 +42,8 @@ import org.apache.kafka.clients.producer.ProducerRecord;
  *   --mode both       inline + online-store writes
  *   --mode echo       source -> immediate decision (instrument calibration)
  *   --entities customer,card,...   keyed stages to run (default: all in feature_schema.yaml)
- *   --parallelism N  --checkpoint-ms 10000  --buffer-timeout-ms 1  --exactly-once false
+ *   --parallelism N  --max-parallelism 128  --checkpoint-ms 10000  --buffer-timeout-ms 1  --exactly-once false
+ *   --tolerable-checkpoint-failures 3  --checkpoint-timeout-ms 120000
  *   --async-capacity 1000  --scoring-config '{...proto3 JSON ScoringConfig...}'
  * </pre>
  */
@@ -74,17 +75,35 @@ public final class FraudJob {
         env.execute("realy-" + mode);
     }
 
+    /**
+     * Parallelism, checkpointing and fault tolerance. The job states its own guarantees here rather than
+     * relying on cluster defaults:
+     * <ul>
+     *   <li>max parallelism is fixed (128 = Flink's default for small jobs, so existing savepoints keep
+     *       restoring): it is the number of key groups, the upper bound for rescaling the keyed state;</li>
+     *   <li>a few failed checkpoints are tolerated (one slow checkpoint under a load spike must not fail
+     *       the job over and replay minutes of events); persistent failures still fail it;</li>
+     *   <li>the latest checkpoints are retained on cancellation, so a job lost with its JobManager can be
+     *       restored from them (runner/flink.py restores the newest one when no savepoint is given).</li>
+     * </ul>
+     */
     static void configure(StreamExecutionEnvironment env, ParameterTool p) {
         env.setParallelism(p.getInt("parallelism", Env.integer("PARALLELISM", 4)));
+        env.setMaxParallelism(p.getInt("max-parallelism", Env.integer("MAX_PARALLELISM", 128)));
         env.setBufferTimeout(p.getLong("buffer-timeout-ms", 1));
         long cp = p.getLong("checkpoint-ms", 10_000);
         if (cp > 0) {
             boolean eos = p.getBoolean("exactly-once", false);
             // AT_LEAST_ONCE checkpoints need no barrier alignment -> no checkpoint-induced tail stalls.
             env.enableCheckpointing(cp, eos ? CheckpointingMode.EXACTLY_ONCE : CheckpointingMode.AT_LEAST_ONCE);
-            env.getCheckpointConfig().setMinPauseBetweenCheckpoints(cp / 2);
-            env.getCheckpointConfig().setCheckpointTimeout(120_000);
-            if (eos) env.getCheckpointConfig().enableUnalignedCheckpoints();
+            var cc = env.getCheckpointConfig();
+            cc.setMinPauseBetweenCheckpoints(cp / 2);
+            cc.setCheckpointTimeout(p.getLong("checkpoint-timeout-ms", 120_000));
+            cc.setMaxConcurrentCheckpoints(1);
+            cc.setTolerableCheckpointFailureNumber(p.getInt("tolerable-checkpoint-failures", 3));
+            cc.setExternalizedCheckpointRetention(
+                    org.apache.flink.configuration.ExternalizedCheckpointRetention.RETAIN_ON_CANCELLATION);
+            if (eos) cc.enableUnalignedCheckpoints();
         }
         env.getConfig().enableObjectReuse();
     }
@@ -106,7 +125,8 @@ public final class FraudJob {
         // the rest store values only. Customer/card: low per-entity rates -> small blobs, must be exact.
         List<String> stateEntities = Arrays.stream(p.get("store-state", Env.str("STORE_STATE", "customer,card")).split(","))
                 .map(String::trim).filter(x -> !x.isEmpty()).toList();
-        s = features(s, entities, writeStore, stateEntities);
+        // spans travel with the envelope only when a decision will carry them (inline / both)
+        s = features(s, entities, writeStore, stateEntities, !"features".equals(mode));
         if (!"features".equals(mode)) s = s.filter(e -> !e.backfill).name("skip-backfill");
         if ("features".equals(mode)) {
             s.addSink(new org.apache.flink.streaming.api.functions.sink.legacy.DiscardingSink<>()).name("discard");
@@ -124,10 +144,15 @@ public final class FraudJob {
 
     public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore,
                                                 List<String> stateEntities) {
+        return features(in, entities, writeStore, stateEntities, true);
+    }
+
+    public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore,
+                                                List<String> stateEntities, boolean spans) {
         DataStream<Envelope> s = in;
         for (String entity : entities) {
             s = s.keyBy(new EntityKey(entity))
-                    .process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity)))
+                    .process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity), spans))
                     .uid("features-" + entity).name("features:" + entity);
         }
         return s;

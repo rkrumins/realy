@@ -153,6 +153,48 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         probes.active = phase in ACTIVE_PHASES
         return pipeline_status(runs_dir, run_id, phase, topology, probes.data, build_topology, hub.silence())
 
+    remote_cache: dict[str, Any] = {}
+    log_tail: dict[str, int] = {}
+
+    def _active(st: dict[str, Any], lease: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The run in progress on this pipeline, whoever started it. The console's own run comes from its
+        worker; a run started elsewhere (CLI, `make live-test`, a Kubernetes Job, another console) is
+        described from the pipeline lease and its run directory (manifest, heartbeat, scenario), so Live
+        shows its progress, startup, charts and log the same way."""
+        cur = st.get("current")
+        if cur:
+            return {**cur, "local": True, "owner": (lease or {}).get("owner")}
+        if not lease or not lease.get("run_id"):
+            return None
+        rid = str(lease["run_id"])
+        rd = runs_dir / rid
+        hit = remote_cache.get(rid)
+        if hit is None or time.time() - hit["at"] > 10:
+            man, sc = _json(rd / "manifest.json") or {}, _json(rd / "scenario.json") or {}
+            prof = ((sc.get("traffic") or {}).get("profile") or {})
+            base = prof.get("tps") if prof.get("kind") != "step" else (prof.get("start_tps") or prof.get("tps"))
+            hit = remote_cache[rid] = {"at": time.time(), "man": man, "info": {
+                "topology": man.get("topology") or sc.get("topology"),
+                "duration_s": man.get("duration_s") or (sc.get("traffic") or {}).get("duration_s"),
+                "warmup_s": man.get("warmup_s") if man.get("warmup_s") is not None else (sc.get("traffic") or {}).get("warmup_s"),
+                "base_tps": base, "budget": sc.get("budget")}}
+        hb = _json(rd / "heartbeat") or {}
+        return {"job_id": None, "run_id": rid, "scenario": lease.get("scenario") or hit["man"].get("scenario"),
+                "phase": hb.get("phase") or lease.get("phase") or "PREPARE", "abort_reason": None, "abort_kind": None,
+                "started_at": lease.get("started_at") or hit["man"].get("created_at"), "rate_multiplier": 1.0,
+                **hit["info"], "local": False, "owner": lease.get("owner")}
+
+    def _tail_remote_log(active: dict[str, Any] | None) -> None:
+        """Stream the run log of a run this console did not start (its runner writes runs/<id>/run.log)."""
+        if not active or active.get("local"):
+            return
+        from ..runner.run import read_run_log
+        rid = active["run_id"]
+        lines, nxt = read_run_log(runs_dir / rid, log_tail.get(rid, 0), max_lines=500)
+        log_tail[rid] = nxt
+        for x in lines:
+            hub.add_log(rid, x["line"])
+
     scheduler = Scheduler(store, worker)
     summary_cache: dict[str, tuple[float, dict]] = {}
 
@@ -180,7 +222,13 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                         pipe = await asyncio.to_thread(_pipeline, st, lease)
                     except Exception:  # noqa: BLE001 - status must keep ticking
                         pipe = None
-                    hub.publish({"type": "status", **st, "kafka": hub.connected, "lease": lease, "pipeline": pipe})
+                    try:
+                        active = await asyncio.to_thread(_active, st, lease)
+                        await asyncio.to_thread(_tail_remote_log, active)
+                    except Exception:  # noqa: BLE001
+                        active = st.get("current")
+                    hub.publish({"type": "status", **st, "active": active, "kafka": hub.connected, "lease": lease,
+                                 "pipeline": pipe})
             task = asyncio.create_task(status_ticker())
         yield
         probes.stop()
@@ -351,7 +399,17 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             rep.pop("text", None)
         return {"run_id": run_id, "summary": _summary(d), "manifest": _json(d / "manifest.json"), "report": rep,
                 "verify": _json(d / "verify.json"), "run": _json(d / "run.json"), "scenario": _json(d / "scenario.json"),
-                "logs": list(worker.logs.get(run_id, []))[-500:]}
+                "logs": _run_logs(run_id, d)}
+
+    def _run_logs(run_id: str, d: Path) -> list[str]:
+        """The console's own log of the run, else the runner's persisted run.log (a run started elsewhere,
+        or one from before a console restart)."""
+        mine = list(worker.logs.get(run_id, []))
+        if mine:
+            return mine[-500:]
+        from ..runner.run import read_run_log
+        lines, _ = read_run_log(d, 0, max_lines=500)
+        return [x["line"] for x in lines]
 
     @app.get("/api/runs/{run_id}/report.html")
     def get_report_html(run_id: str):
@@ -511,7 +569,12 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             pipe = _pipeline(st, lease)
         except Exception:  # noqa: BLE001
             pipe = None
-        return {**st, "kafka": hub.connected, "kafka_error": hub.last_error, "lease": lease, "pipeline": pipe}
+        try:
+            active = _active(st, lease)
+        except Exception:  # noqa: BLE001
+            active = st.get("current")
+        return {**st, "active": active, "kafka": hub.connected, "kafka_error": hub.last_error, "lease": lease,
+                "pipeline": pipe}
 
     @app.get("/api/live/history")
     def live_history(run_id: str | None = None, seconds: int = 300) -> dict[str, Any]:
@@ -524,7 +587,12 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             return
         q = hub.subscribe()
         try:
-            await ws.send_json({"type": "status", **worker.status(), "kafka": hub.connected})
+            st, lease = worker.status(), await asyncio.to_thread(_lease_holder)
+            try:
+                active = await asyncio.to_thread(_active, st, lease)
+            except Exception:  # noqa: BLE001
+                active = st.get("current")
+            await ws.send_json({"type": "status", **st, "active": active, "lease": lease, "kafka": hub.connected})
             while True:
                 msg = await q.get()
                 await ws.send_json(msg)

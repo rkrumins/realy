@@ -5,7 +5,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { envHealth, useEnv, useStatus } from "@/lib/hooks";
+import { activeRun, envHealth, useEnv, useStatus } from "@/lib/hooks";
 import { pref, setPref, toggleTheme, useTheme } from "@/lib/theme";
 import { Dot } from "../ui/badge";
 import { Kbd } from "../ui/controls";
@@ -34,7 +34,7 @@ function Logo({ collapsed }: { collapsed?: boolean }) {
 
 function SidebarNav({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
   const status = useStatus();
-  const running = Boolean(status?.current);
+  const running = Boolean(activeRun(status));
   return (
     <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-4">
       {NAV.map((g) => (

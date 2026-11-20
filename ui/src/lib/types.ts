@@ -20,7 +20,8 @@ export interface Budget {
 }
 
 export interface CurrentRun {
-  job_id: string;
+  /** null for a run this console did not start (CLI, a Kubernetes Job, another console) */
+  job_id: string | null;
   run_id: string | null;
   scenario: string;
   phase: string;
@@ -33,6 +34,9 @@ export interface CurrentRun {
   budget: Budget | null;
   duration_s: number | null;
   warmup_s: number | null;
+  /** true: started by this console; false: started elsewhere and described from the lease + run directory */
+  local?: boolean;
+  owner?: string | null;
 }
 
 export interface Job {
@@ -64,7 +68,10 @@ export interface LeaseHolder {
 }
 
 export interface Status {
+  /** the run this console's worker is executing */
   current: CurrentRun | null;
+  /** the run in progress on the pipeline, whoever started it (current, or one started elsewhere) */
+  active?: CurrentRun | null;
   queue: Job[];
   blocked_by?: LeaseHolder | null;
   lease?: LeaseHolder | null;

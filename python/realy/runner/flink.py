@@ -21,6 +21,31 @@ from ..scenario import REPO_ROOT, Scenario
 JAR = Path(os.environ.get("FLINK_JOB_JAR", REPO_ROOT / "java" / "flink-job" / "build" / "libs" / "realy-flink-job.jar"))
 ENTRY = "io.realy.flink.FraudJob"
 SAVEPOINT_DIR = os.environ.get("FLINK_SAVEPOINT_DIR", "file:///checkpoints/savepoints")
+# Retained checkpoints (execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION):
+# FLINK_CHECKPOINTS_URI is the directory as Flink sees it, FLINK_CHECKPOINTS_LOCAL the same directory as
+# this process sees it (compose mounts the volume read-only into the console). A job lost with its
+# JobManager (no HA) is restored from its newest retained checkpoint instead of starting empty.
+CHECKPOINTS_URI = os.environ.get("FLINK_CHECKPOINTS_URI", "file:///checkpoints")
+CHECKPOINTS_LOCAL = os.environ.get("FLINK_CHECKPOINTS_LOCAL", "")
+
+
+def latest_retained_checkpoint(jid: str, local: str | None = None, uri: str | None = None) -> str | None:
+    """The newest complete retained checkpoint of job `jid` (a `chk-N` directory holding `_metadata`), as
+    a path Flink can restore from, or None."""
+    root = Path(local if local is not None else CHECKPOINTS_LOCAL)
+    if not str(root) or not jid or not (root / jid).is_dir():
+        return None
+    best = None
+    for d in (root / jid).glob("chk-*"):
+        try:
+            n = int(d.name.split("-", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if (d / "_metadata").exists() and (best is None or n > best[0]):
+            best = (n, d.name)
+    if best is None:
+        return None
+    return f"{(uri or CHECKPOINTS_URI).rstrip('/')}/{jid}/{best[1]}"
 
 
 # Provenance of the running job's keyed state: which world it was built from and which consumer
@@ -228,7 +253,17 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 continue
             log(f"flink: stopping {j['name']} with savepoint{' (new job jar)' if new_code else ''}")
             savepoint = _stop_with_savepoint(c, j["jid"], log) or savepoint
-        group = f"realy-flink-{run_id}" if fresh and run_id else "realy-flink"
+        recovered = None
+        if not running and not fresh and prev and prev.get("jid"):
+            # the job is gone without a savepoint (JobManager restarted, job cancelled by hand): restore
+            # its newest retained checkpoint, so the keyed state and the runs that built it carry over
+            recovered = latest_retained_checkpoint(prev["jid"])
+            if recovered:
+                savepoint = recovered
+                carried = (prev.get("lineage") or {"runs": [], "count": 0, "unknown": True})
+                log(f"flink: no job running; restoring job {prev['jid'][:8]} from its retained checkpoint {recovered}")
+        group = (f"realy-flink-{run_id}" if fresh and run_id
+                 else (prev.get("group") if recovered and prev.get("group") else "realy-flink"))
         args = ["--mode", mode, "--parallelism", str(par), "--bootstrap", os.environ.get("FLINK_KAFKA_BOOTSTRAP", "kafka:29092"),
                 "--group", group, "--scoring-config", scoring,
                 "--checkpoint-ms", str(int(os.environ.get("FLINK_CHECKPOINT_MS", "10000"))),
@@ -251,7 +286,8 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
             if st.get("state") in ("FAILED", "CANCELED"):
                 raise RuntimeError(f"flink job {want} {st.get('state')}")
             time.sleep(0.5)
-        log(f"flink: {want} running (job {jid[:8]}, parallelism {par}{', restored from savepoint' if savepoint else ''})")
+        how = (", restored from its retained checkpoint" if recovered else ", restored from savepoint") if savepoint else ""
+        log(f"flink: {want} running (job {jid[:8]}, parallelism {par}{how})")
         try:
             # fresh: Flink state cancelled and the runner cleared the stream blobs. Otherwise (savepoint
             # restore, or a failed savepoint whose blobs survive in the store) the earlier runs remain.

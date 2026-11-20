@@ -11,7 +11,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/controls";
 import { api, isNotFound } from "@/lib/api";
 import { fmtAgo, fmtCompact, fmtMs, fmtNum, fmtPct, isNum } from "@/lib/format";
-import { useEnv, useLiveSeries, useStatus } from "@/lib/hooks";
+import { activeRun, useEnv, useLiveSeries, useStatus } from "@/lib/hooks";
 import type { RunSummary, SummaryResponse } from "@/lib/types";
 
 function fromRuns(history: RunSummary[]): SummaryResponse {
@@ -30,7 +30,7 @@ function fromRuns(history: RunSummary[]): SummaryResponse {
 
 function NowRunning() {
   const status = useStatus();
-  const cur = status?.current;
+  const cur = activeRun(status);
   const series = useLiveSeries(120, cur?.run_id ?? null);
   if (!cur) return null;
   const last = series.filter((p) => p.emitted !== null).slice(-5);

@@ -13,7 +13,7 @@ import { Select } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { fmtAgo, fmtCompact, fmtDuration, fmtMs, fmtPct } from "@/lib/format";
-import { useStatus } from "@/lib/hooks";
+import { activeRun, useStatus } from "@/lib/hooks";
 import { TOPOLOGIES, type BudgetCheck, type ScenarioListItem } from "@/lib/types";
 
 export const FRAUD_PACKS = new Set([
@@ -110,7 +110,7 @@ export default function Launch() {
       qc.invalidateQueries({ queryKey: ["runs"] });
       qc.invalidateQueries({ queryKey: ["schedules"] });
       if (res.kind === "job") {
-        toast.success(`Queued ${selected?.name}`, { description: status?.current ? "It starts when the current run finishes." : "Starting now — opening the live view." });
+        toast.success(`Queued ${selected?.name}`, { description: activeRun(status) ? "It starts when the current run finishes." : "Starting now — opening the live view." });
         nav("/live");
       } else {
         toast.success(`Scheduled ${selected?.name}`);
@@ -205,7 +205,7 @@ export default function Launch() {
                   </Button>
                   <Button variant="gradient" onClick={() => launch.mutate()} disabled={launch.isPending} className="flex-[1.4]" data-testid="launch-button">
                     {launch.isPending ? <Loader2 className="animate-spin" /> : when === "now" ? <Rocket /> : <CalendarClock />}
-                    {when === "now" ? (status?.current ? "Queue run" : "Launch run") : "Schedule"}
+                    {when === "now" ? (activeRun(status) ? "Queue run" : "Launch run") : "Schedule"}
                   </Button>
                 </div>
                 {budget && <BudgetResult b={budget} />}
@@ -213,7 +213,7 @@ export default function Launch() {
             )}
           </Card>
           <Card className="mt-4">
-            <CardHeader title="Queue" subtitle={status?.current ? `running ${status.current.scenario}` : "nothing running"} />
+            <CardHeader title="Queue" subtitle={activeRun(status) ? `running ${activeRun(status)!.scenario}` : "nothing running"} />
             <CardBody className="pt-0">
               {queue.length === 0 ? <div className="text-[12.5px] text-subtle">The queue is empty.</div> : (
                 <ul className="divide-y divide-border">

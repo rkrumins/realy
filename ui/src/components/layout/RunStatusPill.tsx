@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { cn } from "@/lib/cn";
 import { fmtDuration, fmtMs, fmtNum } from "@/lib/format";
-import { useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
+import { activeRun, useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
 import { Dot } from "../ui/badge";
 import { Tooltip } from "../ui/tooltip";
 
@@ -13,7 +13,7 @@ function avg(xs: (number | null)[]) {
 /** Top-bar pill: phase · TPS · e2e p99 vs budget for the running job; "idle" otherwise. */
 export function RunStatusPill({ compact }: { compact?: boolean }) {
   const status = useStatus();
-  const cur = status?.current ?? null;
+  const cur = activeRun(status);
   const series = useLiveSeries(30, cur?.run_id ?? null);
   const elapsed = useElapsed(cur?.started_at);
   const queued = status?.queue?.length ?? 0;

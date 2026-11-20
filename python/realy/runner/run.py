@@ -712,8 +712,18 @@ class _Run:
         self.mon = threading.Thread(target=_metrics_monitor, args=(self.h, sc, self.stop_mon, self.log), daemon=True)
         self.mon.start()
         from .infra import InfraSampler
+        from .infra import HealthWatch
+
+        def _abort(reason: str) -> None:
+            if request_abort_handle(self.h, reason, "guardrail"):
+                self.log(f"GUARDRAIL: {reason} -> aborting run")
+
+        def _note(k: str, v: Any) -> None:
+            self.manifest.setdefault("health", {})[k] = v
+        self.health = HealthWatch(self.log, _abort, _note)
         self.infra = InfraSampler(self.run_dir, self.ep.flink_rest if sc.topology != "echo-kafka" else None, self.log,
-                                  max_s=sc.traffic.duration_s + sc.traffic.warmup_s + 3600).start()
+                                  max_s=sc.traffic.duration_s + sc.traffic.warmup_s + 3600,
+                                  on_sample=self.health.check).start()
         tps = sc.traffic.profile.tps
         n_coll = self.n_coll_req or max(1, int(tps // 15000) + (1 if tps % 15000 else 0))
         self.n_coll = n_coll = min(n_coll, 6)
@@ -1143,6 +1153,55 @@ def feature_group(sc: Scenario, run_id: str, log: Callable[[str], None] = print)
     return guess
 
 
+class RunLog:
+    """The run's log, teed to `runs/<id>/run.log` with wall-clock timestamps. A console shows it for
+    runs it did not start (CLI, a Kubernetes Job, another console), the report page reads it after a
+    console restart, and Live replays it for past runs."""
+
+    def __init__(self, path: Path, sink: Callable[[str], None]) -> None:
+        self.path, self.sink = path, sink
+        self._lock = threading.Lock()
+        try:
+            self._f = open(path, "a", buffering=1, encoding="utf-8")
+        except OSError:
+            self._f = None
+
+    def __call__(self, line: str) -> None:
+        self.sink(line)
+        if self._f is None:
+            return
+        ts = time.strftime("%H:%M:%S", time.localtime()) + f".{int(time.time() * 1000) % 1000:03d}"
+        with self._lock:
+            try:
+                for part in str(line).splitlines() or [""]:
+                    self._f.write(f"{ts} {part}\n")
+            except (OSError, ValueError):
+                pass
+
+    def close(self) -> None:
+        if self._f is not None:
+            with self._lock:
+                self._f.close()
+                self._f = None
+
+
+def read_run_log(run_dir: Path, offset: int = 0, max_lines: int = 5000) -> tuple[list[dict[str, Any]], int]:
+    """Lines of `run.log` from byte `offset`: ([{"t": "HH:MM:SS.mmm", "line": ...}], next offset)."""
+    p = Path(run_dir) / "run.log"
+    try:
+        with open(p, "rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return [], offset
+    end = data.rfind(b"\n") + 1           # never hand out a half-written last line
+    out = []
+    for raw in data[:end].decode("utf-8", "replace").splitlines()[-max_lines:]:
+        t, _, rest = raw.partition(" ")
+        out.append({"t": t, "line": rest} if len(t) == 12 and t[2] == ":" else {"t": None, "line": raw})
+    return out, offset + end
+
+
 def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None = None,
                  log: Callable[[str], None] = print, handle: RunHandle | None = None,
                  collectors: int | None = None, report: bool = True, wait_lease_s: float = 0.0,
@@ -1162,6 +1221,7 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
     lease = RunLease(run_id, {"scenario": sc.name, "topology": sc.topology})
     lease.acquire(wait_s=wait_lease_s, stop=lambda: bool(handle.abort_reason), log=log)
     run_dir.mkdir(parents=True, exist_ok=True)
+    log = RunLog(run_dir / "run.log", log)      # every line also persists, whoever started the run
     (run_dir / "scenario.json").write_text(json.dumps(sc.model_dump(mode="json"), indent=1))
     r = _Run(sc, ep, run_id, run_dir, handle, lease, log, collectors)
     lease.start(handle, log)
@@ -1186,6 +1246,7 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
         summary = r.finish(report)
     finally:
         lease.release()
+        log.close()
     if err is not None and not isinstance(err, Exception):
         raise err          # KeyboardInterrupt / SystemExit propagate after a clean teardown
     if err is not None:

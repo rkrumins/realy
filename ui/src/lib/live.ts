@@ -143,7 +143,7 @@ class LiveStore {
         void _t;
         this.status = rest as unknown as Status;
         this.kafka = Boolean((msg as { kafka?: boolean }).kafka);
-        const rid = this.status.current?.run_id;
+        const rid = (this.status.active ?? this.status.current)?.run_id;
         if (rid) this.lastRunId = rid;
         this.notify();
         break;
@@ -216,7 +216,7 @@ const stage = (s: Snapshot, name: string) => s.stages.find((x) => x.name === nam
 
 /** Which run the charts should follow: the running one, else the latest seen. */
 export function focusRunId(): string | null {
-  return live.status?.current?.run_id || live.lastRunId;
+  return (live.status?.active ?? live.status?.current)?.run_id || live.lastRunId;
 }
 
 function runMatch(s: Snapshot, runId: string | null) {

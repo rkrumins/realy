@@ -23,7 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import type { LatencyDist } from "@/lib/dist";
 import { fmtCompact, fmtDuration, fmtMs, fmtNum, fmtPct, isNum } from "@/lib/format";
-import { useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
+import { activeRun, useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
 import { focusRunId, live, logsFor, STAGE_SERIES, type LivePoint } from "@/lib/live";
 import type { CurrentRun, Snapshot } from "@/lib/types";
 
@@ -88,7 +88,7 @@ function ControlDrawer({ open, onOpenChange, cur }: { open: boolean; onOpenChang
     onError: (e) => toast.error("Scoring change failed", { description: (e as Error).message }),
   });
   const abort = useMutation({
-    mutationFn: () => api.abort(cur!.job_id),
+    mutationFn: () => api.abort(cur!.job_id ?? cur!.run_id ?? ""),
     onSuccess: () => { toast.success("Abort requested"); onOpenChange(false); },
     onError: (e) => toast.error("Abort failed", { description: (e as Error).message }),
   });
@@ -181,7 +181,7 @@ export default function Live() {
   const nav = useNavigate();
   const qc = useQueryClient();
   const status = useStatus();
-  const cur = status?.current ?? null;
+  const cur = activeRun(status);
   const [win, setWin] = React.useState<"60" | "300" | "600">("300");
   const [drawer, setDrawer] = React.useState(false);
   const runId = cur?.run_id ?? focusRunId();
@@ -254,7 +254,7 @@ export default function Live() {
           </div>
         </div>
       )}
-      <PipelineBanner status={status} />
+      <PipelineBanner status={status} shown />
       {cur?.abort_reason && (
         <div className="mb-4 flex items-center gap-2 rounded-xl border border-warn/30 bg-warn/10 px-4 py-2.5 text-[13px] text-warn"><AlertTriangle className="size-4" />Abort requested{cur.abort_kind ? ` (${cur.abort_kind})` : ""}: {cur.abort_reason} · draining in-flight decisions and writing a partial report</div>
       )}

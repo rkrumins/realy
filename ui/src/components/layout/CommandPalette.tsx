@@ -4,7 +4,7 @@ import { BookOpen, FileBarChart2, Moon, OctagonX, Rocket, Search } from "lucide-
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { useStatus } from "@/lib/hooks";
+import { activeRun, useStatus } from "@/lib/hooks";
 import { toggleTheme } from "@/lib/theme";
 import { Dialog, DialogContent } from "../ui/dialog";
 import { FLAT_NAV } from "./nav";
@@ -24,7 +24,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     onOpenChange(false);
     nav(to);
   };
-  const cur = status?.current;
+  const cur = activeRun(status);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -46,7 +46,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   onSelect={async () => {
                     onOpenChange(false);
                     try {
-                      await api.abort(cur.job_id);
+                      await api.abort(cur.job_id ?? cur.run_id ?? "");
                       toast.success("Abort requested");
                     } catch (e) {
                       toast.error(`Abort failed: ${(e as Error).message}`);
