@@ -466,12 +466,17 @@ class _Run:
         self.bf_events = 0
         self.bf_primed = 0
         self.bf_progress: dict[int, int] = {}
+        self.prime_progress: dict[int, int] = {}
+        self.prime_expected = 0
+        self.bulk_done: dict[int, int] = {}
+        self.prime_go: Any = None
         from .startup import Startup
         self.startup = Startup(run_dir, log)
         handle.startup = self.startup
         self.flink_base: dict[str, Any] | None = None
         self.hist_expected = 0
         self.gates: dict[str, Any] = {}
+        self.usecases: dict[str, Any] | None = None
         self.history: list[dict[str, Any]] = []
         self.primes = False
         self.n_ems = 0
@@ -529,10 +534,21 @@ class _Run:
             self.emit_summ[idx] = val
         elif kind == "collector":
             self.coll_summ[idx] = val
+        elif kind == "bulk_done":
+            self.bulk_done[idx] = int(val)
         elif kind == "backfill_progress":
-            self.bf_progress[idx] = int(val)
-            if self.history:
-                done = sum(self.bf_progress.values())
+            ev_n, pr_n = (int(val.get("events", 0)), int(val.get("primed", 0))) if isinstance(val, dict) else (int(val), 0)
+            self.bf_progress[idx] = ev_n
+            self.prime_progress[idx] = pr_n
+            primed = sum(self.prime_progress.values())
+            if primed and self.prime_expected:
+                st = self.startup
+                if st.steps["prime"]["status"] == "pending":
+                    st.start("prime", f"scoring ~{self.prime_expected:,} prime events paced at {self.base_tps:,.0f}/s "
+                                      "(unmeasured warm-up of the gateway, model and audit path)")
+                st.progress("prime", primed, max(self.prime_expected, primed), "events sent")
+            if self.history and self.startup.steps["history"]["status"] == "running":
+                done = sum(self.bf_progress.values()) - (primed if history_days(self.history, "bulk") else 0)
                 el = max(1e-3, time.time() - (self.startup.steps["history"]["started_at"] or time.time()))
                 rate = done / el
                 total = max(self.hist_expected, done)
@@ -577,6 +593,10 @@ class _Run:
         self.world = load_or_build(sc.world, sc.seed, sc.world_dir)
         log(f"world {sc.world_dir.name}: {self.world.n_customers:,} customers, hash {self.world.content_hash[:12]}")
         st.finish("world", f"{self.world.n_customers:,} customers, hash {self.world.content_hash[:12]}")
+        # the typology definitions this run is generated with (and later read with): edits after it starts never change it
+        from ..usecases import registry
+        self.usecases = registry().snapshot()
+        (self.run_dir / "usecases.json").write_text(json.dumps(self.usecases, indent=1))
         self.check("prepare")
         st.start("topics")
         created = ensure_topics()
@@ -623,7 +643,9 @@ class _Run:
             log(f"history: {describe_history(self.history, self.base_tps, rate)}"
                 + (f" (cold scoring path: {'; '.join(cold)})" if history_days(self.history, "prime") else ""))
         self.primes = bool(history_days(self.history, "prime"))
-        self.hist_expected = int(history_days(self.history) * rate * 86_400)
+        # the history step covers the bulk replay (the prime is its own step); prime-only: the whole history
+        self.hist_expected = int((history_days(self.history, "bulk") or history_days(self.history)) * rate * 86_400)
+        self.prime_expected = int(history_days(self.history, "prime") * rate * 86_400)
         if not self.history:
             st.skip("history", "sync rail: no history path" if self.sync else "no backfill and the scoring path is warm")
             st.skip("catchup", "no history to catch up on")
@@ -675,7 +697,8 @@ class _Run:
         self.plans = [ShardPlan(shard=s, n_shards=n_shards, run_id=self.run_id, run_dir=str(self.run_dir),
                                 scenario=sc.model_dump(mode="json"), world_dir=str(sc.world_dir), t_start_us=t_start,
                                 time_scale=self.ts, sim_start_us=self.sim0, duration_s=sc.traffic.duration_s,
-                                extra={"history": self.history, "prime_tps": self.base_tps / n_shards})
+                                extra={"history": self.history, "prime_tps": self.base_tps / n_shards,
+                                       "usecases": self.usecases})
                       for s in range(n_shards)]
         self.manifest.update({"t_start_us": t_start, "time_scale": self.ts, "sim_start_us": self.sim0,
                               "shards": n_shards, "collectors": self.n_coll, "world_hash": self.world.content_hash,
@@ -701,13 +724,16 @@ class _Run:
             return
         self.start_v = ctx.Value("q", 0)
         self.go = ctx.Event()
+        # bulk + prime: the prime is held until the feature job has caught up on the bulk (backfill())
+        self.prime_go = ctx.Event() if history_days(self.history, "bulk") and self.primes else None
         # kept on self for the whole run: with the spawn start method children unpickle their arguments
         # after start() returns, and a Queue the parent no longer references is garbage-collected and
         # its semaphores unlinked (children then fail with SemLock FileNotFoundError)
         self.queues = queues = [ctx.Queue(maxsize=200) for _ in self.plans]
         for p_, q in zip(self.plans, queues):
             g = ctx.Process(target=generator_main, args=(p_, q, h.rate_mult, h.stop, self.start_v, self.go), daemon=True)
-            e = ctx.Process(target=emitter_main, args=(p_, q, h.stop, self.results, "bench.metrics", self.start_v, self.go),
+            e = ctx.Process(target=emitter_main, args=(p_, q, h.stop, self.results, "bench.metrics", self.start_v, self.go,
+                                                       self.prime_go),
                             daemon=True)
             g.start()
             e.start()
@@ -715,51 +741,71 @@ class _Run:
         self.write_pids()
 
     def backfill(self) -> None:
+        """Unmeasured history, in order: bulk replay -> feature catch-up -> paced, scored prime (released only
+        once the feature job has caught up, so the scoring path warms on a quiet pipeline at the rate it is
+        measured at) -> readiness gates."""
         if self.sync:
             self._gates_and_go()
             return
         sc, ep, log, h, st = self.sc, self.ep, self.log, self.h, self.startup
         self.phase("BACKFILL" if sc.traffic.backfill_days else "PREPARE")
-        if self.history:
-            st.start("history", describe_history_short(self.history))
-        while self.bf_got < len(self.plans):
-            self.check("backfill")
-            self.pump(0.5)
-        bf = self.bf_events
         timeout = float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900"))
         stopped = lambda: bool(h.abort_reason)  # noqa: E731
-        if bf:
-            log(f"history: {bf:,} events emitted ({sc.traffic.backfill_days:.3g} sim days"
-                + (f"; {self.bf_primed:,} paced and scored" if self.bf_primed else "") + ")")
-            st.progress("history", bf, bf, "events")
-            st.finish("history", f"{bf:,} events sent" + (f" ({bf - self.bf_primed:,} bulk + {self.bf_primed:,} scored prime)"
-                                                         if self.bf_primed else " (bulk, not scored)"))
-            if sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc"):
-                grp = feature_group(sc, self.run_id, log)
-                max_lag = max(500, bf // 200)
-                res = wait_features_caught_up(ep.flink_rest, grp, bf, self.flink_base, max_lag, timeout, st, log, stopped)
-                self.check("backfill catch-up")
-                ok = bool(res.get("ok"))
-                self.manifest["backfill_caught_up"] = ok
-                self.manifest["backfill_lag"] = res.get("lag") if res.get("lag") is not None else -1
-                self.manifest["catchup"] = res
-                if not ok:
-                    log(f"WARN backfill: feature job NOT caught up after {timeout:.0f} s ({res.get('detail')}): "
-                        "measured-window features are stale and the report will say so")
-            else:
-                st.skip("catchup", f"{sc.topology}: no feature job")
-            if self.bf_primed and sc.topology in ("gateway-kafka", "echo-kafka"):
-                st.start("prime", f"waiting for the gateway to score the {self.bf_primed:,} prime events")
+        feature_job = sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc")
+        has_bulk = bool(history_days(self.history, "bulk"))
+        if self.history:
+            st.start("history", describe_history_short(self.history))
+        # 1. bulk replay fully produced by every shard (or the whole history when nothing is held back)
+        while len(self.bulk_done) < len(self.plans) and self.bf_got < len(self.plans):
+            self.check("backfill")
+            self.pump(0.5)
+        bulk = sum(self.bulk_done.values()) if self.bulk_done else self.bf_events
+        if has_bulk:
+            st.progress("history", bulk, bulk, "events")
+            st.finish("history", f"{bulk:,} history events sent unpaced (builds feature state; the gateway skips them)")
+            log(f"history: {bulk:,} bulk events emitted ({history_days(self.history, 'bulk'):.3g} sim days)")
+        # 2. feature catch-up on the bulk
+        if has_bulk and feature_job:
+            grp = feature_group(sc, self.run_id, log)
+            max_lag = max(500, bulk // 200)
+            res = wait_features_caught_up(ep.flink_rest, grp, bulk, self.flink_base, max_lag, timeout, st, log, stopped)
+            self.check("backfill catch-up")
+            ok = bool(res.get("ok"))
+            self.manifest["backfill_caught_up"] = ok
+            self.manifest["backfill_lag"] = res.get("lag") if res.get("lag") is not None else -1
+            self.manifest["catchup"] = res
+            if not ok:
+                log(f"WARN backfill: feature job NOT caught up after {timeout:.0f} s ({res.get('detail')}): "
+                    "measured-window features are stale and the report will say so")
+        elif has_bulk:
+            st.skip("catchup", f"{sc.topology}: no feature job")
+        # 3. the prime: released now, paced, scored by the pipeline, never measured
+        if self.prime_go is not None:
+            st.start("prime", f"released ~{self.prime_expected:,} prime events, paced at {self.base_tps:,.0f}/s and scored "
+                              "(unmeasured warm-up of the gateway, model and audit path)")
+            self.prime_go.set()
+        if self.primes and not has_bulk and self.history:
+            st.finish("history", "no bulk history: the prime is the whole history")
+            st.skip("catchup", "no bulk history to catch up on")
+        while self.bf_got < len(self.plans):
+            self.check("prime")
+            self.pump(0.5)
+        bf = self.bf_events
+        if self.bf_primed:
+            if sc.topology in ("gateway-kafka", "echo-kafka"):
+                st.start("prime", f"{self.bf_primed:,} prime events sent; waiting for the gateway to score them")
                 primed = wait_gateway_primed(ep, self.gw_before, self.bf_primed, timeout, log, stop=stopped)
                 self.check("prime catch-up")
                 n = _gateway_decisions(ep.gateway_admin)
-                scored = f"; gateway has scored {n - (self.gw_before or 0):,} since" if n is not None and self.gw_before is not None else ""
-                st.finish("prime", (f"{self.bf_primed:,} events scored{scored}" if primed
+                scored = (f"; gateway has scored {n - (self.gw_before or 0):,} since the run started"
+                          if n is not None and self.gw_before is not None else "")
+                st.finish("prime", (f"{self.bf_primed:,} events scored at {self.base_tps:,.0f}/s{scored}" if primed
                                     else "the gateway did not confirm the prime within its timeout"),
                           "done" if primed else "warn")
                 self.gates["gateway_primed"] = bool(primed)
-            elif self.bf_primed:
-                st.finish("prime", f"{self.bf_primed:,} events scored inline by Flink")
+            else:
+                st.finish("prime", f"{self.bf_primed:,} events scored inline by Flink at {self.base_tps:,.0f}/s")
+            log(f"history: prime of {self.bf_primed:,} events scored")
         self.manifest["backfill_events"] = bf
         self._gates_and_go()
 
@@ -832,6 +878,8 @@ class _Run:
         h.stop.set()
         if self.go is not None:
             self.go.set()          # release children still waiting for the measured phase (they see stop)
+        if self.prime_go is not None:
+            self.prime_go.set()    # ... and any emitter holding its prime segment
         # 1. emitters flush, write emit-*.parquet and report a summary (needed for an accurate report)
         finish_s = float(os.environ.get("REALY_EMITTER_FINISH_S", "120"))
         end = time.time() + finish_s

@@ -23,9 +23,10 @@ from ..features.derived import CARD_TYPE, CHANNEL, ENTRY_MODE, PAYMENT_TYPE
 OUTCOME = {0: None, 1: "APPROVE", 2: "REVIEW", 3: "DECLINE"}
 PATH = {0: "FULL", 1: "RULES_ONLY_FALLBACK", 2: "PROVISIONAL", 3: "FINAL_AFTER_PROVISIONAL", 4: "ECHO"}
 INGRESS = {0: None, 1: "SYNC_GRPC", 2: "SYNC_HTTP", 3: "ASYNC_KAFKA_GATEWAY", 4: "ASYNC_FLINK_INLINE"}
-FRAUD = {0: "none", 1: "card_testing", 2: "account_takeover", 3: "lost_stolen", 4: "counterfeit",
-         5: "merchant_breach", 6: "atm_cashout", 7: "app_scam_mule", 8: "bust_out", 9: "bot_ecom", 10: "friendly_fraud"}
-FRAUD_BY_NAME = {v: k for k, v in FRAUD.items()}
+def _fraud_names(run_dir=None) -> dict[int, str]:
+    """Typology names by id: the run's use-case snapshot, else the current registry (contracts/usecases)."""
+    from ..usecases import for_run
+    return for_run(run_dir).fraud_type_names()
 STAGE_NAMES = {10: "INGEST", 11: "QUEUE_WAIT", 12: "DESERIALIZE", 20: "SHUFFLE", 21: "STATE_FEATURES",
                22: "FEATURE_STORE_WRITE", 30: "FEATURE_LOOKUP", 31: "FEATURE_ASSEMBLE", 40: "MODEL_CALL",
                41: "MODEL_BATCH_WAIT", 42: "MODEL_SERVER_QUEUE", 43: "MODEL_SERVER_COMPUTE", 50: "RULES",
@@ -64,6 +65,8 @@ class _Slim:
     """Cached search projection of one run (events joined with first-revision decisions)."""
 
     def __init__(self, run_dir: Path) -> None:
+        self.run_dir = run_dir
+        self.names = _fraud_names(run_dir)
         ev = _read(run_dir, "events-*.parquet", ROW_EVENT_COLS + ["backfill"])
         if ev is None:
             raise HTTPException(404, "run has no event log")
@@ -103,7 +106,7 @@ class _Slim:
                         "amount_usd": int(e["amount_usd_minor"][i]) / 100.0,
                         "merchant_country": str(e["merchant_country"][i]),
                         "outcome": OUTCOME.get(int(self.outcome[i])), "score": None if np.isnan(sc) else sc,
-                        "is_fraud": bool(e["is_fraud"][i]), "fraud_type": FRAUD.get(int(e["fraud_type"][i]), "?"),
+                        "is_fraud": bool(e["is_fraud"][i]), "fraud_type": self.names.get(int(e["fraud_type"][i]), "?"),
                         "campaign_id": str(int(e["campaign_id"][i])), "e2e_ms": None if np.isnan(e2e) else e2e})
         return out
 
@@ -149,7 +152,7 @@ class Explorer:
             pick = pick[np.argsort(e["event_time_us"][pick])][::-1][:limit]
             return s.rows(pick)
         if kind == "fraud":
-            code = FRAUD_BY_NAME.get(q.lower())
+            code = {v: k for k, v in _fraud_names(self.run_dir(run_id)).items()}.get(q.lower())
             mask = e["fraud_type"] == code if code is not None else np.zeros(len(e["event_id"]), bool)
         elif kind == "outcome":
             code = {v: k for k, v in OUTCOME.items() if v}.get(q.upper())
@@ -187,7 +190,7 @@ class Explorer:
             if k in event:
                 event[k] = _enum(names, event[k])
         event["amount_usd"] = er.get("amount_usd_minor", 0) / 100.0
-        label = {"is_fraud": bool(er.get("is_fraud")), "fraud_type": FRAUD.get(int(er.get("fraud_type") or 0), "?"),
+        label = {"is_fraud": bool(er.get("is_fraud")), "fraud_type": _fraud_names(self.run_dir(run_id)).get(int(er.get("fraud_type") or 0), "?"),
                  "campaign_id": str(er.get("campaign_id") or 0)}
         dec = _read(d, "decisions-*.parquet", None, flt)
         decision = None
@@ -281,7 +284,7 @@ class Explorer:
             oc = s.outcome[m]
             first_decl = np.flatnonzero(oc == 3)
             amt = e["amount_usd_minor"][m] / 100.0
-            out.append({"campaign_id": str(cid), "fraud_type": FRAUD.get(int(e["fraud_type"][m[0]]), "?"),
+            out.append({"campaign_id": str(cid), "fraud_type": _fraud_names(self.run_dir(run_id)).get(int(e["fraud_type"][m].max()), "?"),
                         "events": int(m.size), "flagged": int((oc >= 2).sum()), "declined": int((oc == 3).sum()),
                         "first_event_us": int(e["event_time_us"][m[0]]), "last_event_us": int(e["event_time_us"][m[-1]]),
                         "approved_before_first_decline": int(first_decl[0]) if first_decl.size else int(m.size),

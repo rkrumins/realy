@@ -280,7 +280,8 @@ export default function Live() {
             <div className="relative">
               <TopologyMap graph={graph} snapshots={[]} budgetMs={budget} active={false} className="opacity-60" states={status?.pipeline?.nodes} />
             </div>
-          ) : <TopologyMap graph={graph} snapshots={snaps} budgetMs={budget} active states={status?.pipeline?.nodes} />}
+          ) : <TopologyMap graph={graph} snapshots={snaps} budgetMs={budget} active states={status?.pipeline?.nodes}
+            judge={!cur || ["WARMUP", "MEASURE", "DRAIN", "COMPLETE"].includes(cur.phase ?? "")} />}
         </CardBody>
       </Card>
 

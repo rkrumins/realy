@@ -74,7 +74,7 @@ Wall-clock target rate as a function of time since run start.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `background_per_1k` | `float` | `0.5` | Background campaigns started per 1,000 legitimate events (Poisson), and their mix. |
-| `mix` | `dict[FraudKind, float]` | `see below` |  |
+| `mix` | `dict[TypologyName, float]` | `see below` |  |
 | `campaigns` | `list[CampaignSpec]` | `[]` |  |
 | `unreported_fraction` | `float` | `0.10` | fraud never labelled |
 | `friendly_fraud_per_1k` | `float` | `0.2` | legit events charged back (label noise) |
@@ -86,7 +86,7 @@ Default `mix`: `card_testing` 0.22, `account_takeover` 0.15, `lost_stolen` 0.12,
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `kind` | `FraudKind` |  |  |
+| `kind` | `TypologyName` |  | any enabled typology in contracts/usecases |
 | `at_s` | `float` | `0.0` | wall seconds after run start |
 | `count` | `int` | `1` | number of campaigns started at `at_s` |
 | `params` | `dict[str, Any]` | `{}` |  |
@@ -121,4 +121,4 @@ Synchronous rail (topology gateway-grpc): Java open-loop gRPC emitter settings.
 
 ## Fraud typologies
 
-`card_testing`, `account_takeover`, `lost_stolen`, `counterfeit`, `merchant_breach`, `atm_cashout`, `app_scam_mule`, `bust_out`, `bot_ecom` - described in [synthetic-data.md](../synthetic-data.md).
+`card_testing`, `account_takeover`, `lost_stolen`, `counterfeit`, `merchant_breach`, `atm_cashout`, `app_scam_mule`, `bust_out`, `bot_ecom`, `investment_scam` - described in [synthetic-data.md](../synthetic-data.md).

@@ -76,11 +76,13 @@ function flowDuration(rate: number | null) {
   return Math.max(0.35, Math.min(3.2, 3.4 - Math.log10(rate + 1) * 0.75));
 }
 
-export function TopologyMap({ graph, snapshots, budgetMs, active, className, onSelect, mini, states }: {
+export function TopologyMap({ graph, snapshots, budgetMs, active, className, onSelect, mini, states, judge = true }: {
   graph: TopologyResponse | undefined; snapshots: Snapshot[]; budgetMs: number; active: boolean; className?: string;
   onSelect?: (n: TopologyNode) => void; mini?: boolean;
   /** per-node state from the console (status.pipeline.nodes) */
   states?: Record<string, NodeState> | null;
+  /** colour by latency only once the run measures (warm-up / measure / drain): startup traffic is unmeasured */
+  judge?: boolean;
 }) {
   const [hover, setHover] = React.useState<string | null>(null);
   const heatHistory = React.useRef(new Map<string, Heat[]>());
@@ -90,8 +92,9 @@ export function TopologyMap({ graph, snapshots, budgetMs, active, className, onS
     const p99 = active ? resolveP99(n.p99, snapshots) : null;
     const hist = heatHistory.current.get(n.id) ?? [];
     heatHistory.current.set(n.id, hist);
-    return [n.id, { rate, p99, heat: steadyHeat(hist, heat(p99, budgetMs, n.p99?.stage, n.slo_ms)) }];
-  })), [graph, snapshots, budgetMs, active]);
+    const h = judge ? steadyHeat(hist, heat(p99, budgetMs, n.p99?.stage, n.slo_ms)) : (hist.length = 0, "idle" as Heat);
+    return [n.id, { rate, p99, heat: h }];
+  })), [graph, snapshots, budgetMs, active, judge]);
   if (!graph) return <div className={cn("skeleton w-full", mini ? "h-[120px]" : "h-[260px]")} />;
   const cols = Math.max(...graph.nodes.map((n) => n.column)) + 1;
   const rows = Math.max(...graph.nodes.map((n) => n.row)) + 1;
@@ -123,7 +126,7 @@ export function TopologyMap({ graph, snapshots, budgetMs, active, className, onS
           const liveRate = active ? resolveRate(e.rate, snapshots) : null;
           const rate = isNum(bulk) && bulk > 0 ? bulk : liveRate;
           const p99 = active && e.p99 && !(isNum(bulk) && bulk > 0) ? resolveP99(e.p99, snapshots) : null;
-          const h = p99 !== null ? heat(p99, budgetMs, e.p99?.stage) : rate ? "good" : "idle";
+          const h = judge && p99 !== null ? heat(p99, budgetMs, e.p99?.stage) : rate ? "good" : "idle";
           const dur = flowDuration(rate);
           const color = isNum(bulk) && bulk > 0 ? "var(--accent)" : h === "idle" ? "var(--border-strong)" : h === "good" ? "var(--accent)" : HEAT_COLOR[h];
           const lit = hover === e.from || hover === e.to;

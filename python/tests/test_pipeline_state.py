@@ -76,3 +76,35 @@ def test_every_topology_gets_a_state_per_node():
         nodes = build(topo)["nodes"]
         s = node_states(nodes, {"phase": "MEASURE", "steps": {}, "probes": HEALTHY, "now": NOW, "uses_flink": True})
         assert set(s) == {n["id"] for n in nodes}
+
+
+def test_prepare_without_a_job_is_starting_not_down():
+    """The very first seconds of a run after a restart: no job yet, this run submits one."""
+    gone = dict(HEALTHY, flink={"ok": True, "job": None})
+    s = node_states(NODES, {"phase": "PREPARE", "steps": _steps(world="done", profiles="running"), "probes": gone,
+                            "now": NOW, "uses_flink": True})
+    assert s["flink"]["state"] == "starting" and "submits" in s["flink"]["reason"]
+    s = node_states(NODES, {"phase": "PREPARE", "steps": _steps(flink="failed"), "probes": gone, "now": NOW,
+                            "uses_flink": True})
+    assert s["flink"]["state"] == "down"
+
+
+def test_prime_warms_the_scoring_path_and_audit_not_red():
+    steps = _steps(history="done", catchup=("running", {"done": 1, "total": 2}),
+                   prime=("running", {"done": 9_000, "total": 15_000, "unit": "events sent"}))
+    s = node_states(NODES, {"phase": "BACKFILL", "steps": steps, "probes": HEALTHY, "now": NOW, "uses_flink": True})
+    for nid in ("gateway", "model", "decisions"):
+        assert s[nid]["state"] == "warming" and "prime" in s[nid]["reason"] and abs(s[nid]["progress"] - 0.6) < 1e-9
+    assert s["collector"]["state"] == "ready"
+
+
+def test_a_lost_taskmanager_is_down_fast():
+    """Flink metrics stop the second a TaskManager dies; heartbeats take tens of seconds."""
+    s = node_states(NODES, {"phase": "MEASURE", "steps": {}, "probes": HEALTHY, "now": NOW, "uses_flink": True,
+                            "silence": {"flink": 7.0}})
+    assert s["flink"]["state"] == "down" and "no metrics from Flink" in s["flink"]["reason"]
+    assert node_states(NODES, {"phase": "MEASURE", "steps": {}, "probes": HEALTHY, "now": NOW, "uses_flink": True,
+                               "silence": {"flink": 1.0}})["flink"]["state"] == "ready"
+    stale = dict(HEALTHY, flink={"ok": True, "job": OLD_JOB, "tm_stale_s": 31.0})
+    s = node_states(NODES, {"phase": None, "steps": {}, "probes": stale, "now": NOW, "uses_flink": False})
+    assert s["flink"]["state"] == "down" and "heartbeat" in s["flink"]["reason"]

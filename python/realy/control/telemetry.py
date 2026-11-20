@@ -32,6 +32,7 @@ class Hub:
         self.last_error: str | None = None
         self.decisions: collections.deque = collections.deque(maxlen=200)
         self._runs_seen: dict[str, dict[str, Any]] = {}   # run_id -> last emitter/collector snapshot seen
+        self._source_seen: dict[str, float] = {}          # source -> wall time of its last snapshot
 
     # ------------------------------------------------------------------ fan-out
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -65,10 +66,17 @@ class Hub:
         with self._lock:
             ring = self.rings.setdefault(key, collections.deque(maxlen=HISTORY_S))
             ring.append(snap)
+            self._source_seen[str(snap.get("source", "?"))] = time.time()
             rid = snap.get("run_id")
             if rid and snap.get("source") in ("emitter", "collector"):   # per-run processes: proof a run is live
                 self._runs_seen[rid] = {"ts": time.time(), "source": key}
         self.publish({"type": "metrics", **snap})
+
+    def silence(self) -> dict[str, float]:
+        """Seconds since each metrics source (emitter, collector, gateway, model, flink) last reported."""
+        now = time.time()
+        with self._lock:
+            return {k: round(now - v, 1) for k, v in self._source_seen.items()}
 
     def active_runs(self, fresh_s: float = 10.0) -> dict[str, dict[str, Any]]:
         """Runs with emitter/collector metrics in the last `fresh_s` seconds, wherever they run."""

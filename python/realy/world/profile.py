@@ -11,8 +11,7 @@ PT = {1: "CARD_PURCHASE", 2: "ATM_WITHDRAWAL", 3: "TRANSFER", 4: "CARD_REFUND"}
 CH = {1: "POS", 2: "ECOM", 3: "ATM", 4: "MOTO", 5: "IN_APP", 6: "ONLINE_BANKING"}
 EM = {1: "CHIP", 2: "CONTACTLESS", 3: "MAGSTRIPE", 4: "MANUAL", 5: "WALLET_TOKEN", 6: "ECOM_3DS", 7: "ECOM_NON_3DS",
       8: "CREDENTIAL_ON_FILE", 9: "BANK_APP"}
-FT = {0: "none", 1: "card_testing", 2: "account_takeover", 3: "lost_stolen", 4: "counterfeit", 5: "merchant_breach",
-      6: "atm_cashout", 7: "app_scam_mule", 8: "bust_out", 9: "bot_ecom", 10: "friendly_fraud"}
+
 
 
 def _share(values: np.ndarray, names: dict[int, str]) -> dict[str, float]:
@@ -69,7 +68,8 @@ def profile(world: World, scenario: Scenario, events: int = 200_000) -> dict:
     by_type = {}
     for k in np.unique(ft[fraud]).tolist():
         sel = fraud & (ft == k)
-        by_type[FT[k]] = {"events": int(sel.sum()), "share_of_events": round(float(sel.mean()), 6),
+        from ..usecases import registry
+        by_type[registry().fraud_type_names().get(int(k), str(k))] = {"events": int(sel.sum()), "share_of_events": round(float(sel.mean()), 6),
                           "usd": round(float(usd[sel].sum()), 2)}
     return {
         "events": n, "sim_days": round(days, 3), "customers_in_shard": int(gen.rows.shape[0]),

@@ -91,7 +91,11 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
 
     sc = Scenario.model_validate(plan.scenario)
     world = World.load(plan.world_dir)
-    gen = Generator(world, sc, plan.shard, plan.n_shards)
+    reg = None
+    if plan.extra.get("usecases"):
+        from ..usecases import Registry
+        reg = Registry.from_snapshot(plan.extra["usecases"])
+    gen = Generator(world, sc, plan.shard, plan.n_shards, registry=reg)
     gen.schedule_timeline(plan.sim_start_us, plan.time_scale)
     profile = sc.traffic.profile
     rng = np.random.default_rng([sc.seed, plan.shard, 7])
@@ -210,17 +214,18 @@ class _Timing:
         self.ack = b
 
 
-def emitter_main(plan: ShardPlan, q, stop, results, metrics_topic: str = "bench.metrics", start=None, go=None) -> None:
+def emitter_main(plan: ShardPlan, q, stop, results, metrics_topic: str = "bench.metrics", start=None, go=None,
+                 prime_go=None) -> None:
     from ..runner.lifecycle import watch_parent
     watch_parent()
     try:
-        results.put(("emitter", plan.shard, _emitter(plan, q, stop, metrics_topic, results, start, go)))
+        results.put(("emitter", plan.shard, _emitter(plan, q, stop, metrics_topic, results, start, go, prime_go)))
     except Exception:  # noqa: BLE001
         traceback.print_exc()
         results.put(("emitter", plan.shard, {"error": traceback.format_exc()}))
 
 
-def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=None, go=None) -> dict[str, Any]:
+def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=None, go=None, prime_go=None) -> dict[str, Any]:
     from ..bench.v1 import trace_pb2
     from ..common.kafka import LABELS, make_producer
     from ..common.metrics import snapshot_json
@@ -254,6 +259,17 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     backfilled = primed = 0
     seg_i, seg_t0, seg_n = -1, 0.0, 0
     last_progress = time.monotonic()
+    bulk_reported = False
+
+    def report_bulk_done() -> None:
+        # the bulk replay is fully produced: the runner waits for the feature job to catch up on it and
+        # only then releases the prime (`prime_go`), so the scoring path warms on a quiet, caught-up pipeline
+        nonlocal bulk_reported
+        if not bulk_reported:
+            bulk_reported = True
+            producer.flush(120)
+            if results is not None:
+                results.put(("bulk_done", plan.shard, backfilled))
     while not stop.is_set():
         try:
             item = q.get(timeout=0.5)
@@ -263,6 +279,13 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
             si = item[1] if isinstance(item[1], int) else 0
             mode = segs[si]["mode"] if si < len(segs) else "bulk"
             if si != seg_i:                      # a new segment: pacing restarts from its first event
+                if mode == "prime" and prime_go is not None:
+                    report_bulk_done()
+                    while not prime_go.wait(0.2):
+                        if stop.is_set():
+                            break
+                    if stop.is_set():
+                        break
                 seg_i, seg_t0, seg_n = si, time.monotonic(), 0
             bf_hdr = hdr.get(mode, hdr["bulk"])
             paced = mode == "prime" and prime_rate > 0
@@ -282,13 +305,18 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                 seg_n += 1
                 if mode == "prime":
                     primed += 1
+                # progress from inside a batch too: a paced prime batch can take tens of seconds
+                if results is not None and (seg_n & 511) == 0 and time.monotonic() - last_progress >= 0.5:
+                    last_progress = time.monotonic()
+                    results.put(("backfill_progress", plan.shard, {"events": backfilled, "primed": primed}))
             for _, lb in item[5]:
                 producer.produce(LABELS, lb, headers=[h for h in bf_hdr if h[0] == "x-run-id"])
             producer.poll(0)
             if results is not None and time.monotonic() - last_progress >= 0.5:
                 last_progress = time.monotonic()
-                results.put(("backfill_progress", plan.shard, backfilled))
+                results.put(("backfill_progress", plan.shard, {"events": backfilled, "primed": primed}))
         elif item[0] == "backfill_done":
+            report_bulk_done()      # a shard whose prime segment drew no events still reports
             break
         elif item[0] == "error":
             raise RuntimeError("generator failed:\n" + item[1])

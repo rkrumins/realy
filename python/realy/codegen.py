@@ -40,9 +40,14 @@ ENUM = {
     "entry_mode": ["UNSPECIFIED", "CHIP", "CONTACTLESS", "MAGSTRIPE", "MANUAL", "WALLET_TOKEN", "ECOM_3DS",
                    "ECOM_NON_3DS", "CREDENTIAL_ON_FILE", "BANK_APP"],
     "entity": ["UNSPECIFIED", "CUSTOMER", "CARD", "DEVICE", "IP", "MERCHANT", "TERMINAL", "PAYEE"],
-    "fraud_type": ["NONE", "CARD_TESTING", "ACCOUNT_TAKEOVER", "LOST_STOLEN", "COUNTERFEIT", "MERCHANT_BREACH",
-                   "ATM_CASHOUT", "APP_SCAM_MULE", "BUST_OUT", "BOT_ECOM", "FRIENDLY_FRAUD"],
 }
+
+
+def _fraud_type_enum() -> list[str]:
+    """Typology names by id, from the use-case registry (contracts/usecases). Gaps get TYPE_<id>."""
+    from .usecases import registry
+    names = registry().fraud_type_names()
+    return [("NONE" if i == 0 else names[i].upper()) if i in names else f"TYPE_{i}" for i in range(max(names) + 1)]
 EVENT_COLS = [  # (proto field, ClickHouse type)
     ("event_id", "UInt64"), ("event_time_us", "Int64"), ("payment_type", "Int8"), ("customer_id", "UInt64"),
     ("account_id", "UInt64"), ("card_id", "UInt64"), ("card_type", "Int8"), ("amount_minor", "Int64"),
@@ -59,7 +64,12 @@ KAFKA = "SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = '{
 
 
 def _enum(name: str, col: str) -> str:
-    arr = ", ".join(f"'{v}'" for v in ENUM[name])
+    values = _fraud_type_enum() if name == "fraud_type" else ENUM[name]
+    arr = ", ".join(f"'{v}'" for v in values)
+    if name == "fraud_type":
+        # a typology added after this DDL was applied still gets a name (`make migrate` refreshes the list)
+        return (f"if(toInt32({col}) + 1 <= {len(values)}, arrayElement([{arr}], toInt32({col}) + 1), "
+                f"concat('TYPE_', toString({col})))")
     return f"arrayElement([{arr}], toInt32({col}) + 1)"
 
 

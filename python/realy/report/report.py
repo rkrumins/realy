@@ -18,9 +18,7 @@ import pyarrow.parquet as pq
 
 PCTS = (50, 90, 99, 99.9)
 OUTCOME = {1: "APPROVE", 2: "REVIEW", 3: "DECLINE"}
-FRAUD_TYPES = {0: "none", 1: "card_testing", 2: "account_takeover", 3: "lost_stolen", 4: "counterfeit",
-               5: "merchant_breach", 6: "atm_cashout", 7: "app_scam_mule", 8: "bust_out", 9: "bot_ecom",
-               10: "friendly_fraud"}
+# typology names come from the run's use-case snapshot (python/realy/usecases.py), not a fixed table
 STEP_ORDER = ["schedule_lag", "produce_ack", "ingress", "queue_wait", "deserialize", "shuffle", "state_features",
               "async_wait", "feature_lookup", "feature_assemble", "model_call", "model_batch_wait",
               "model_server_queue", "model_server_compute", "rules", "policy", "audit_ack", "hot_path", "egress", "e2e"]
@@ -490,7 +488,8 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
             model["fraud_base_rate"] = float(y[scored].mean())
         res["model"] = model
     res["evaluation"] = _evaluation(run_dir, d)
-    for t, name in FRAUD_TYPES.items():
+    from ..usecases import for_run
+    for t, name in for_run(run_dir).fraud_type_names().items():
         m = fraud & (ftype == t)
         if not m.any():
             continue

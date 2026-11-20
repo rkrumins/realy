@@ -1,0 +1,20 @@
+# Typology definition. One file per use case: add, edit or delete files to change what scenarios
+# can generate (or use the console's Use cases page, which writes user files to REALY_USECASES_USER).
+id: 1                        # stable numeric id (1-120): stored with every event, label and decision
+name: card_testing
+title: Card testing
+description: >-
+  Stolen card numbers are validated with tiny online authorisations, often at one weak merchant,
+  before the working cards are cashed out at high-risk resellers.
+pattern: card_testing        # a built-in generator (python/realy/gen/campaigns.py) or `steps` (generic DSL)
+mix_weight: 0.22             # default share of background fraud (fraud.background_mix)
+labels: {source: chargeback, delay_scale: 1.0}
+roles: [test, cash_out]
+challenge: {pass: 0.05, fail: 0.95, abandon: 0.0}
+signals: [card_small_cnp_count_10m, card_count_1m, merch_small_cnp_count_5m, dev_distinct_cards_1h, ip_distinct_cards_1h]
+rules: [CARD_TESTING, CARD_TESTING_MERCHANT, VELOCITY_CARD_5M]
+params:
+  cards: {default: 1, help: "cards per campaign; > 1 is a wave against one merchant"}
+  tests: {default: [4, 12], help: "test authorisations per card ([3, 6] in waves)"}
+  cashout: {default: true, help: "working cards make 1-3 high-value purchases afterwards"}
+  spread_min: {default: 5, help: "how many minutes a wave is spread over"}

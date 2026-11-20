@@ -1,0 +1,16 @@
+id: 4
+name: counterfeit
+title: Counterfeit (skimmed card)
+description: >-
+  A card skimmed at home is cloned onto magstripe and used abroad, minutes after a genuine chip
+  payment at home.
+pattern: counterfeit
+mix_weight: 0.10
+labels: {source: customer_report, delay_scale: 0.5}
+roles: [genuine_anchor, clone_purchase, clone_withdrawal]
+challenge: {pass: 0.05, fail: 0.95, abandon: 0.0}
+signals: [card_geo_speed_kmh, is_foreign, dist_from_home_km]
+rules: [IMPOSSIBLE_TRAVEL, MAGSTRIPE_FOREIGN]
+params:
+  pos: {default: [2, 6], help: "magstripe POS purchases with the clone"}
+  atm: {default: [0, 3], help: "ATM withdrawals with the clone"}

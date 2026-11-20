@@ -151,7 +151,7 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             except (OSError, ValueError):
                 topology = None
         probes.active = phase in ACTIVE_PHASES
-        return pipeline_status(runs_dir, run_id, phase, topology, probes.data, build_topology)
+        return pipeline_status(runs_dir, run_id, phase, topology, probes.data, build_topology, hub.silence())
 
     scheduler = Scheduler(store, worker)
     summary_cache: dict[str, tuple[float, dict]] = {}

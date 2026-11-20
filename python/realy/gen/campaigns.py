@@ -37,8 +37,6 @@ from .batch import (
 from .behaviour import DAY, HOUR, US, MerchantIndex, money
 
 MIN = 60 * US
-FRAUD_TYPE = {"card_testing": 1, "account_takeover": 2, "lost_stolen": 3, "counterfeit": 4, "merchant_breach": 5,
-              "atm_cashout": 6, "app_scam_mule": 7, "bust_out": 8, "bot_ecom": 9}
 
 
 def _rng_range(rng: np.random.Generator, v, default: tuple[int, int]) -> int:
@@ -48,8 +46,10 @@ def _rng_range(rng: np.random.Generator, v, default: tuple[int, int]) -> int:
 
 class CampaignEngine:
     def __init__(self, world: World, shard_rows: np.ndarray, shard: int, n_shards: int, rng: np.random.Generator,
-                 merchants: MerchantIndex, unreported: float, cb_delay_days: tuple[float, float]) -> None:
+                 merchants: MerchantIndex, unreported: float, cb_delay_days: tuple[float, float], registry=None) -> None:
+        from ..usecases import registry as _registry
         self.w, self.rows, self.shard, self.n_shards, self.rng, self.mi = world, shard_rows, shard, n_shards, rng, merchants
+        self.reg = registry or _registry()
         self.unreported = unreported
         self.cb_delay = cb_delay_days
         self.counter = 0
@@ -93,15 +93,24 @@ class CampaignEngine:
         k = min(k, self.rows.shape[0])
         return self.rows[self.rng.choice(self.rows.shape[0], size=k, replace=False)]
 
-    def label_cols(self, n: int, kind: str, campaign_id: int, source: int, delay_scale: float = 1.0) -> dict:
+    def label_cols(self, n: int, kind: str, campaign_id: int, role: str | None = None) -> dict:
+        """Ground truth and the label the bank will (or will never) receive, from the typology's
+        definition (contracts/usecases): label source, delay scale; plus the event's campaign role."""
+        t = self.reg.by_name[kind]
         rng = self.rng
         lo, hi = self.cb_delay
         reported = rng.random() >= self.unreported
-        base = rng.uniform(lo, hi) * DAY * delay_scale
+        base = rng.uniform(lo, hi) * DAY * t.labels.delay_scale
         delay = (base * rng.uniform(0.9, 1.1, n)).astype(np.int64)
-        ft = FRAUD_TYPE[kind]
-        return dict(is_fraud=True, fraud_type=ft, campaign_id=np.uint64(campaign_id),
-                    label_delay_us=np.where(reported, delay, -1), label_is_fraud=True, label_type=ft, label_source=source)
+        return dict(is_fraud=True, fraud_type=t.id, campaign_id=np.uint64(campaign_id),
+                    label_delay_us=np.where(reported, delay, -1), label_is_fraud=True, label_type=t.id,
+                    label_source=t.label_source, campaign_role=t.role_code(role) if role else 0)
+
+    def context_cols(self, kind: str, campaign_id: int, role: str) -> dict:
+        """A LEGITIMATE event that belongs to a campaign's story (e.g. the genuine payment before a card
+        is cloned, a bust-out's build-up): campaign and role, no fraud label."""
+        t = self.reg.by_name[kind]
+        return dict(campaign_id=np.uint64(campaign_id), campaign_role=t.role_code(role))
 
     def card_fields(self, card_rows: np.ndarray) -> dict:
         cards = self.cards
@@ -128,11 +137,16 @@ class CampaignEngine:
 
     # ------------------------------------------------------------------ dispatcher
     def build(self, kind: str, start: int, params: dict) -> dict[str, np.ndarray]:
-        fn = getattr(self, f"_{kind}")
-        return fn(start, params or {})
+        t = self.reg.by_name.get(kind)
+        if t is None or not t.campaigns():
+            raise ValueError(f"unknown or disabled typology {kind!r}")
+        if t.pattern == "steps":
+            from .steps import build_steps
+            return build_steps(self, t, start, params or {})
+        return getattr(self, f"_{t.pattern}")(start, params or {}, kind=t.name)
 
     # ------------------------------------------------------------------ typologies
-    def _card_testing(self, T: int, p: dict) -> dict:
+    def _card_testing(self, T: int, p: dict, kind: str = "card_testing") -> dict:
         rng = self.rng
         g = geo()
         n_cards = max(1, int(p.get("cards", 1)))
@@ -158,7 +172,7 @@ class CampaignEngine:
             ev.update(self.merchant_fields(mrow, False))
             ev.update(self.amounts(usd, self.w.merchants["country"][mrow]))
             ev.update(self.remote_ctx(k, dev, ip, ipc, asn, g.city_lat[g.main_city[ipc]], g.city_lon[g.main_city[ipc]]))
-            ev.update(self.label_cols(k, "card_testing", cid, LS_CHARGEBACK))
+            ev.update(self.label_cols(k, kind, cid, "test"))
             chunks.append(make_chunk(k, **ev))
             if p.get("cashout", True) and (n_cards == 1 or rng.random() < 0.2):
                 kc = int(rng.integers(1, 4))
@@ -169,11 +183,11 @@ class CampaignEngine:
                 ev.update(self.merchant_fields(mc, False))
                 ev.update(self.amounts(rng.uniform(300, 1500, kc), self.w.merchants["country"][mc]))
                 ev.update(self.remote_ctx(kc, dev, ip, ipc, asn, g.city_lat[g.main_city[ipc]], g.city_lon[g.main_city[ipc]]))
-                ev.update(self.label_cols(kc, "card_testing", cid, LS_CHARGEBACK))
+                ev.update(self.label_cols(kc, kind, cid, "cash_out"))
                 chunks.append(make_chunk(kc, **ev))
         return concat_chunks(chunks)
 
-    def _account_takeover(self, T: int, p: dict) -> dict:
+    def _account_takeover(self, T: int, p: dict, kind: str = "account_takeover") -> dict:
         rng = self.rng
         g = geo()
         cid = self.next_campaign_id()
@@ -192,7 +206,7 @@ class CampaignEngine:
         ev.update(self.merchant_fields(mrow, False))
         ev.update(self.amounts(usd, self.w.merchants["country"][mrow]))
         ev.update(self.remote_ctx(k, dev, ip, ipc, asn, lat, lon))
-        ev.update(self.label_cols(k, "account_takeover", cid, LS_CUSTOMER_REPORT))
+        ev.update(self.label_cols(k, kind, cid, "takeover_purchase"))
         chunks = [make_chunk(k, **ev)]
         if rng.random() < float(p.get("transfer_prob", 0.5)) and self.mules.shape[0]:
             mule = int(self.mules[rng.integers(0, self.mules.shape[0])])
@@ -202,11 +216,11 @@ class CampaignEngine:
                       payee_id=self.w.payees["payee_id"][mule])
             ev.update(self.amounts(rng.uniform(500, 5000, 1), np.array([self.c["home_country"][cr]])))
             ev.update(self.remote_ctx(1, dev, ip, ipc, asn, lat, lon))
-            ev.update(self.label_cols(1, "account_takeover", cid, LS_CUSTOMER_REPORT))
+            ev.update(self.label_cols(1, kind, cid, "transfer_out"))
             chunks.append(make_chunk(1, **ev))
         return concat_chunks(chunks)
 
-    def _lost_stolen(self, T: int, p: dict) -> dict:
+    def _lost_stolen(self, T: int, p: dict, kind: str = "lost_stolen") -> dict:
         rng = self.rng
         cid = self.next_campaign_id()
         card = int(self.pick_cards(1)[0])
@@ -226,10 +240,10 @@ class CampaignEngine:
         ev.update(self.card_fields(np.full(k, card)))
         ev.update(self.merchant_fields(mrow, True))
         ev.update(self.amounts(usd, cur))
-        ev.update(self.label_cols(k, "lost_stolen", cid, LS_CUSTOMER_REPORT, delay_scale=0.3))
+        ev.update(self.label_cols(k, kind, cid, "spree_payment"))
         return make_chunk(k, **ev)
 
-    def _counterfeit(self, T: int, p: dict) -> dict:
+    def _counterfeit(self, T: int, p: dict, kind: str = "counterfeit") -> dict:
         rng = self.rng
         g = geo()
         cid = self.next_campaign_id()
@@ -245,6 +259,7 @@ class CampaignEngine:
         anchor.update(self.card_fields(np.array([card])))
         anchor.update(self.merchant_fields(np.array([hab]), True))
         anchor.update(self.amounts(rng.uniform(10, 60, 1), self.w.merchants["country"][[hab]]))
+        anchor.update(self.context_cols(kind, cid, "genuine_anchor"))
         chunks = [make_chunk(1, **anchor)]
         t_first = T + int(rng.uniform(10, 80) * MIN)
         n_pos = _rng_range(rng, p.get("pos"), (2, 6))
@@ -267,11 +282,13 @@ class CampaignEngine:
         a1 = self.amounts(usd, cur, round_atm=False)
         a2 = self.amounts(usd, cur, round_atm=True)
         ev.update({key: np.where(is_atm, a2[key], a1[key]) for key in a1})
-        ev.update(self.label_cols(k, "counterfeit", cid, LS_CUSTOMER_REPORT, delay_scale=0.5))
+        ev.update(self.label_cols(k, kind, cid, "clone_purchase"))
+        t_ = self.reg.by_name[kind]
+        ev["campaign_role"] = np.where(is_atm, t_.role_code("clone_withdrawal"), t_.role_code("clone_purchase"))
         chunks.append(make_chunk(k, **ev))
         return concat_chunks(chunks)
 
-    def _merchant_breach(self, T: int, p: dict) -> dict:
+    def _merchant_breach(self, T: int, p: dict, kind: str = "merchant_breach") -> dict:
         rng = self.rng
         g = geo()
         cid = self.next_campaign_id()
@@ -299,11 +316,11 @@ class CampaignEngine:
             ev.update(self.amounts(rng.uniform(80, 900, kk), self.w.merchants["country"][mrow]))
             ev.update(self.remote_ctx(kk, devs[rng.integers(0, 3, kk)], ip, ipc, asn,
                                       g.city_lat[g.main_city[ipc]], g.city_lon[g.main_city[ipc]]))
-            ev.update(self.label_cols(kk, "merchant_breach", cid, LS_CHARGEBACK))
+            ev.update(self.label_cols(kk, kind, cid, "compromised_card_use"))
             chunks.append(make_chunk(kk, **ev))
         return concat_chunks(chunks)
 
-    def _atm_cashout(self, T: int, p: dict) -> dict:
+    def _atm_cashout(self, T: int, p: dict, kind: str = "atm_cashout") -> dict:
         rng = self.rng
         g = geo()
         cid = self.next_campaign_id()
@@ -339,10 +356,10 @@ class CampaignEngine:
         ev.update(self.card_fields(card_rep))
         ev.update(self.merchant_fields(mrow, True))
         ev.update(self.amounts(usd, self.w.merchants["country"][mrow], round_atm=True))
-        ev.update(self.label_cols(total, "atm_cashout", cid, LS_INVESTIGATION, delay_scale=0.2))
+        ev.update(self.label_cols(total, kind, cid, "withdrawal"))
         return make_chunk(total, **ev)
 
-    def _app_scam_mule(self, T: int, p: dict) -> dict:
+    def _app_scam_mule(self, T: int, p: dict, kind: str = "app_scam_mule") -> dict:
         rng = self.rng
         cid = self.next_campaign_id()
         if not self.mules.shape[0]:
@@ -361,10 +378,10 @@ class CampaignEngine:
         ev.update(self.amounts(usd, c["home_country"][senders]))
         ev.update(self.remote_ctx(k, devs, c["home_ip"][senders], c["home_country"][senders], c["home_asn"][senders],
                                   c["home_lat"][senders], c["home_lon"][senders]))
-        ev.update(self.label_cols(k, "app_scam_mule", cid, LS_CUSTOMER_REPORT, delay_scale=0.3))
+        ev.update(self.label_cols(k, kind, cid, "victim_transfer"))
         return make_chunk(k, **ev)
 
-    def _bust_out(self, T: int, p: dict) -> dict:
+    def _bust_out(self, T: int, p: dict, kind: str = "bust_out") -> dict:
         rng = self.rng
         cid = self.next_campaign_id()
         card = int(self.pick_cards(1, credit_only=True)[0])
@@ -393,13 +410,14 @@ class CampaignEngine:
         ev.update(self.amounts(share, self.w.merchants["country"][mrow]))
         ev.update(dict(device_id=np.where(remote, dev, 0), ip_v4=np.where(remote, c["home_ip"][cr], 0),
                        ip_country_idx=np.where(remote, c["home_country"][cr], -1), ip_asn=np.where(remote, c["home_asn"][cr], 0)))
-        ev.update(self.label_cols(k, "bust_out", cid, LS_INVESTIGATION, delay_scale=1.5))
+        ev.update(self.label_cols(k, kind, cid, "bust"))
         bust = make_chunk(k, **ev)
         if build_h <= 0:
             return bust
-        return concat_chunks([self._bust_out_buildup(T, build_h, card, cr, p), bust])
+        return concat_chunks([self._bust_out_buildup(T, build_h, card, cr, p, kind, cid), bust])
 
-    def _bust_out_buildup(self, T: int, hours: float, card: int, cr: int, p: dict) -> dict:
+    def _bust_out_buildup(self, T: int, hours: float, card: int, cr: int, p: dict, kind: str = "bust_out",
+                          cid: int = 0) -> dict:
         """The account looks like a good customer: on-profile purchases at home, ramping up in
         frequency (more of them towards the bust), near the customer's usual ticket. Legitimate."""
         rng = self.rng
@@ -414,9 +432,11 @@ class CampaignEngine:
         ev.update(self.card_fields(np.full(n, card)))
         ev.update(self.merchant_fields(mrow, True))
         ev.update(self.amounts(usd, self.w.merchants["country"][mrow]))
+        if cid:
+            ev.update(self.context_cols(kind, cid, "build_up"))
         return make_chunk(n, **ev)
 
-    def _bot_ecom(self, T: int, p: dict) -> dict:
+    def _bot_ecom(self, T: int, p: dict, kind: str = "bot_ecom") -> dict:
         rng = self.rng
         g = geo()
         cid = self.next_campaign_id()
@@ -435,5 +455,5 @@ class CampaignEngine:
         ev.update(self.merchant_fields(np.full(k, merchant), False))
         ev.update(self.amounts(rng.uniform(5, 80, k), np.full(k, self.w.merchants["country"][merchant])))
         ev.update(self.remote_ctx(k, dev, ip, ipc, asn, g.city_lat[g.main_city[ipc]], g.city_lon[g.main_city[ipc]]))
-        ev.update(self.label_cols(k, "bot_ecom", cid, LS_CHARGEBACK))
+        ev.update(self.label_cols(k, kind, cid, "bot_checkout"))
         return make_chunk(k, **ev)

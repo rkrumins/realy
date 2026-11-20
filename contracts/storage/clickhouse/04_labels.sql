@@ -18,5 +18,5 @@ CREATE TABLE IF NOT EXISTS realy.labels (
 CREATE MATERIALIZED VIEW IF NOT EXISTS realy.labels_mv TO realy.labels AS
 SELECT arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
        event_id, fromUnixTimestamp64Micro(label_time_us) AS label_time, fromUnixTimestamp64Micro(event_time_us) AS event_time,
-       is_fraud, arrayElement(['NONE', 'CARD_TESTING', 'ACCOUNT_TAKEOVER', 'LOST_STOLEN', 'COUNTERFEIT', 'MERCHANT_BREACH', 'ATM_CASHOUT', 'APP_SCAM_MULE', 'BUST_OUT', 'BOT_ECOM', 'FRIENDLY_FRAUD'], toInt32(fraud_type) + 1) AS fraud_type, campaign_id, source, customer_id, card_id, amount_usd_minor
+       is_fraud, if(toInt32(fraud_type) + 1 <= 12, arrayElement(['NONE', 'CARD_TESTING', 'ACCOUNT_TAKEOVER', 'LOST_STOLEN', 'COUNTERFEIT', 'MERCHANT_BREACH', 'ATM_CASHOUT', 'APP_SCAM_MULE', 'BUST_OUT', 'BOT_ECOM', 'FRIENDLY_FRAUD', 'INVESTMENT_SCAM'], toInt32(fraud_type) + 1), concat('TYPE_', toString(fraud_type))) AS fraud_type, campaign_id, source, customer_id, card_id, amount_usd_minor
 FROM realy.labels_queue WHERE length(_error) = 0;

@@ -50,6 +50,7 @@ INTERNAL: dict[str, tuple[np.dtype, object]] = {
     "label_is_fraud": (np.dtype(bool), False),     # observed (noisy) label value
     "label_type": (np.dtype(np.int8), 0),
     "label_source": (np.dtype(np.int8), 0),
+    "campaign_role": (np.dtype(np.int16), 0),      # usecases: typology id * 16 + role index; 0 = none
     "order": (np.dtype(np.int64), 0),              # tie-breaker for deterministic sorting
 }
 
@@ -139,7 +140,8 @@ def finalize(chunk: dict[str, np.ndarray], gen_id: int, seq0: int) -> EventBatch
     # what the institution LEARNS, and when (ground truth above is what really happened): the event log
     # keeps both so training can use labels as known at training time (realy train --labels observed)
     cols.update(label_delay_us=c["label_delay_us"], label_is_fraud=c["label_is_fraud"],
-                label_type=c["label_type"].astype(np.int32), label_source=c["label_source"].astype(np.int32))
+                label_type=c["label_type"].astype(np.int32), label_source=c["label_source"].astype(np.int32),
+                campaign_role=c["campaign_role"].astype(np.int32))
     keys = [str(x).encode() for x in cols["customer_id"].tolist()]
     labels: list[tuple[int, bytes]] = []
     lab = np.flatnonzero(c["label_delay_us"] >= 0)

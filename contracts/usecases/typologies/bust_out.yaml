@@ -1,0 +1,18 @@
+id: 8
+name: bust_out
+title: Bust-out (first-party fraud)
+description: >-
+  A customer builds a good history, then exhausts the credit line with no intention to repay. Only
+  the bust is fraud; the build-up is legitimate, as charge-offs record it.
+pattern: bust_out
+mix_weight: 0.06
+labels: {source: investigation, delay_scale: 1.5}
+roles: [build_up, bust]
+challenge: {pass: 0.98, fail: 0.0, abandon: 0.02}
+signals: [credit_utilisation_24h, amount_to_avg_ratio, card_amount_sum_24h]
+rules: [BUST_OUT_UTILISATION]
+params:
+  purchases: {default: [3, 6], help: "purchases splitting ~90-110% of the credit limit"}
+  span_hours: {default: 20, help: "hours the bust is spread over"}
+  buildup_hours: {default: 0, help: "hours of ordinary build-up before the bust (0 = none)"}
+  buildup_purchases: {default: [6, 12], help: "build-up purchases near the usual ticket"}

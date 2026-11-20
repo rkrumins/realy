@@ -1,0 +1,10 @@
+id: 10
+name: friendly_fraud
+title: Friendly fraud
+description: >-
+  A legitimate purchase the cardholder later disputes as fraud: a chargeback on a genuine
+  payment. It exists only as a label (training noise), never as a campaign.
+pattern: label_only
+mix_weight: 0.0
+labels: {source: chargeback, delay_scale: 1.0}
+roles: []

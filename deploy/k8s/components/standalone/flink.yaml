@@ -61,6 +61,7 @@ spec:
                 execution.checkpointing.savepoint-dir: file:///checkpoints/savepoints
                 metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
                 metrics.reporter.prom.port: 9249
+                metrics.fetcher.update-interval: 2000
           volumeMounts: [{ name: checkpoints, mountPath: /checkpoints }]
           readinessProbe: { httpGet: { path: /overview, port: 8081 }, periodSeconds: 5 }
           resources:
@@ -116,6 +117,7 @@ spec:
                 execution.checkpointing.dir: file:///checkpoints
                 metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
                 metrics.reporter.prom.port: 9249
+                metrics.fetcher.update-interval: 2000
           volumeMounts: [{ name: checkpoints, mountPath: /checkpoints }]
           resources:
             requests: { cpu: "2", memory: 4Gi }

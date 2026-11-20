@@ -9,10 +9,10 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 import os as _os
 
@@ -24,11 +24,30 @@ SCENARIO_DIR = Path(_os.environ.get("REALY_SCENARIOS") or REPO_ROOT / "scenarios
 DATA_DIR = Path(_os.environ.get("REALY_DATA") or REPO_ROOT / "data")
 
 Topology = Literal["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"]
-FraudKind = Literal[
-    "card_testing", "account_takeover", "lost_stolen", "counterfeit", "merchant_breach",
-    "atm_cashout", "app_scam_mule", "bust_out", "bot_ecom",
-]
-FRAUD_KINDS: tuple[str, ...] = FraudKind.__args__  # type: ignore[attr-defined]
+# Fraud typologies are data (contracts/usecases, python/realy/usecases.py): a kind is any enabled
+# typology in the registry, validated at load time rather than fixed in a Literal.
+FraudKind = str
+
+
+def fraud_kinds() -> tuple[str, ...]:
+    from .usecases import registry
+    return tuple(registry().names())
+
+
+def _check_kind(kind: str) -> str:
+    known = fraud_kinds()
+    if kind not in known:
+        raise ValueError(f"unknown fraud typology {kind!r}; defined: {', '.join(known)}")
+    return kind
+
+
+# a typology name from the use-case registry (contracts/usecases/typologies/*.yaml)
+TypologyName = Annotated[FraudKind, AfterValidator(_check_kind)]
+
+
+def _default_mix() -> dict[str, float]:
+    from .usecases import registry
+    return registry().default_mix()
 
 
 class _Model(BaseModel):
@@ -101,7 +120,7 @@ class TrafficSpec(_Model):
 
 
 class CampaignSpec(_Model):
-    kind: FraudKind
+    kind: TypologyName               # any enabled typology in contracts/usecases
     at_s: float = 0.0                # wall seconds after run start
     count: int = 1                   # number of campaigns started at `at_s`
     params: dict[str, Any] = Field(default_factory=dict)
@@ -110,10 +129,7 @@ class CampaignSpec(_Model):
 class FraudSpec(_Model):
     # Background campaigns started per 1,000 legitimate events (Poisson), and their mix.
     background_per_1k: float = 0.5
-    mix: dict[FraudKind, float] = Field(default_factory=lambda: {
-        "card_testing": 0.22, "account_takeover": 0.15, "lost_stolen": 0.12, "counterfeit": 0.10,
-        "merchant_breach": 0.08, "atm_cashout": 0.03, "app_scam_mule": 0.12, "bust_out": 0.06,
-        "bot_ecom": 0.12})
+    mix: dict[TypologyName, float] = Field(default_factory=_default_mix)
     campaigns: list[CampaignSpec] = Field(default_factory=list)
     unreported_fraction: float = 0.10       # fraud never labelled
     friendly_fraud_per_1k: float = 0.2      # legit events charged back (label noise)

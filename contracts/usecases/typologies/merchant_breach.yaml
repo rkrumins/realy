@@ -1,0 +1,16 @@
+id: 5
+name: merchant_breach
+title: Merchant breach
+description: >-
+  Card data stolen from one merchant is used hours to days later by one crew, online, through a
+  few shared devices.
+pattern: merchant_breach
+mix_weight: 0.08
+labels: {source: chargeback, delay_scale: 1.0}
+roles: [compromised_card_use]
+challenge: {pass: 0.05, fail: 0.95, abandon: 0.0}
+signals: [dev_distinct_cards_1h, dev_distinct_customers_24h, ip_distinct_cards_1h, cust_device_novel]
+rules: [BOT_DEVICE_MANY_CARDS]
+params:
+  victims: {default: 15, help: "customers who shopped at the breached merchant"}
+  delay_days: {default: [0.2, 2.0], help: "days from the breach to the fraudulent use"}

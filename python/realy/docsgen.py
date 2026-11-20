@@ -107,7 +107,7 @@ def scenario_schema() -> str:
         if name == "FraudSpec":
             parts.append("Default `mix`: " + ", ".join(f"`{k}` {v:g}" for k, v in
                                                        cls.model_fields["mix"].default_factory().items()) + "\n\n")
-    parts.append("## Fraud typologies\n\n`" + "`, `".join(scenario_mod.FRAUD_KINDS) + "` - described in "
+    parts.append("## Fraud typologies\n\n`" + "`, `".join(scenario_mod.fraud_kinds()) + "` - described in "
                  "[synthetic-data.md](../synthetic-data.md).\n")
     return "".join(parts)
 

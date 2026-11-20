@@ -1,0 +1,19 @@
+id: 6
+name: atm_cashout
+title: ATM cash-out (unlimited operation)
+description: >-
+  A crew withdraws with hundreds of cloned cards at a few ATMs within minutes, usually in another
+  country.
+pattern: atm_cashout
+mix_weight: 0.03
+labels: {source: investigation, delay_scale: 0.2}
+roles: [withdrawal]
+challenge: {pass: 0.0, fail: 1.0, abandon: 0.0}
+signals: [card_atm_count_1h, term_atm_sum_1h, is_foreign]
+rules: [ATM_VELOCITY, ATM_TERMINAL_CASHOUT, MAGSTRIPE_FOREIGN]
+params:
+  cards: {default: 200, help: "cloned cards"}
+  atms: {default: 20, help: "ATMs used in the cash-out city"}
+  duration_min: {default: 15, help: "minutes the operation lasts"}
+  withdrawals: {default: [3, 6], help: "withdrawals per card"}
+  foreign_prob: {default: 0.5, help: "probability the cash-out city is abroad for the cards"}

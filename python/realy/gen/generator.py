@@ -15,7 +15,7 @@ from datetime import datetime
 
 import numpy as np
 
-from ..scenario import FRAUD_KINDS, Scenario
+from ..scenario import Scenario
 from ..world import World
 from .batch import EventBatch, concat_chunks, finalize, make_chunk, take
 from .behaviour import US, LegitEngine, MerchantIndex
@@ -40,7 +40,7 @@ def sim_start_us(scenario: Scenario) -> int:
 
 
 class Generator:
-    def __init__(self, world: World, scenario: Scenario, shard: int = 0, n_shards: int = 1) -> None:
+    def __init__(self, world: World, scenario: Scenario, shard: int = 0, n_shards: int = 1, registry=None) -> None:
         if not 0 <= shard < n_shards or n_shards > 0xFFFF:
             raise ValueError("bad shard")
         self.world, self.scenario, self.shard, self.n_shards = world, scenario, shard, n_shards
@@ -56,9 +56,12 @@ class Generator:
         f = scenario.fraud
         self.legit = LegitEngine(world, self.rows, shard, r_legit, self.merchants, f.friendly_fraud_per_1k,
                                  tuple(f.chargeback_delay_days))
+        from ..usecases import registry as _registry
+        self.reg = registry or _registry()
         self.campaigns = CampaignEngine(world, self.rows, shard, n_shards, r_camp, self.merchants,
-                                        f.unreported_fraction, tuple(f.chargeback_delay_days))
-        kinds = [k for k in FRAUD_KINDS if f.mix.get(k, 0) > 0]
+                                        f.unreported_fraction, tuple(f.chargeback_delay_days), registry=self.reg)
+        # registry order (by id) keeps the background draw identical to the former hard-coded tuple
+        kinds = [k for k in self.reg.names() if f.mix.get(k, 0) > 0]
         w = np.array([f.mix[k] for k in kinds], dtype=np.float64)
         self.bg_kinds = kinds
         self.bg_p = w / w.sum() if w.sum() > 0 else w
@@ -78,8 +81,9 @@ class Generator:
 
         split=True divides `cards`/`victims` by the number of shards (scenario timeline totals).
         """
-        if kind not in FRAUD_KINDS:
-            raise ValueError(f"unknown campaign kind {kind}")
+        t = self.reg.by_name.get(kind)
+        if t is None or not t.campaigns():
+            raise ValueError(f"unknown or disabled campaign kind {kind}")
         params = dict(params or {})
         if split and self.n_shards > 1:
             for key in SPLIT_KEYS:

@@ -1,0 +1,38 @@
+# Defined entirely in YAML (pattern: steps): no generator code. Not in the default background mix
+# (mix_weight 0): add `- {kind: investment_scam, at_s: 20, count: 10}` to a scenario's campaigns.
+id: 11
+name: investment_scam
+title: Investment / romance scam
+description: >-
+  A victim groomed over weeks sends a small first transfer to a new "investment platform" payee,
+  then escalating transfers to the same payee over the following days, from their own device and
+  home network. After the first payment the payee is no longer new, so novelty rules go quiet.
+pattern: steps
+mix_weight: 0.0
+labels: {source: customer_report, delay_scale: 1.0}
+roles: [first_transfer, escalating_transfer]
+challenge: {pass: 0.9, fail: 0.0, abandon: 0.1}
+signals: [cust_payee_novel, amount_usd, amount_to_avg_ratio, is_transfer]
+rules: [APP_SCAM_NEW_PAYEE]
+victims: {kind: customer, count: 1}
+actor: {device: victim, ip: victim}
+steps:
+  - role: first_transfer
+    count: 1
+    payment_type: transfer
+    channel: online_banking
+    entry_mode: bank_app
+    payee: fresh
+    amount_usd: [200, 900]
+  - role: escalating_transfer
+    count: [2, 5]
+    after_s: [86400, 259200]       # 1-3 days later
+    gap_s: [43200, 172800]         # every 12 h - 2 days
+    payment_type: transfer
+    channel: online_banking
+    entry_mode: bank_app
+    payee: same
+    amount_usd: [1500, 9000]
+params:
+  victims: {default: 1, help: "victims per campaign"}
+  escalating_transfer.count: {default: [2, 5], help: "transfers after the first"}

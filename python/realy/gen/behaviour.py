@@ -139,6 +139,10 @@ class LegitEngine:
         self.shard = shard
         self.rows = shard_rows
         self.friendly_p = friendly_per_1k / 1000.0
+        from ..usecases import registry
+        ff = registry().by_name.get("friendly_fraud")      # label-only typology: id and label source from its YAML
+        self.friendly_type = ff.id if ff else 10
+        self.friendly_source = ff.label_source if ff else LS_CHARGEBACK
         self.cb_delay = cb_delay_days
         c = self.c
         seg = c["segment"][shard_rows].astype(np.int64)
@@ -330,8 +334,8 @@ class LegitEngine:
             device_id=device, ip_v4=ip, ip_country_idx=ip_country, ip_asn=asn, payee_id=payee_id,
             cvv_match=cvv, avs_match=avs, recurring=recurring,
             credit_limit_usd=np.where(is_tr, 0, self.cards["credit_limit_usd"][card_row]),
-            label_delay_us=np.where(friendly, delay, -1), label_is_fraud=friendly, label_type=np.where(friendly, 10, 0),
-            label_source=np.where(friendly, LS_CHARGEBACK, 0), order=order0 + np.arange(n, dtype=np.int64),
+            label_delay_us=np.where(friendly, delay, -1), label_is_fraud=friendly, label_type=np.where(friendly, self.friendly_type, 0),
+            label_source=np.where(friendly, self.friendly_source, 0), order=order0 + np.arange(n, dtype=np.int64),
         )
 
     def _same_store_for_quick_repeats(self, cr, t, mrow, cp, is_atm, window_us: int = 5 * 60 * US):
