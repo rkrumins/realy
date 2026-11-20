@@ -1,4 +1,4 @@
-# Baseline fraud policy v3 (no step-up), kept for comparisons; scenarios use `rules: baseline` (baseline-v4).
+# Baseline fraud policy v3 (no step-up), kept for comparisons; scenarios use `rules: baseline` (baseline-v5).
 # Baseline fraud policy. Rules are CEL expressions evaluated by the Java scoring core (dev.cel:cel)
 # and re-evaluated by the Python verifier (common-expression-language) with identical bindings:
 #   f      map<string, double>  every feature in contracts/features/feature_schema.yaml

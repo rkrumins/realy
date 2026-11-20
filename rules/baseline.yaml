@@ -22,7 +22,13 @@
 #   0.34 -> 0.83, ATO 0.43 -> 0.52, card testing 0.80 -> 0.84; good customers reviewed 4,774 -> 2,541;
 #   cost: 0.76% of good customers challenged, 176 abandoned ($120k of lost sales). APP scam and ATM
 #   unchanged. A band at 0.65 instead of 0.55 let more card testing through on fraud-train.
-version: baseline-v4
+#
+# v5: v4 + CVV_FAILURES. Card-number guessing shows up as repeated CVV failures on one card (schema v2
+# authorisation signals). Tuned on fraud-train (seed 7; >= 2 beat >= 3 at the same precision),
+# confirmed out of sample on fraud-eval (seed 1337, every event, rules-whatif): 256 fires at precision
+# 0.977, 0.002% of good customers; card-testing fraud $ paid $17.6k -> $9.9k (stopped 0.908 -> 0.928),
+# all fraud $ paid $290.6k -> $282.9k, good customers declined 0.144% -> 0.146%.
+version: baseline-v5
 thresholds:
   review: 0.55
   challenge: 0.55
@@ -95,3 +101,7 @@ rules:
     when: "f.credit_utilisation_24h > 0.8 && f.amount_to_avg_ratio > 8.0"
     action: REVIEW
     reason: "credit line nearly exhausted in 24h with outsized ticket"
+  - id: CVV_FAILURES
+    when: "f.card_cvv_fail_count_1h >= 2.0"
+    action: DECLINE
+    reason: "repeated CVV failures on the card within an hour (card-number guessing)"

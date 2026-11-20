@@ -109,8 +109,9 @@ exact prefix of a v2 one:
 
 ## Rules
 
-Rule set `baseline-v4` (`rules/baseline.yaml`, CEL; `baseline-v1` / `-v2` / `-v3` kept for comparison:
-v4 is v3 with step-up, see [Step-up](#step-up-challenge)). Every rule is evaluated for every event and
+Rule set `baseline-v5` (`rules/baseline.yaml`, CEL; `baseline-v1` to `-v4` kept for comparison: v4 is v3
+with step-up, see [Step-up](#step-up-challenge); v5 adds `CVV_FAILURES`, see
+[Training and evaluation](#training-and-evaluation)). Every rule is evaluated for every event and
 recorded (`rule_ids`), so precision is measurable per rule. Measured on the out-of-sample evaluation
 run (fraud-eval, seed 1337, run under `baseline-v2`):
 
@@ -473,6 +474,43 @@ follows:
 **In-sample vs out-of-sample.** The training holdout (same world) reported ROC-AUC 0.997 / PR-AUC 0.956 for
 the observed-label MLP; out of sample it scored 0.9946 / 0.955. The proxy generalises, but every report now says which
 of the two you are looking at.
+
+**What the authorisation signals bought** (schema v2, `baseline-v4`).
+
+Setup:
+- The same evaluation world was scored twice (fraud-eval, seed 1337, out of sample); the events are
+  identical, because the signals move no other column.
+- **Before:** the 54-feature observed-label model.
+- **After:** the same training recipe on fraud-train with the signals (62 features,
+  `proxy-obs-300010-42-ab28f328`).
+- The "after" run is verified: features 99.85% exact; rule, score and outcome parity 100%; audit
+  300,010 / 300,010.
+
+| fraud-eval | 54 features | **62 features (auth signals)** |
+|---|---|---|
+| model ROC-AUC / PR-AUC | 0.9946 / 0.953 | **0.9956 / 0.967** |
+| fraud stopped / declined | 0.902 / 0.862 | 0.905 / **0.874** |
+| fraud $ paid | $362,203 | **$290,618** (−20%) |
+| good customers declined / flagged | 448 / 4,884 | 423 / 4,842 |
+| card testing: stopped, $ paid | 0.838, $53.7k | **0.908, $17.6k** |
+| counterfeit: stopped, $ paid | 0.917, $13.7k | **0.983, $2.0k** |
+| bust-out: stopped, $ paid | 0.077, $124k | **0.246, $88k** |
+| lost / stolen: stopped, $ paid | 0.753, $4.0k | 0.812, $3.0k |
+| merchant breach: stopped, $ paid | 0.830, $14.1k | 0.766, $20.1k |
+| ATM cash-out: stopped, $ paid | 0.955, $63.0k | 0.951, $70.1k |
+
+Reading the table:
+- **Biggest gains:** the CVV, 3DS and network-score signals help most against card testing; the
+  missing cryptogram helps against counterfeit.
+- **Losses:** merchant breach, ATM and bots lost a little.
+- **Fallbacks muddy those losses.** The "after" run hit 3,036 rules-only fallbacks against 1,163
+  (host load: model deadlines expire more often when the host is busy). That works against the
+  new model, so the model-only AUCs are the cleanest comparison.
+
+**`baseline-v5`** then added `CVV_FAILURES` (≥ 2 CVV failures on the card in an hour, DECLINE):
+- **Tuning:** on fraud-train, where ≥ 2 beat ≥ 3 at the same precision.
+- **Out of sample:** 256 fires at precision 0.977, 0.002% of good customers.
+- **Effect:** card-testing $ paid $17.6k → $9.9k; all fraud $ paid $290.6k → $282.9k.
 
 **What to take into production:**
 1. **Train on a window whose labels have matured** (60 days or more here), or exclude recent rows
