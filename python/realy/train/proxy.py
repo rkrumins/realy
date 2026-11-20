@@ -171,7 +171,16 @@ def train(run_dirs: list[Path], hidden: tuple[int, ...] = (64, 32), trees: int =
     # the version names what the model learnt from: label mode and (when not the default 30 days)
     # the label maturity, so models trained differently never overwrite each other
     tag = "gt" if lstats["labels"] != "observed" else ("obs" if maturity_days == 30 else f"obs{maturity_days:g}")
-    version = f"proxy-{tag}-{X.shape[0]}-{seed}"
+    # ... and a hash of the fitted weights and their input names: retraining on other data (or another
+    # feature schema) with the same row count and seed is a different model and must never take an
+    # existing version's name (its file would be replaced under a model server serving that name)
+    import hashlib
+    hsh = hashlib.sha256()
+    scaler_, mlp_ = mlp.named_steps["scale"], mlp.named_steps["mlp"]
+    for a in [scaler_.mean_, scaler_.scale_, *mlp_.coefs_, *mlp_.intercepts_]:
+        hsh.update(np.ascontiguousarray(a, np.float32).tobytes())
+    hsh.update(json.dumps(schema.names[:n_feat]).encode())
+    version = f"proxy-{tag}-{X.shape[0]}-{seed}-{hsh.hexdigest()[:8]}"
     out = Path(out)
     files = export_mlp(mlp, dim, n_feat, version, out, schema.names)
     files += export_gbdt(gbdt, dim, version, out)

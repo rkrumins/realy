@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInferenceServiceImplBase {
     private volatile ProxyModel model;
     private volatile String weightsPath = "";
+    private volatile String weightsStamp = "";   // mtime + size of the loaded file: a replaced file reloads
     private final StageMetrics metrics;
     private final long seed;
     private volatile ModelServerConfig cfg;
@@ -77,6 +78,15 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
         long firstUs;
     }
 
+    private static String stamp(String path) {
+        try {
+            var p = java.nio.file.Path.of(path);
+            return java.nio.file.Files.getLastModifiedTime(p).toMillis() + ":" + java.nio.file.Files.size(p);
+        } catch (java.io.IOException e) {
+            return "";   // unreadable: the load below reports it
+        }
+    }
+
     /** The model reading rows laid out as the feature schema on the classpath (contracts). */
     static ProxyModel bindToSchema(ProxyModel m) {
         var names = io.realy.scoring.features.FeatureSchema.load().names();
@@ -100,7 +110,9 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
      */
     public void configure(ModelServerConfig c) {
         String wp = c.getWeightsPath();
-        if (!wp.isEmpty() && !wp.equals(weightsPath)) {
+        String stamp = wp.isEmpty() ? "" : stamp(wp);
+        // a new path, or the same path whose file was replaced (a retrained model written over it)
+        if (!wp.isEmpty() && (!wp.equals(weightsPath) || !stamp.equals(weightsStamp))) {
             ProxyModel m;
             try {
                 m = ProxyModel.load(wp);
@@ -112,6 +124,7 @@ public final class MockInferenceService extends GRPCInferenceServiceGrpc.GRPCInf
             m = bindToSchema(m);
             model = m;
             weightsPath = wp;
+            weightsStamp = stamp;
         }
         this.cfg = c.toBuilder().setModelVersion(model.version).setWeightsPath(weightsPath).build();
         this.serviceTime = new LatencyModel(c.getServiceTime());
