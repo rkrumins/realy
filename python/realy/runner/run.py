@@ -56,6 +56,8 @@ class RunHandle:
     live: dict[str, Any] = field(default_factory=dict)
     service_errors: float = 0.0   # this run's gateway pipeline errors + Flink async timeouts (1 s windows summed)
     startup: Any = None           # runner.startup.Startup: the structured startup sequence (console Live panel)
+    verifiable: bool = False      # the run will be verified exactly: it must not read state other runs built
+    rate_changes: list = field(default_factory=list)   # live rate changes: [{"at_us", "mult"}] (report segments)
 
     def __post_init__(self) -> None:
         ctx = mp.get_context("spawn")
@@ -182,6 +184,7 @@ def _metrics_monitor(handle: RunHandle, sc: Scenario, stop_evt: threading.Event,
                         elif r.get("multiplier"):
                             handle.rate_mult.value = float(r["multiplier"])
                         log(f"live rate change -> x{handle.rate_mult.value:.2f}")
+                        handle.rate_changes.append({"at_us": int(time.time() * 1e6), "mult": float(handle.rate_mult.value)})
                     if data.get("phase") in ("ABORTED", 6):
                         if request_abort_handle(handle, "aborted by operator (bench.control)", "operator"):
                             log("abort requested on bench.control")
@@ -578,6 +581,24 @@ class _Run:
         pids = [{"role": role, "index": idx, "pid": p.pid} for role, idx, p in self.procs]
         (self.run_dir / "pids.json").write_text(json.dumps({"driver": os.getpid(), "children": pids}, indent=1))
 
+    def state_lineage(self) -> dict[str, Any]:
+        """Which runs' events the feature state this run reads was built from, recorded before this
+        run sends any: {"mode": fresh|warm|none, "inherited_runs": n, "inherited": [last run ids],
+        "unknown": bool}. Exact feature verification replays this run's events only, so it can hold
+        only when nothing was inherited (verify reads this from the manifest)."""
+        from .flink import desired_mode, note_run
+        if desired_mode(self.sc) is None:
+            return {"mode": "none"}
+        try:
+            before = note_run(self.run_id)
+        except Exception as e:  # noqa: BLE001 - provenance is advisory; verify treats it as unknown
+            self.log(f"warn: could not record this run in the state lineage ({e.__class__.__name__})")
+            before = None
+        if before is None:
+            return {"mode": self.sc.flink_state, "inherited_runs": None, "inherited": [], "unknown": True}
+        return {"mode": self.sc.flink_state, "inherited_runs": int(before.get("count", 0)),
+                "inherited": list(before.get("runs", []))[-10:], "unknown": bool(before.get("unknown"))}
+
     # ------------------------------------------------------------------ phases
     def prepare(self) -> None:
         sc, ep, log = self.sc, self.ep, self.log
@@ -619,17 +640,27 @@ class _Run:
         self.check("prepare")
         st.start("provenance", "which world built the running feature state?")
         dec = world_switch_state(sc, self.world.content_hash, log, ep.flink_rest)
+        why_verify = verify_needs_fresh(sc, dec, self.h.verifiable) if not dec.get("reason") else None
+        if why_verify:
+            log(f"exact verification requested: {why_verify}: starting Flink state fresh")
+            sc.flink_state = "fresh"
         if dec.get("reason"):
             st.finish("provenance", f"fresh state: {dec['reason']}")
+        elif why_verify:
+            st.finish("provenance", f"fresh state for exact verification: {why_verify}")
         elif sc.flink_state == "fresh":
             st.finish("provenance", "fresh state requested by the scenario")
         else:
-            st.finish("provenance", f"warm state kept: built from this world ({dec.get('why') or 'recorded'})")
+            lin = dec.get("lineage") or {}
+            built = (f"; it holds events of {lin['count']} earlier run(s)" if lin.get("count") else "")
+            st.finish("provenance", f"warm state kept: built from this world ({dec.get('why') or 'recorded'}){built}")
         prof = sc.traffic.profile
         self.base_tps = prof.tps if prof.kind != "step" else (prof.start_tps or prof.tps)
         self.ts = auto_time_scale(self.world, self.base_tps) if sc.traffic.time_scale == "auto" else float(sc.traffic.time_scale)
         log(f"time scale {self.ts:.1f} sim-s per wall-s (natural rate {natural_rate_total(self.world):.1f} ev/sim-s)")
         apply_topology(sc, self.run_id, ep, log, world=self.world.content_hash, startup=st)
+        self.manifest["state"] = self.state_lineage()
+        self.write_manifest()
         from .flink import job_progress
         # Flink's processed-record count before any history is sent: catch-up progress is the delta
         self.flink_base = job_progress(ep.flink_rest) if sc.topology != "echo-kafka" else None
@@ -992,7 +1023,7 @@ class _Run:
             "abort": ({"reason": h.abort_reason, "kind": h.abort_kind, "phase": h.abort_phase,
                        "after_s": round((h.abort_at or time.time()) - self.t0, 2)} if h.abort_reason else None),
             "error": self.error, "emission_end_us": self.emission_end_us, "measured_s": measured_s,
-            "wall_s": round(time.time() - self.t0, 2), "phases": self.phases,
+            "wall_s": round(time.time() - self.t0, 2), "phases": self.phases, "rate_changes": list(h.rate_changes),
             "owner": self.lease.info.get("owner"), "lease": ("held" if self.lease.held else
                                                              "disabled" if self.lease.disabled else
                                                              f"unavailable: {self.lease.unavailable}"),
@@ -1049,7 +1080,25 @@ def world_switch_state(sc: Scenario, world_hash: str, log: Callable[[str], None]
         log(f"world switch: {reason}: starting Flink state fresh and clearing online-store stream blobs, "
             f"{bf:g} sim day(s) of history warm it (REALY_WORLD_SWITCH_BACKFILL_DAYS)")
         sc.flink_state, sc.traffic.backfill_days = state, bf
-    return {"state": sc.flink_state, "reason": reason, "why": prov.get("why", "")}
+    return {"state": sc.flink_state, "reason": reason, "why": prov.get("why", ""), "lineage": prov.get("lineage")}
+
+
+def verify_needs_fresh(sc: Scenario, dec: dict[str, Any], verifiable: bool) -> str | None:
+    """A run that will be verified exactly must read state built from its own events only: the verifier
+    replays this run's event log, so events earlier runs left in warm state (same world, same simulated
+    window) would show up as feature mismatches it cannot explain. Returns why fresh state is needed,
+    or None (not verified, already fresh, no feature job, or nothing inherited)."""
+    from .flink import desired_mode
+    if not verifiable or sc.flink_state == "fresh" or desired_mode(sc) is None:
+        return None
+    lin = dec.get("lineage") or {"unknown": True}
+    if lin.get("unknown"):
+        return "which runs built the warm state is not recorded"
+    if lin.get("count"):
+        runs = ", ".join(lin.get("runs", [])[-3:])
+        return (f"the warm state also holds the events of {lin['count']} earlier run(s) ({runs}), "
+                "which the verifier cannot replay")
+    return None
 
 
 def feature_group(sc: Scenario, run_id: str, log: Callable[[str], None] = print) -> str:
@@ -1072,7 +1121,8 @@ def feature_group(sc: Scenario, run_id: str, log: Callable[[str], None] = print)
 
 def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None = None,
                  log: Callable[[str], None] = print, handle: RunHandle | None = None,
-                 collectors: int | None = None, report: bool = True, wait_lease_s: float = 0.0) -> dict[str, Any]:
+                 collectors: int | None = None, report: bool = True, wait_lease_s: float = 0.0,
+                 verifiable: bool | None = None) -> dict[str, Any]:
     """Run a scenario end to end. Raises PipelineBusy (nothing touched) when another run holds the
     pipeline lease and it does not free up within `wait_lease_s`. Every other outcome, including an
     abort from any source and an unexpected error, ends in the same teardown: children stopped and
@@ -1083,6 +1133,8 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
     run_dir = RUNS_DIR / run_id
     handle = handle or RunHandle(run_id, run_dir)
     handle.run_id, handle.run_dir = run_id, run_dir
+    if verifiable is not None:
+        handle.verifiable = verifiable
     lease = RunLease(run_id, {"scenario": sc.name, "topology": sc.topology})
     lease.acquire(wait_s=wait_lease_s, stop=lambda: bool(handle.abort_reason), log=log)
     run_dir.mkdir(parents=True, exist_ok=True)

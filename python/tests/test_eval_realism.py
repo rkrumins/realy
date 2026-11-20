@@ -193,3 +193,88 @@ def test_profile_seed_marker_names_the_current_world():
     assert seed.seed_profiles(W("A"), r=r) > 0 and seed.seed_profiles(W("A"), r=r) == 0
     assert seed.seed_profiles(W("B"), r=r) > 0          # another world overwrote pf:* ...
     assert seed.seed_profiles(W("A"), r=r) > 0          # ... so switching back re-seeds (used to be skipped)
+
+
+def test_state_lineage_records_which_runs_built_the_state(monkeypatch):
+    """Every run that sends events into the feature state is added to the running job's record
+    before it sends any; note_run returns what the state held BEFORE this run (what its features
+    also see). A fresh job starts empty; records from before lineage existed read as unknown."""
+    from realy.runner import flink
+    r = _KV()
+    monkeypatch.setattr(flink, "_running", lambda c: [{"jid": "job-A", "name": "realy-features"}])
+    flink.record_job("job-A", "g", "w", r=r, lineage={"runs": [], "count": 0})
+    assert flink.note_run("run-1", r=r) == {"runs": [], "count": 0}                 # fresh: nothing inherited
+    before = flink.note_run("run-2", r=r)
+    assert before == {"runs": ["run-1"], "count": 1}
+    p = flink.state_provenance("http://flink", r=r)
+    assert p["lineage"] == {"runs": ["run-1", "run-2"], "count": 2}
+    for i in range(3, flink.LINEAGE_KEEP + 10):
+        flink.note_run(f"run-{i}", r=r)
+    lin = flink.state_provenance("http://flink", r=r)["lineage"]
+    assert len(lin["runs"]) == flink.LINEAGE_KEEP and lin["count"] == flink.LINEAGE_KEEP + 9 and lin["runs"][-1] == f"run-{flink.LINEAGE_KEEP + 9}"
+    # a record written before lineage existed: which runs built the state is unknown
+    r.set(flink._job_key(), json.dumps({"jid": "job-A", "group": "g", "world": "w"}))
+    assert flink.state_provenance("http://flink", r=r)["lineage"]["unknown"] is True
+    assert flink.note_run("run-x", r=r)["unknown"] is True
+
+
+def test_a_verified_run_starts_fresh_when_the_warm_state_holds_other_runs():
+    """Exact verification replays the run's own events: warm state that earlier runs of the same world
+    fed (same simulated window) cannot be reproduced (measured: 74% exact-set agreement), so a run
+    that will be verified starts fresh, and says why."""
+    from realy.runner.run import verify_needs_fresh
+    from realy.scenario import load_scenario
+    sc = load_scenario("smoke")
+    sc.flink_state = "warm"
+    inherited = {"lineage": {"runs": ["mixed-realistic-1", "smoke-2"], "count": 2}}
+    why = verify_needs_fresh(sc, inherited, True)
+    assert why and "2 earlier run(s)" in why and "smoke-2" in why
+    assert verify_needs_fresh(sc, inherited, False) is None                                   # not verified: keep warm
+    assert verify_needs_fresh(sc, {"lineage": {"runs": [], "count": 0}}, True) is None        # nothing inherited
+    assert "not recorded" in verify_needs_fresh(sc, {"lineage": None}, True)                  # unknown: fresh
+    sc.flink_state = "fresh"
+    assert verify_needs_fresh(sc, inherited, True) is None                                    # already fresh
+    echo = load_scenario("echo-calibration")
+    assert verify_needs_fresh(echo, inherited, True) is None                                  # no feature job
+
+
+def test_verify_does_not_judge_features_read_from_inherited_state():
+    from realy.verify.verify import NOT_COMPARABLE, features_comparable, judge
+    assert features_comparable(None) == (True, None)                                          # older runs: as before
+    assert features_comparable({"mode": "none"}) == (True, None)
+    assert features_comparable({"mode": "fresh", "inherited_runs": 0, "inherited": []}) == (True, None)
+    ok, why = features_comparable({"mode": "warm", "inherited_runs": 3, "inherited": ["a", "b"]})
+    assert not ok and "3 earlier run(s)" in why and "--verify" in why
+    assert features_comparable({"mode": "warm", "unknown": True})[0] is False
+
+    def v(comparable=True, exact=0.999, parity=1.0, complete=True):
+        return {"rules": {"parity": parity}, "score": {"parity": 1.0}, "outcome": {"parity": 1.0},
+                "features": {"comparable": comparable, "exact_set_ok": exact >= 0.98, "exact_set_agreement": exact,
+                             "exact_set_target": 0.98},
+                "audit": {"complete": complete, "audited_unique": 9, "emitted": 10}}
+    assert judge(v()) == (True, [])
+    assert judge(v(comparable=False, exact=0.74)) == (False, [NOT_COMPARABLE])                # inconclusive, not "74% wrong"
+    passed, reasons = judge(v(exact=0.74, parity=0.99, complete=False))
+    assert not passed and len(reasons) == 3 and any("74.0000%" in x for x in reasons)
+    assert any("rules parity" in x for x in reasons) and any("audit incomplete" in x for x in reasons)
+
+
+def test_p99_drift_is_judged_only_where_the_load_is_constant():
+    """A live rate change (or a scheduled step) raises p99 by design; drift is a rise at constant load."""
+    from realy.report.report import _constant_rate_segments, _window_medians
+    from realy.scenario import load_scenario
+    sc = load_scenario("smoke")
+    t0 = 1_000_000_000_000
+    assert _constant_rate_segments(sc, {}, t0, 5, 40) == [(5, 40)]
+    run = {"rate_changes": [{"at_us": t0 + 12_000_000, "mult": 2.0}]}
+    assert _constant_rate_segments(sc, run, t0, 5, 40) == [(5, 12), (22, 40)]          # 10 s settle after the change
+    at_start = {"rate_changes": [{"at_us": t0 + 5_975_000, "mult": 2.0}]}                # measured: right at warm-up end
+    assert _constant_rate_segments(sc, at_start, t0, 5, 40) == [(5, 5), (16, 40)][1:]
+    early = {"rate_changes": [{"at_us": t0 + 2_000_000, "mult": 2.0}]}                   # during warm-up: settle spills over
+    assert _constant_rate_segments(sc, early, t0, 5, 40) == [(12, 40)]
+    sc.traffic.profile.kind = "ramp"
+    assert _constant_rate_segments(sc, run, t0, 5, 40) == []                            # load varies by design
+    sc.traffic.profile.kind, sc.traffic.profile.step_duration_s = "step", 20
+    assert _constant_rate_segments(sc, {}, t0, 0, 40) == [(4, 20), (24, 40)]           # each level after its 20% transition
+    s = [10.0] * 10 + [20.0] * 10 + [30.0] * 5
+    assert _window_medians(s, 0, 25, 10) == [10.0, 20.0]                               # trailing partial window dropped

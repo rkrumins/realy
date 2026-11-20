@@ -112,10 +112,26 @@ class Suite:
         return None
 
     def wait_phase(self, jid: str, phases: tuple[str, ...], timeout: float = 240) -> dict | None:
+        """The job's status once it is in one of `phases`; None on timeout or when the job ends first
+        (then `self.not_reached` says how it ended, instead of waiting out the timeout)."""
+        self.not_reached = "timeout"
+        ended: dict = {}
+
         def f():
             cur = self.get("/api/status")["current"]
-            return cur if cur and cur["job_id"] == jid and cur["phase"] in phases else None
-        return self.wait(f, timeout)
+            if cur and cur["job_id"] == jid:
+                return cur if cur["phase"] in phases else None
+            j = self.job(jid)
+            if j.get("status") in ("done", "aborted", "failed", "cancelled", "interrupted"):
+                ended.update(j)
+                return True
+            return None
+        v = self.wait(f, timeout)
+        if ended:
+            self.not_reached = (f"job ended {ended.get('status')} first: "
+                                f"{(ended.get('abort_reason') or ended.get('error') or '')[:200]}")
+            return None
+        return v
 
     def wait_job_end(self, jid: str, timeout: float) -> dict | None:
         return self.wait(lambda: (lambda j: j if j.get("status") in ("done", "aborted", "failed", "cancelled",
@@ -200,7 +216,7 @@ class Suite:
         t = threading.Thread(target=_ws_listen, args=(self.console, ws_msgs, stop), daemon=True)
         t.start()
         cur = self.wait_phase(j["id"], ("MEASURE",), 300)
-        self.check("reaches MEASURE", bool(cur))
+        self.check("reaches MEASURE", bool(cur), "" if cur else self.not_reached)
         if not cur:
             stop.set()
             return
@@ -239,7 +255,7 @@ class Suite:
     def _abort_case(self, overrides: dict, phases: tuple[str, ...], expect_phase: str) -> None:
         j = self.launch(overrides)
         cur = self.wait_phase(j["id"], phases, 300)
-        self.check(f"reaches {expect_phase}", bool(cur))
+        self.check(f"reaches {expect_phase}", bool(cur), "" if cur else self.not_reached)
         if not cur:
             return
         run_id = cur["run_id"]
@@ -282,7 +298,7 @@ class Suite:
             return
         j = self.launch(LONG)
         cur = self.wait_phase(j["id"], ("MEASURE",), 300)
-        if not self.check("reaches MEASURE", bool(cur)):
+        if not self.check("reaches MEASURE", bool(cur), "" if cur else self.not_reached):
             return
         pids = json.loads((self.runs_dir / cur["run_id"] / "pids.json").read_text())["children"]
         coll = [p["pid"] for p in pids if p["role"] == "collector"][0]

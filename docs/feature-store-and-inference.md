@@ -359,6 +359,29 @@ customers because a card's "last location" belonged to someone else.
 - **Backstop:** `pulsebench verify` fails a gateway run whose served features agree with an exact
   recomputation on fewer than 98% of events.
 
+**Which runs built it (lineage).** The same world is not enough for *exact verification*. Every run
+of a world replays the same simulated window (`traffic.sim_start`), so warm state that an earlier run
+fed already holds that run's events at the same simulated times. That is fine for measuring latency,
+because state size and shape are what matter. It cannot be verified, though: the verifier replays
+this run's event log only. Measured: a smoke run on state that `mixed-realistic` had built was 74%
+exact-set, with every count inflated by the other run's events.
+
+So the record also carries `lineage`, the runs whose events went into the state since it was last
+started fresh: `{runs: [last 50 ids], count}`.
+- **Recording:** each run appends itself *before* sending any event. A fresh job starts the lineage
+  empty; a job restored from a savepoint carries it over.
+- **The run manifest:** gets `state = {mode, inherited_runs, inherited, unknown}`, i.e. what this
+  run's features also saw.
+- **A run that will be verified starts fresh.** This applies to a console run with "verify
+  correctness" and to `pulsebench run --verify`. When the warm state holds other runs' events, or
+  nobody knows whose, the provenance step says so ("fresh state for exact verification: the warm
+  state also holds the events of 2 earlier run(s) (…)"). It keeps the scenario's own history.
+- **Verify does not misjudge inherited state.** On a run that read inherited state (one verified
+  after the fact, e.g. `pulsebench verify` on an unverified run), the feature check is reported as
+  *not comparable* and the result as **inconclusive**, with the reason. It is not a 74% "failure".
+  Rules, score and outcome parity and the ClickHouse audit are still checked, since they do not
+  depend on whose state it was.
+
 Measured on `lost-stolen-contactless`, over another world's state vs on clean state: features 78.8% →
 99.8% exact, false-positive rate 7.27% → 1.31%, model ROC-AUC 0.90 → 0.965 (details in
 [fraud-detection.md](fraud-detection.md#legitimate-behaviour-and-false-positives)).

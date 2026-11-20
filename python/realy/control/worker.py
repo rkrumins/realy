@@ -203,6 +203,7 @@ class RunWorker:
             n += 1
             run_id = f"{new_run_id(sc)}-{n}"
         handle = RunHandle(run_id, self.runs_dir / run_id)
+        handle.verifiable = bool(job.get("verify"))   # verified runs start from state only they build
         self._idle.clear()
         self.handle, self.scenario = handle, sc
         started = time.time()

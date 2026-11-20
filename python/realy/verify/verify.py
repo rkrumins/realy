@@ -6,7 +6,7 @@
                 gateway topologies the difference measures online-store staleness)
   2. rules      re-evaluate the CEL rule set (Python CEL) on the served vectors -> identical hits
   3. score      recompute the proxy-model score from the served vector (numpy float32)
-  4. outcome    re-derive the decision from hits + score
+  4. outcome    re-derive the decision from hits + score + whether the payment can be stepped up
   5. audit      ClickHouse: completeness for the run, duplicate collapse, audit visibility lag,
                 replay of a sample from the stored inputs (features_raw)
 """
@@ -29,7 +29,7 @@ from ..features.derived import compute_derived, event_view
 from ..features.engine import ReferenceEngine
 from ..scenario import REPO_ROOT, Scenario
 
-OUTCOME = {1: "APPROVE", 2: "REVIEW", 3: "DECLINE"}
+from ..policy import NAMES as OUTCOME  # noqa: E402  (APPROVE, REVIEW, DECLINE, CHALLENGE)
 EXACT_ENTITIES = ("customer", "card")
 
 
@@ -83,36 +83,8 @@ class ProxyScorer:
         return h[:, 0]
 
 
-class Rules:
-    def __init__(self, yaml_text: str) -> None:
-        import cel
-        doc = yaml.safe_load(yaml_text)
-        self.version = doc.get("version")
-        self.review = float(doc["thresholds"]["review"])
-        self.decline = float(doc["thresholds"]["decline"])
-        self.rules = [(r["id"], r["action"], cel.compile(r["when"])) for r in doc["rules"]]
-
-    def evaluate(self, f: dict[str, float], ev: dict[str, Any]) -> list[tuple[str, str]]:
-        import cel
-        ctx = cel.Context()
-        ctx.add_variable("f", f)
-        ctx.add_variable("event", ev)
-        return [(rid, act) for rid, act, p in self.rules if p.execute(ctx)]
-
-    def decide(self, hits: list[tuple[str, str]], score: float) -> int:
-        acts = {a for _, a in hits}
-        if "DECLINE" in acts:
-            return 3
-        if "ALLOW" in acts or "APPROVE" in acts:
-            return 1
-        has = not math.isnan(score)
-        if has and score >= self.decline:
-            return 3
-        if "REVIEW" in acts:
-            return 2
-        if has and score >= self.review:
-            return 2
-        return 1
+# the policy lives in realy.policy (one definition for verify, what-if, explanations, Explorer)
+from ..policy import RuleSet as Rules  # noqa: E402
 
 
 def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: int = 1_000_000,
@@ -242,7 +214,9 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
 
     # ------------------------------------------------------------------ 2-4. rules / score / outcome parity
     from ..scenario import run_rules
-    rules = Rules(run_rules(run_dir, sc)[0])
+    cfg = sc.scoring or {}
+    rules = Rules(run_rules(run_dir, sc)[0]).with_thresholds(
+        cfg.get("review_threshold"), cfg.get("decline_threshold"), cfg.get("challenge_threshold"))
     mv = None
     if "model_version" in dec.column_names:
         vals = [v for v in dec["model_version"].to_pylist() if v]
@@ -260,7 +234,8 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         j = d_pos[eid]
         ev = {c: lists[c][ev_idx[eid]] for c in names}
         fmap = {f.name: float(served[eid][f.index]) for f in schema.features}
-        hits = rules.evaluate(fmap, event_view(ev))
+        view = event_view(ev)
+        hits = rules.evaluate(fmap, view)
         got = set(x for x in (dd["rule_hits"][j] or "").split(",") if x)
         if {h for h, _ in hits} == got:
             rule_ok += 1
@@ -272,7 +247,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
             n_full += 1
             if abs(sc_ - float(dd["score"][j])) <= 1e-5:
                 score_ok += 1
-        if rules.decide(hits, sc_) == int(dd["outcome"][j]):
+        if rules.decide(hits, sc_, rules.challengeable(view)) == int(dd["outcome"][j]):
             outcome_ok += 1
     m = max(1, len(sample))
     out["rules"] = {"checked": len(sample), "parity": rule_ok / m, "mismatches": rule_mismatch}
@@ -292,12 +267,16 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     target = 0.999 if sc.topology == "flink-inline" else float(os.environ.get("REALY_VERIFY_MIN_EXACT", "0.98"))
     out["features"]["exact_set_target"] = target
     out["features"]["exact_set_ok"] = exact >= target or out["features"]["compared_events"] == 0
-    passed = (out["rules"]["parity"] == 1.0 and out["score"]["parity"] == 1.0 and out["outcome"]["parity"] == 1.0
-              and out["features"]["exact_set_ok"])
-    a = out.get("audit", {})
-    if "complete" in a:
-        passed = passed and a["complete"]
-    out["passed"] = bool(passed)
+    # The reference replays THIS run's events only. Warm state that earlier runs fed (same world, same
+    # simulated window) makes the served features legitimately differ: not comparable, so not judged.
+    state = state_of(run_dir)
+    out["state"] = state
+    comparable, why_not = features_comparable(state)
+    out["features"]["comparable"] = comparable
+    if not comparable:
+        out["features"]["not_comparable_because"] = why_not
+    out["passed"], out["reasons"] = judge(out)
+    out["inconclusive"] = not comparable and out["passed"] is False and out["reasons"] == [NOT_COMPARABLE]
     (run_dir / "verify.json").write_text(json.dumps(out, indent=1, default=float))
     return out
 
@@ -367,14 +346,60 @@ def audit_checks(ch: str, run_id: str, emitted: int, scorer: ProxyScorer, rules:
             "replay_checked": len(sample), "replay_score_parity": replay_ok / max(1, len(sample))}
 
 
+NOT_COMPARABLE = "features not comparable: the run read warm state that other runs' events also built"
+
+
+def state_of(run_dir: Path) -> dict[str, Any] | None:
+    """The run's feature-state lineage, as the runner recorded it before sending any event (manifest
+    "state"); None for runs older than the record."""
+    try:
+        return json.loads((Path(run_dir) / "manifest.json").read_text()).get("state")
+    except (OSError, ValueError):
+        return None
+
+
+def features_comparable(state: dict[str, Any] | None) -> tuple[bool, str | None]:
+    if state is None or state.get("mode") in ("none", None):
+        return True, None   # no feature job, or a run from before lineage was recorded (judged as before)
+    if state.get("unknown"):
+        return False, "which runs built the warm state was not recorded"
+    if state.get("inherited_runs"):
+        runs = ", ".join(state.get("inherited") or [])
+        return False, (f"the warm state also held the events of {state['inherited_runs']} earlier run(s)"
+                       + (f" (latest: {runs})" if runs else "") + "; re-run with --verify (or verify from the "
+                       "console), which starts the state fresh")
+    return True, None
+
+
+def judge(v: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Pass only if every check holds; every failure names itself."""
+    reasons: list[str] = []
+    for k, label in (("rules", "rules"), ("score", "model score"), ("outcome", "outcome")):
+        if v[k]["parity"] != 1.0:
+            reasons.append(f"{label} parity {v[k]['parity']:.4%} (must be 100%)")
+    f = v["features"]
+    if not f.get("comparable", True):
+        reasons.append(NOT_COMPARABLE)
+    elif not f["exact_set_ok"]:
+        reasons.append(f"exact-set feature agreement {(f['exact_set_agreement'] or 0):.4%} below "
+                       f"{f['exact_set_target']:.1%}")
+    a = v.get("audit", {})
+    if "complete" in a and not a["complete"]:
+        reasons.append(f"ClickHouse audit incomplete ({a.get('audited_unique', 0):,} of {a.get('emitted', 0):,} decisions)")
+    return not reasons, reasons
+
+
 def render(v: dict[str, Any]) -> str:
     if "error" in v:
         return f"verify: {v['error']}"
     f = v["features"]
-    lines = [f"=== verify {v['run_id']}: {'PASS' if v['passed'] else 'FAIL'} ===",
+    head = "PASS" if v["passed"] else ("INCONCLUSIVE" if v.get("inconclusive") else "FAIL")
+    judged = (f"target {f.get('exact_set_target', 0):.1%}{'' if f.get('exact_set_ok', True) else ' - BELOW TARGET'}"
+              if f.get("comparable", True) else f"NOT JUDGED: {f.get('not_comparable_because')}")
+    lines = [f"=== verify {v['run_id']}: {head} ===",
+             *(f"  - {r}" for r in v.get("reasons") or []),
              f"features: {f['compared_events']:,} served vectors vs reference; exact-set agreement "
-             f"{(f['exact_set_agreement'] or 0):.4%} (target {f.get('exact_set_target', 0):.1%}"
-             f"{'' if f.get('exact_set_ok', True) else ' - BELOW TARGET'}; {f['note']})",
+             f"{(f['exact_set_agreement'] or 0):.4%} ({judged}; {f['note']})",
              "  lowest agreement: " + ", ".join(f"{k} {a:.1%}" for k, a in f["worst"]),
              f"rules parity (Java CEL vs Python CEL): {v['rules']['parity']:.4%} of {v['rules']['checked']:,}",
              f"score parity (proxy model recompute): {v['score']['parity']:.4%} of {v['score']['checked']:,}",

@@ -25,7 +25,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
-from .scenario import REPO_ROOT
+from .scenario import REPO_ROOT, ChallengeRates
 
 BUILTIN_DIR = Path(os.environ.get("REALY_USECASES", REPO_ROOT / "contracts" / "usecases" / "typologies"))
 BUILTIN_PATTERNS = ("card_testing", "account_takeover", "lost_stolen", "counterfeit", "merchant_breach",
@@ -48,12 +48,9 @@ class Labels(BaseModel):
     delay_scale: float = Field(1.0, ge=0.0, le=10.0)
 
 
-class Challenge(BaseModel):
-    """How this typology's actors fare at a step-up (3DS / SCA challenge, PIN prompt, confirmation)."""
-    pass_: float = Field(0.0, alias="pass", ge=0, le=1)
-    fail: float = Field(1.0, ge=0, le=1)
-    abandon: float = Field(0.0, ge=0, le=1)
-    model_config = {"populate_by_name": True}
+# How this typology's actors fare at a step-up (3DS / SCA challenge, PIN prompt, confirmation):
+# the same model as a scenario's fraud.challenge rates (see realy/challenge.py)
+Challenge = ChallengeRates
 
 
 class Param(BaseModel):

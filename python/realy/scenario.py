@@ -126,6 +126,29 @@ class CampaignSpec(_Model):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChallengeRates(_Model):
+    """How a population fares at a step-up (3DS / SCA challenge online, PIN prompt in store, in-app
+    confirmation of a transfer): shares that pass, fail and abandon (the rest of 1 counts as fail)."""
+    model_config = ConfigDict(extra="forbid", validate_by_name=True, validate_by_alias=True, serialize_by_alias=True)
+    passed: float = Field(0.0, alias="pass", ge=0.0, le=1.0)
+    fail: float = Field(1.0, ge=0.0, le=1.0)
+    abandon: float = Field(0.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _sum(self) -> "ChallengeRates":
+        if self.passed + self.fail + self.abandon > 1.0 + 1e-9:
+            raise ValueError("pass + fail + abandon must not exceed 1")
+        return self
+
+
+class ChallengeSpec(_Model):
+    """Simulated step-up results. The INSTRUMENT draws each event's latent result (deterministically
+    from its id), the system under test never sees it: it only matters when the policy answers
+    CHALLENGE. Fraud uses its typology's `challenge` rates (contracts/usecases), unless overridden here."""
+    legitimate: ChallengeRates = Field(default_factory=lambda: ChallengeRates(passed=0.90, fail=0.02, abandon=0.08))
+    typologies: dict[str, ChallengeRates] = Field(default_factory=dict)
+
+
 class FraudSpec(_Model):
     # Background campaigns started per 1,000 legitimate events (Poisson), and their mix.
     background_per_1k: float = 0.5
@@ -134,6 +157,7 @@ class FraudSpec(_Model):
     unreported_fraction: float = 0.10       # fraud never labelled
     friendly_fraud_per_1k: float = 0.2      # legit events charged back (label noise)
     chargeback_delay_days: tuple[float, float] = (1.0, 45.0)
+    challenge: ChallengeSpec = Field(default_factory=ChallengeSpec)
 
 
 class BudgetSpec(_Model):

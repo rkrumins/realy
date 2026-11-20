@@ -36,7 +36,9 @@ def run(scenario: str = typer.Argument(..., help="scenario name (scenarios/<name
         set_: list[str] = typer.Option([], "--set", help="override, e.g. --set traffic.profile.tps=2000"),
         collectors: Optional[int] = typer.Option(None, help="collector processes (default: 1 per 15k TPS)"),
         run_id: Optional[str] = typer.Option(None),
-        wait_lease: float = typer.Option(0.0, help="seconds to wait when another run holds the pipeline lease")):
+        wait_lease: float = typer.Option(0.0, help="seconds to wait when another run holds the pipeline lease"),
+        verify_: bool = typer.Option(False, "--verify", help="verify exactly afterwards (starts from fresh "
+                                     "feature state when the warm state holds other runs' events)")):
     """Run a scenario end to end and write runs/<run_id>/report.{json,md,html}.
 
     Ctrl-C / SIGTERM abort gracefully: emission stops, decisions in flight drain, and a partial report
@@ -61,11 +63,19 @@ def run(scenario: str = typer.Argument(..., help="scenario name (scenarios/<name
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
     try:
-        res = run_scenario(sc, collectors=collectors, run_id=rid, handle=handle, wait_lease_s=wait_lease)
+        res = run_scenario(sc, collectors=collectors, run_id=rid, handle=handle, wait_lease_s=wait_lease,
+                           verifiable=verify_)
     except PipelineBusy as e:
         typer.echo(f"error: {e}. Wait (--wait-lease SECONDS), or abort it: realy abort {e.holder.get('run_id')}", err=True)
         raise typer.Exit(3)
     verdict = res.get("report", {}).get("verdict")
+    if verify_ and verdict != "ABORTED":
+        from .verify.verify import render, verify_run
+        v = verify_run(Path(res["run_dir"]))
+        typer.echo(render(v))
+        if not v.get("passed"):
+            typer.echo(f"report: {res['run_dir']}/report.html")
+            raise typer.Exit(1)
     exp = sc.expect.get("verdict")
     typer.echo(f"report: {res['run_dir']}/report.html")
     if verdict == "ABORTED":
@@ -330,26 +340,28 @@ def rules_whatif(run_dir: Path = typer.Argument(..., help="finished run (served 
                  rules: list[Path] = typer.Option([], "--rules", help="candidate rule set YAML (repeatable)"),
                  review: Optional[float] = typer.Option(None, help="override the review threshold for every variant"),
                  decline: Optional[float] = typer.Option(None, help="override the decline threshold for every variant"),
+                 challenge: Optional[float] = typer.Option(None, help="override the step-up (CHALLENGE) threshold for every variant"),
                  sample_mod: int = typer.Option(1, help="evaluate events with id % N == 0 only (speed)"),
                  model: list[Path] = typer.Option([], "--model", help="also re-score the served vectors with these "
                                                   "proxy weights (repeatable): model comparison on identical traffic"),
                  as_json: bool = typer.Option(False, "--json")):
-    """Replay rule sets / thresholds over a finished run offline: precision, recall, FPR, $ approved per
-    variant and per rule, against the run's own policy. Tune on a training run, confirm on the evaluation run."""
+    """Replay rule sets / thresholds over a finished run offline: precision, recall, FPR, step-ups and their
+    outcomes, $ approved per variant and per rule, against the run's own policy. Tune on a training run,
+    confirm on the evaluation run."""
     from .report.whatif import evaluate, load, render
     from .scenario import Scenario
     sc = Scenario.model_validate(json.loads((run_dir / "scenario.json").read_text()))
     data = load(run_dir, sample_mod)
     from .scenario import run_rules
     as_run = run_rules(run_dir, sc)[0]
-    rows = [(f"as run ({sc.rules})", evaluate(data, as_run, review, decline))]
+    rows = [(f"as run ({sc.rules})", evaluate(data, as_run, review, decline, challenge))]
     for r in rules:
-        rows.append((r.stem, evaluate(data, r.read_text(), review, decline)))
+        rows.append((r.stem, evaluate(data, r.read_text(), review, decline, challenge)))
     if model:
         from .report.whatif import rescore
         for w in model:
             d2 = rescore(data, w)
-            rows.append((f"model {d2['model_version']}", evaluate(d2, as_run, review, decline)))
+            rows.append((f"model {d2['model_version']}", evaluate(d2, as_run, review, decline, challenge)))
     typer.echo(json.dumps(dict(rows), indent=1) if as_json else render(rows))
 
 

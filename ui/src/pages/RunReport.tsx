@@ -2,7 +2,7 @@ import { BaseRateAndImpact, Insights, LabelCoverage, ModelEvaluation } from "@/c
 import { StartupPanel } from "@/components/startup";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ArrowLeft, Copy, Database, Download, FileCode2, FileText, GitCompareArrows, Microscope, ScanSearch, ShieldCheck, ShieldX, Target,
+  ArrowLeft, Copy, Database, Download, FileCode2, FileText, GitCompareArrows, Microscope, ScanSearch, ShieldAlert, ShieldCheck, ShieldX, Target,
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -46,7 +46,9 @@ function Hero({ d }: { d: RunDetail }) {
             {verdict ? <VerdictBadge verdict={verdict} size="lg" expected={s?.matches_expectation} /> : <StatusBadge status={d.summary.status} />}
             <TopologyBadge topology={d.summary.topology} />
             {d.summary.verify_passed === true && <Badge tone="pass"><ShieldCheck />verified</Badge>}
-            {d.summary.verify_passed === false && <Badge tone="fail"><ShieldX />verification failed</Badge>}
+            {d.summary.verify_passed === false && (d.verify?.inconclusive
+              ? <Badge tone="warn" title={d.verify.features?.not_comparable_because}><ShieldAlert />verification inconclusive</Badge>
+              : <Badge tone="fail"><ShieldX />verification failed</Badge>)}
             {d.summary.abort_reason && <Badge tone="warn">aborted: {d.summary.abort_reason}</Badge>}
           </div>
           <h1 className="mt-3 font-mono text-[22px] font-semibold tracking-tight text-fg md:text-[26px]">{d.summary.scenario}</h1>
@@ -233,9 +235,16 @@ function Verify({ v }: { v: VerifyResult | null }) {
   const a = v.audit ?? {};
   return (
     <>
-      <SectionTitle actions={v.passed !== undefined && (v.passed ? <Badge tone="pass"><ShieldCheck />passed</Badge> : <Badge tone="fail"><ShieldX />failed</Badge>)}>
+      <SectionTitle actions={v.passed !== undefined && (v.passed ? <Badge tone="pass"><ShieldCheck />passed</Badge>
+        : v.inconclusive ? <Badge tone="warn"><ShieldAlert />inconclusive</Badge> : <Badge tone="fail"><ShieldX />failed</Badge>)}>
         Correctness verification
       </SectionTitle>
+      {!v.passed && (v.reasons?.length ?? 0) > 0 && (
+        <div className={cn("mb-3 rounded-xl border p-3.5 text-[12.5px]", v.inconclusive ? "border-warn/40 bg-warn/[0.07]" : "border-fail/40 bg-fail/[0.06]")}>
+          <ul className="list-disc space-y-0.5 pl-4">{v.reasons!.map((r) => <li key={r}>{r}</li>)}</ul>
+          {f?.not_comparable_because && <div className="mt-1.5 text-muted">{f.not_comparable_because}</div>}
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Parity label="Rule parity (CEL Java vs Python)" checked={v.rules?.checked} parity={v.rules?.parity} />
         <Parity label="Score parity (proxy recompute)" checked={v.score?.checked} parity={v.score?.parity} />
@@ -243,8 +252,8 @@ function Verify({ v }: { v: VerifyResult | null }) {
         {f && (
           <div className="rounded-xl border border-border bg-surface-2/40 p-3">
             <div className="text-[12px] text-muted">Feature vectors exactly equal</div>
-            <div className="mt-1 text-[20px] font-semibold num">{fmtPct(f.exact_set_agreement, 1)}</div>
-            <div className="text-[11.5px] text-subtle num">{fmtNum(f.compared_events)} events compared</div>
+            <div className={cn("mt-1 text-[20px] font-semibold num", f.comparable === false && "text-subtle")}>{fmtPct(f.exact_set_agreement, 1)}</div>
+            <div className="text-[11.5px] text-subtle num">{fmtNum(f.compared_events)} events compared{f.comparable === false ? " · not judged (state not this run's own)" : ""}</div>
           </div>
         )}
       </div>

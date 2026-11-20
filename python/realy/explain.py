@@ -108,29 +108,45 @@ def explain_rules(rules_yaml: str, fmap: dict[str, float], ev_view: dict[str, An
 
 
 def policy_path(rule_results: list[dict[str, Any]], score: float | None, review: float, decline: float,
-                outcome: str | None, path: str | None) -> dict[str, Any]:
-    """The precedence branch that decided, mirroring RuleSet.decide (Java) / verify.Rules.decide."""
+                outcome: str | None, path: str | None, challenge: float | None = None,
+                challengeable: bool = True, challenge_when: str | None = None) -> dict[str, Any]:
+    """The precedence branch that decided, in words: the same precedence as realy.policy.decide (which
+    mirrors RuleSet.decide in Java)."""
+    from .policy import NAMES, decide
     hits = [r for r in rule_results if r["hit"]]
     by = lambda a: [r["id"] for r in hits if r["action"] == a]  # noqa: E731
     has_score = score is not None and not (isinstance(score, float) and math.isnan(score))
-    if by("DECLINE"):
-        branch, why = "decline rule", f"DECLINE rule {', '.join(by('DECLINE'))} fired: DECLINE rules win over everything"
-    elif by("ALLOW") or by("APPROVE"):
-        branch, why = "allow rule", f"ALLOW rule {', '.join(by('ALLOW') + by('APPROVE'))} fired"
-    elif has_score and score >= decline:
-        branch, why = "score decline", f"model score {score:.3f} >= decline threshold {decline:.2f}"
-    elif by("REVIEW"):
-        branch, why = "review rule", f"REVIEW rule {', '.join(by('REVIEW'))} fired" + (
+    code, branch = decide({r["action"] for r in hits}, score if has_score else None, review, decline, challenge,
+                          challengeable)
+    can = "can be stepped up" if challengeable else "cannot be stepped up"
+    can += f" ({challenge_when})" if challenge_when else ""
+    if branch == "decline rule":
+        why = f"DECLINE rule {', '.join(by('DECLINE'))} fired: DECLINE rules win over everything"
+    elif branch == "allow rule":
+        why = f"ALLOW rule {', '.join(by('ALLOW') + by('APPROVE'))} fired"
+    elif branch == "score decline":
+        why = f"model score {score:.3f} >= decline threshold {decline:.2f}"
+    elif branch == "challenge rule":
+        why = f"CHALLENGE rule {', '.join(by('CHALLENGE'))} fired and the payment {can}: step-up"
+    elif branch == "challenge rule, not challengeable":
+        why = f"CHALLENGE rule {', '.join(by('CHALLENGE'))} fired, but the payment {can}: sent to review instead"
+    elif branch == "score challenge":
+        why = f"model score {score:.3f} >= challenge threshold {challenge:.2f} and the payment {can}: step-up"
+    elif branch == "review rule":
+        why = f"REVIEW rule {', '.join(by('REVIEW'))} fired" + (
             f" (score {score:.3f} below the decline threshold {decline:.2f})" if has_score else "")
-    elif has_score and score >= review:
-        branch, why = "score review", f"model score {score:.3f} >= review threshold {review:.2f}"
+    elif branch == "score review":
+        why = f"model score {score:.3f} >= review threshold {review:.2f}" + (
+            f" (in the challenge band, but the payment {can})" if challenge is not None and score >= challenge else "")
     else:
-        branch = "approve"
         why = "no rule fired" + (f" and the score {score:.3f} is below the review threshold {review:.2f}" if has_score
                                  else " and there was no model score")
     if not has_score and path and path != "FULL":
         why += f" (decided without the model: {path.lower().replace('_', ' ')})"
-    return {"outcome": outcome, "branch": branch, "why": why, "thresholds": {"review": review, "decline": decline}}
+    th = {"review": review, "decline": decline, **({"challenge": challenge} if challenge is not None else {})}
+    return {"outcome": outcome, "expected": NAMES[code], "branch": branch, "why": why, "thresholds": th,
+            "challengeable": challengeable}
+
 
 
 # ------------------------------------------------------------------------------------- labels

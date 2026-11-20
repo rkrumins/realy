@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException
 from ..features import load_schema
 from ..features.derived import CARD_TYPE, CHANNEL, ENTRY_MODE, PAYMENT_TYPE
 
-OUTCOME = {0: None, 1: "APPROVE", 2: "REVIEW", 3: "DECLINE"}
+OUTCOME = {0: None, 1: "APPROVE", 2: "REVIEW", 3: "DECLINE", 4: "CHALLENGE"}
 PATH = {0: "FULL", 1: "RULES_ONLY_FALLBACK", 2: "PROVISIONAL", 3: "FINAL_AFTER_PROVISIONAL", 4: "ECHO"}
 INGRESS = {0: None, 1: "SYNC_GRPC", 2: "SYNC_HTTP", 3: "ASYNC_KAFKA_GATEWAY", 4: "ASYNC_FLINK_INLINE"}
 def _fraud_names(run_dir=None) -> dict[int, str]:
@@ -281,21 +281,31 @@ class Explorer:
         from ..explain import explain_rules, integrated_gradients, policy_path, top_attributions
         from ..features.derived import event_view
         from ..scenario import Scenario
-        from ..verify.verify import ProxyScorer, Rules
+        from ..policy import RuleSet as Rules
+        from ..verify.verify import ProxyScorer
         sc = Scenario.model_validate(_json.loads((d / "scenario.json").read_text()))
         cfg = sc.scoring_config()
         from ..scenario import run_rules
         rules_yaml, rules_source = run_rules(d, sc)
-        rules = Rules(rules_yaml)
-        review = float(cfg.get("review_threshold") or 0) or rules.review
-        decline = float(cfg.get("decline_threshold") or 0) or rules.decline
+        rules = Rules(rules_yaml).with_thresholds(cfg.get("review_threshold"), cfg.get("decline_threshold"),
+                                                  cfg.get("challenge_threshold"))
         fmap = {f["name"]: float(f["value"]) for f in features}
-        results = explain_rules(rules_yaml, fmap, event_view(er))
+        view = event_view(er)
+        results = explain_rules(rules_yaml, fmap, view)
         score = decision.get("score")
         out: dict[str, Any] = {"rule_set": rules.version, "rules_source": rules_source, "rules": results,
-                               "policy": policy_path(results, score, review, decline, decision.get("outcome"),
-                                                     decision.get("path")),
+                               "policy": policy_path(results, score, rules.review, rules.decline, decision.get("outcome"),
+                                                     decision.get("path"), rules.challenge, rules.challengeable(view),
+                                                     rules.challenge_when),
                                "served_rule_hits": decision.get("rule_hits")}
+        # the step-up's fate (instrument-only latent result): what happens if this payment is challenged
+        from .. import challenge as stepup
+        r = int(stepup.for_run(d, np.asarray([int(er["event_id"])], np.uint64), np.asarray([bool(er["is_fraud"])]),
+                               np.asarray([int(er["fraud_type"])]))[0])
+        out["stepup"] = {"result": stepup.RESULTS[r], "challenged": decision.get("outcome") == "CHALLENGE",
+                         "final": (None if decision.get("outcome") != "CHALLENGE" else
+                                   {stepup.PASS: "APPROVED after passing the step-up", stepup.FAIL: "DECLINED: failed the step-up",
+                                    stepup.ABANDON: "ABANDONED at the step-up"}[r])}
         if score is not None and decision.get("path") in ("FULL", None):
             import warnings
             with warnings.catch_warnings():

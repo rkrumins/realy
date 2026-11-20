@@ -279,13 +279,27 @@ export interface Report {
   sync?: Record<string, number>;
 }
 
+export interface StateLineage {
+  mode: "fresh" | "warm" | "none";
+  inherited_runs?: number | null;
+  inherited?: string[];
+  unknown?: boolean;
+}
+
 export interface VerifyResult {
   run_id: string;
   passed?: boolean;
+  /** every failed check, in words (absent on results older than the field) */
+  reasons?: string[];
+  /** only the feature check failed, and only because the state was not this run's own */
+  inconclusive?: boolean;
+  state?: StateLineage | null;
   error?: string;
   features?: {
     compared_events: number; sampling_mod: number; entities_checked: string[];
     events_with_defaulted_features?: number; exact_set_agreement: number | null;
+    exact_set_target?: number; exact_set_ok?: boolean;
+    comparable?: boolean; not_comparable_because?: string;
     per_feature: Record<string, { agreement: number; max_abs_diff: number; entity: string | null; source: string }>;
     worst: [string, number][]; note: string;
   };

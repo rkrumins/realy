@@ -34,9 +34,33 @@ def _job_key() -> str:
     return JOB_KEY.format(pipeline=pipeline())
 
 
-def record_job(jid: str, group: str, world: str | None, r=None) -> None:
+LINEAGE_KEEP = 50   # run ids kept on the record (the count is exact beyond that)
+
+
+def record_job(jid: str, group: str, world: str | None, r=None, lineage: dict | None = None) -> None:
+    """`lineage` is which runs fed events into this state since it last started fresh:
+    {"runs": [run ids, oldest first, at most LINEAGE_KEEP], "count": n}. A fresh job starts it empty;
+    a job restored from a savepoint carries the previous job's on."""
     from .seed import redis_client
-    (r or redis_client()).set(_job_key(), json.dumps({"jid": jid, "group": group, "world": world, "at": time.time()}))
+    lin = lineage or {"runs": [], "count": 0}
+    (r or redis_client()).set(_job_key(), json.dumps({"jid": jid, "group": group, "world": world, "at": time.time(),
+                                                      "lineage": lin}))
+
+
+def note_run(run_id: str, r=None) -> dict | None:
+    """Add a run to the running job's state lineage, before it sends any event, and return the lineage
+    as it was BEFORE (the runs whose events this run's features also see). None without a record."""
+    from .seed import redis_client
+    r = r or redis_client()
+    rec = job_record(r)
+    if not rec:
+        return None
+    before = rec.get("lineage") or {"runs": [], "count": 0, "unknown": True}
+    runs = [x for x in before.get("runs", []) if x != run_id] + [run_id]
+    rec["lineage"] = {"runs": runs[-LINEAGE_KEEP:], "count": int(before.get("count", 0)) + 1,
+                      **({"unknown": True} if before.get("unknown") else {})}
+    r.set(_job_key(), json.dumps(rec))
+    return before
 
 
 def job_record(r=None) -> dict | None:
@@ -71,6 +95,8 @@ def state_provenance(rest: str | None, r=None) -> dict:
         out["why"] = f"the provenance record is for job {str(rec.get('jid'))[:8]}, job {out['running'][:8]} is running"
     else:
         out["world"], out["group"] = rec.get("world"), rec.get("group")
+        # records written before lineage existed: which runs built the state is unknown
+        out["lineage"] = rec.get("lineage") or {"runs": [], "count": 0, "unknown": True}
         out["why"] = "recorded"
     return out
 
@@ -187,6 +213,14 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
             log(f"flink: {want} already running")
             return [j["jid"] for j in running if j["name"] == want][0]
         savepoint = None
+        try:
+            prev = job_record()
+        except Exception:  # noqa: BLE001
+            prev = None
+        prev_ids = {j["jid"] for j in running}
+        # state kept (savepoint or surviving blobs) keeps the runs that built it; a fresh job starts with none
+        carried = ((prev or {}).get("lineage") or {"runs": [], "count": 0, "unknown": True}) \
+            if prev and prev.get("jid") in prev_ids else {"runs": [], "count": 0, "unknown": True}
         for j in running:
             if fresh:
                 log(f"flink: cancelling {j['name']} (fresh state requested)")
@@ -219,7 +253,9 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
             time.sleep(0.5)
         log(f"flink: {want} running (job {jid[:8]}, parallelism {par}{', restored from savepoint' if savepoint else ''})")
         try:
-            record_job(jid, group, world)
+            # fresh: Flink state cancelled and the runner cleared the stream blobs. Otherwise (savepoint
+            # restore, or a failed savepoint whose blobs survive in the store) the earlier runs remain.
+            record_job(jid, group, world, lineage={"runs": [], "count": 0} if fresh else carried)
         except Exception as e:  # noqa: BLE001 - without a record the next run starts fresh: safe
             log(f"warn: could not record the job's state provenance ({e.__class__.__name__})")
         return jid

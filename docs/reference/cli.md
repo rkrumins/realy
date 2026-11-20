@@ -134,7 +134,7 @@ pulsebench report RUN_DIR
 
 ## `pulsebench rules-whatif`
 
-Replay rule sets / thresholds over a finished run offline: precision, recall, FPR, $ approved per variant and per rule, against the run's own policy. Tune on a training run, confirm on the evaluation run.
+Replay rule sets / thresholds over a finished run offline: precision, recall, FPR, step-ups and their outcomes, $ approved per variant and per rule, against the run's own policy. Tune on a training run, confirm on the evaluation run.
 
 ```
 pulsebench rules-whatif RUN_DIR [OPTIONS]
@@ -146,6 +146,7 @@ pulsebench rules-whatif RUN_DIR [OPTIONS]
 | `--rules` | list[path] |  | candidate rule set YAML (repeatable) |
 | `--review` | float |  | override the review threshold for every variant |
 | `--decline` | float |  | override the decline threshold for every variant |
+| `--challenge` | float |  | override the step-up (CHALLENGE) threshold for every variant |
 | `--sample-mod` | int | `1` | evaluate events with id % N == 0 only (speed) |
 | `--model` | list[path] |  | also re-score the served vectors with these proxy weights (repeatable): model comparison on identical traffic |
 | `--json` | flag |  |  |
@@ -165,6 +166,7 @@ pulsebench run SCENARIO [OPTIONS]
 | `--collectors` | int |  | collector processes (default: 1 per 15k TPS) |
 | `--run-id` | str |  |  |
 | `--wait-lease` | float |  | seconds to wait when another run holds the pipeline lease |
+| `--verify` | flag |  | verify exactly afterwards (starts from fresh feature state when the warm state holds other runs' events) |
 
 ## `pulsebench scenarios`
 

@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 PCTS = (50, 90, 99, 99.9)
-OUTCOME = {1: "APPROVE", 2: "REVIEW", 3: "DECLINE"}
+from ..policy import NAMES as OUTCOME  # noqa: E402  (APPROVE, REVIEW, DECLINE, CHALLENGE)
 # typology names come from the run's use-case snapshot (python/realy/usecases.py), not a fixed table
 STEP_ORDER = ["schedule_lag", "produce_ack", "ingress", "queue_wait", "deserialize", "shuffle", "state_features",
               "async_wait", "feature_lookup", "feature_assemble", "model_call", "model_batch_wait",
@@ -275,19 +275,27 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     # ---------------------------------------------------------------- sustainability
     sust = {}
     if series_p99:
-        mins = []
         w = 60 if scenario.traffic.duration_s >= 180 else 10
-        for i in range(int(warm), len(series_p99), w):
-            vals = [v for v in series_p99[i:i + w] if v is not None]
-            if vals:
-                mins.append(float(np.median(vals)))
+        mins = _window_medians(series_p99, int(warm), len(series_p99), w)
         slope = float(np.polyfit(np.arange(len(mins)), mins, 1)[0]) if len(mins) >= 3 else 0.0
         half = len(backlog) // 2
         tail_backlog = backlog[half:int(scenario.traffic.duration_s)] if backlog else []
         growing = bool(len(tail_backlog) > 5 and tail_backlog[-1] > tail_backlog[0] + max(1000, 0.05 * cum_e[-1]))
-        drift = abs(slope) > 0.1 * (np.median(mins) if mins else 1) and slope > 0
+        # p99 drift is judged where the offered load is constant: a scheduled step / ramp, or an operator's
+        # live rate change, raises p99 by design (that is the knee analysis' job, not drift)
+        segs = _constant_rate_segments(scenario, run, t0, int(warm), len(series_p99))
+        judged = []
+        for a, b in segs:
+            sm = _window_medians(series_p99, a, b, w)
+            if len(sm) >= 3:
+                sl = float(np.polyfit(np.arange(len(sm)), sm, 1)[0])
+                judged.append({"from_s": a, "to_s": b, "p99_by_window_ms": sm, "slope_ms_per_window": sl,
+                               "drift": bool(sl > 0 and sl > 0.1 * float(np.median(sm)))})
+        drift = any(x["drift"] for x in judged)
         sust = {"window_s": w, "p99_by_window_ms": mins, "p99_slope_ms_per_window": slope,
                 "backlog_growing": growing, "max_backlog": int(max(backlog)) if backlog else 0,
+                "drift_segments": judged, "rate_changes": len((run or {}).get("rate_changes") or []),
+                "drift_judged": bool(judged) or None,
                 "sustainable": not growing and not drift}
 
     # ---------------------------------------------------------------- knee
@@ -478,18 +486,26 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
     ftype = ev["fraud_type"].to_numpy()
     amt = ev["amount_usd_minor"].to_numpy()
     legit = (~ev["is_fraud"].to_numpy().astype(bool)) & have
-    flagged = outcome >= 2
+    flagged = outcome >= 2          # any intervention: REVIEW, DECLINE or CHALLENGE (step-up)
     declined = outcome == 3
+    # what became of each payment after a step-up: the instrument's latent result (realy.challenge)
+    from .. import challenge as stepup
+    latent = stepup.for_run(run_dir, eid, ev["is_fraud"].to_numpy().astype(bool), ftype)
+    fin = stepup.final(outcome, latent)
+    let_through = have & (fin == stepup.APPROVED)            # paid: approved outright or after the step-up
+    stopped = have & ((fin == stepup.DECLINED) | (fin == stepup.ABANDONED))
     res: dict[str, Any] = {
         "fraud_events": int(fraud.sum()), "legit_events": int(legit.sum()),
         "recall_flagged": float(flagged[fraud].mean()) if fraud.any() else None,
         "recall_declined": float(declined[fraud].mean()) if fraud.any() else None,
+        "recall_stopped": float(stopped[fraud].mean()) if fraud.any() else None,
         "precision_flagged": float(fraud[flagged].mean()) if flagged.any() else None,
         "false_positive_rate": float(flagged[legit].mean()) if legit.any() else None,
         "legit_flagged": int((flagged & legit).sum()), "legit_declined": int((declined & legit).sum()),
         "fraud_flagged": int((flagged & fraud).sum()), "fraud_declined": int((declined & fraud).sum()),
-        "fraud_usd_total": float(amt[fraud].sum() / 100), "fraud_usd_approved": float(amt[fraud & ~flagged].sum() / 100),
+        "fraud_usd_total": float(amt[fraud].sum() / 100), "fraud_usd_approved": float(amt[fraud & let_through].sum() / 100),
         "by_type": {},
+        "stepup": _stepup(run_dir, outcome, latent, fin, fraud, legit, ftype, amt),
     }
     # per-rule / per-reason precision and false-positive contribution
     per_rule: dict[str, dict[str, int]] = {}
@@ -538,9 +554,87 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
             ttd.append(int(first[0]) if first.size else int(o.size))
         res["by_type"][name] = {"events": int(m.sum()), "campaigns": int(np.unique(camp).size),
                                 "recall_flagged": float((oc >= 2).mean()), "recall_declined": float((oc == 3).mean()),
+                                "recall_stopped": float(stopped[m].mean()),
                                 "approved_before_first_decline_mean": float(np.mean(ttd)),
-                                "usd_approved": float(amt[m][oc == 1].sum() / 100)}
+                                "usd_approved": float(amt[m & let_through].sum() / 100)}
     return res
+
+
+def _window_medians(series: list[float | None], a: int, b: int, w: int) -> list[float]:
+    out = []
+    for i in range(a, b, w):
+        if i + w > b and out:
+            break                      # a trailing partial window is noise, not a trend
+        vals = [v for v in series[i:min(b, i + w)] if v is not None]
+        if vals:
+            out.append(float(np.median(vals)))
+    return out
+
+
+def _constant_rate_segments(scenario: Scenario, run: dict[str, Any] | None, t0: int | None, warm: int,
+                            n: int) -> list[tuple[int, int]]:
+    """[from_s, to_s) stretches of the measured window where the offered load is constant: the whole
+    window for a constant profile, each level of a step profile (after its 20% transition), and none
+    for ramp / spike / sine; every operator live rate change splits a stretch (10 s settle after it)."""
+    prof = scenario.traffic.profile
+    if prof.kind == "constant":
+        segs = [(warm, n)]
+    elif prof.kind == "step":
+        width = prof.step_duration_s or 60.0
+        segs = [(max(warm, int(li * width + 0.2 * width)), min(n, int((li + 1) * width)))
+                for li in range(int(math.ceil(n / width)))]
+    else:
+        return []
+    cuts = sorted((c["at_us"] - t0) / 1e6 for c in ((run or {}).get("rate_changes") or []) if t0 and c.get("at_us"))
+    for c in cuts:
+        nxt = []
+        for a, b in segs:
+            if c < b and c + 10 > a:           # the change, or its 10 s settle, overlaps this stretch
+                if c > a:
+                    nxt.append((a, int(c)))
+                nxt.append((max(a, int(math.ceil(c + 10))), b))
+            else:
+                nxt.append((a, b))
+        segs = nxt
+    return [(a, b) for a, b in segs if b - a > 0]
+
+
+def _stepup(run_dir: Path, outcome: np.ndarray, latent: np.ndarray, fin: np.ndarray, fraud: np.ndarray,
+            legit: np.ndarray, ftype: np.ndarray, amt: np.ndarray) -> dict[str, Any] | None:
+    """Step-up economics: who was challenged, who passed, failed or gave up, and what it cost. A
+    challenge stops most automated fraud (no OTP, no PIN) but not a phished account takeover or a
+    scam victim authorising their own payment, and every challenged good customer is friction, some
+    of it a lost sale. None when the run issued no CHALLENGE."""
+    from .. import challenge as stepup
+    ch = outcome == stepup.CHALLENGED
+    if not ch.any():
+        return None
+    from ..usecases import for_run
+
+    def split(m: np.ndarray) -> dict[str, int]:
+        return {name: int((m & ch & (latent == code)).sum()) for code, name in stepup.RESULTS.items()}
+    lg, fr = legit & ch, fraud & ch
+    names = for_run(run_dir).fraud_type_names()
+    by_type = {}
+    for t in np.unique(ftype[fr]):
+        m = fr & (ftype == t)
+        by_type[names.get(int(t), str(t))] = {"challenged": int(m.sum()), **split(fraud & (ftype == t)),
+                                              "usd_passed": float(amt[m & (latent == stepup.PASS)].sum() / 100)}
+    return {
+        "challenged": int(ch.sum()), "legit_challenged": int(lg.sum()), "fraud_challenged": int(fr.sum()),
+        "legit_challenge_rate": float(lg.sum() / max(1, legit.sum())),
+        "fraud_challenge_rate": float(fr.sum() / max(1, fraud.sum())),
+        "legit": split(legit), "fraud": split(fraud),
+        "fraud_stopped": int((fr & (latent != stepup.PASS)).sum()),
+        "fraud_passed": int((fr & (latent == stepup.PASS)).sum()),
+        "fraud_usd_passed": float(amt[fr & (latent == stepup.PASS)].sum() / 100),
+        "legit_abandoned": int((lg & (latent == stepup.ABANDON)).sum()),
+        "lost_sales_usd": float(amt[lg & (latent == stepup.ABANDON)].sum() / 100),
+        "legit_failed": int((lg & (latent == stepup.FAIL)).sum()),
+        "by_type": dict(sorted(by_type.items(), key=lambda kv: -kv[1]["challenged"])),
+        "note": "results are the instrument's simulated step-up outcomes (scenario fraud.challenge and each "
+                "typology's challenge rates); the system under test never sees them",
+    }
 
 
 def _evaluation(run_dir: Path, d: pa.Table) -> dict[str, Any]:
