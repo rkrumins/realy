@@ -147,7 +147,22 @@ def _parse_proto(text: str) -> list[dict[str, Any]]:
             else:
                 comments.append(c)
             continue
+        if cur is not None and cur["kind"] == "service":
+            m = re.match(r"^rpc\s+(\w+)\s*\(\s*(stream\s+)?([\w.]+)\s*\)\s*returns\s*\(\s*(stream\s+)?([\w.]+)\s*\)", line)
+            if m:
+                cur["items"].append({"name": m.group(1), "request": ("stream " if m.group(2) else "") + m.group(3),
+                                     "response": ("stream " if m.group(4) else "") + m.group(5), "doc": " ".join(comments)})
+            elif line == "}":
+                blocks.append(cur)
+                cur = None
+            comments = []
+            continue
         if cur is None:
+            ms = re.match(r"^service\s+(\w+)\s*\{", line)
+            if ms:
+                cur = {"kind": "service", "name": ms.group(1), "doc": " ".join(comments), "items": []}
+                comments = []
+                continue
             m = re.match(r"^(message|enum)\s+(\w+)\s*\{(.*)$", line)
             if not m:
                 comments = []          # file header, syntax/package/option lines
@@ -213,6 +228,73 @@ def config() -> str:
                  "  on_deadline: FALLBACK_RULES\n  feature_lookup_delay: { uniform: { min_ms: 2, max_ms: 8 } }\n"
                  "model_server:\n  service_time: { uniform: { min_ms: 30, max_ms: 100 } }\n  workers: 8\n"
                  "  max_batch: 16\n  max_queue_delay_us: 2000\n```\n")
+    return "".join(parts)
+
+
+# ------------------------------------------------------------------------------------------ messages
+# Who writes and who reads each topic (the wiring the services implement; kept next to the generator so
+# a new producer or consumer is one row here).
+TOPIC_FLOWS = {
+    "payments.events.raw": ("emitter (`emit/driver.py`, Java load-emitter), gateway mirror of sync decisions",
+                            "Flink feature job (`FraudJob` source), gateway Kafka ingress (`KafkaIngress`), ClickHouse `events_raw` (Kafka engine)"),
+    "payments.decisions": ("gateway (`DecisionSink`), Flink inline job (`decisions-sink`)",
+                           "collector (`collect/collector.py`), ClickHouse `decisions` (Kafka engine), console live feed"),
+    "payments.labels": ("emitter, at each label's simulated time (needs the `x-run-id` header)",
+                        "ClickHouse `labels` (Kafka engine) for training and reports"),
+    "bench.control": ("runner (`common/control.py`), console control drawer (`/api/live/*`)",
+                      "gateway, model server, Flink jobs, emitters (`<target>:<cmd>` keys; `*` = every service)"),
+    "bench.metrics": ("every service and process (1 s `MetricsSnapshot`: emitter, collector, gateway, model, flink)",
+                      "runner (`metrics.jsonl`, guardrails), console telemetry hub (Live)"),
+}
+
+
+def messages() -> str:
+    """Every message, enum and service of the contracts, field by field, and every topic with its key,
+    value, headers, producers and consumers."""
+    root = REPO_ROOT / "contracts" / "proto"
+    files = sorted(root.rglob("*.proto"))
+    spec = yaml.safe_load((REPO_ROOT / "contracts" / "kafka" / "topics.yaml").read_text())
+    parts = [HEADER.format(src="contracts/proto/**/*.proto, contracts/kafka/topics.yaml"), "# Messages\n\n",
+             "Every message that goes in or out of the pipeline. The protobuf files are the contract: the Java "
+             "stubs (`java/contracts-java`), the Python stubs (`python/realy/*/v1/*_pb2.py`) and this page are "
+             "generated from them. Fields are only ever appended (a number is never reused or renumbered; "
+             "`tests/test_proto_compat.py` fails otherwise), so old readers and old data keep working.\n\n",
+             "## Topics\n\n"]
+    rows = []
+    for name, t in (spec.get("topics") or {}).items():
+        prod, cons = TOPIC_FLOWS.get(name, ("", ""))
+        rows.append([_code(name), _code(t.get("value", "")), t.get("key", ""), ", ".join(_code(h) for h in t.get("headers") or []),
+                     t.get("partitions", ""), prod, cons])
+    parts.append(_table(["Topic", "Value", "Key", "Headers", "Partitions", "Produced by", "Consumed by"], rows))
+    parts.append("\nPartition counts are the production defaults; the compose stack creates 12 per topic. "
+                 "Headers on `payments.events.raw`: `x-bench-trace` (a `BenchTrace`: run, intended and sent time, "
+                 "clock domain), `x-run-id` (the owning run; `:backfill` / `:prime` suffixes for history), "
+                 "`x-backfill` (history: Flink folds it into state, the gateway does not score it), `x-mirrored` "
+                 "(a sync decision already made, mirrored so Flink updates state).\n\n")
+    for f in files:
+        rel = f.relative_to(REPO_ROOT)
+        blocks = [b for b in _parse_proto(f.read_text()) if b["kind"] != "section"]
+        if not blocks:
+            continue
+        pkg = re.search(r"^package\s+([\w.]+);", f.read_text(), re.M)
+        parts.append(f"## `{pkg.group(1) if pkg else f.stem}` ({f.name})\n\nSource: `{rel}`\n\n")
+        for b in blocks:
+            kind = {"enum": " (enum)", "service": " (gRPC service)"}.get(b["kind"], "")
+            parts.append(f"### `{b['name']}`{kind}\n\n")
+            if b["doc"]:
+                parts.append(b["doc"] + "\n\n")
+            if not b["items"]:
+                continue
+            if b["kind"] == "service":
+                parts.append(_table(["RPC", "Request", "Response", "Description"],
+                                    [[_code(i["name"]), _code(i["request"]), _code(i["response"]), i["doc"]] for i in b["items"]]))
+            elif b["kind"] == "enum":
+                parts.append(_table(["Value", "Number", "Meaning"], [[_code(i["name"]), i["num"], i["doc"]] for i in b["items"]]))
+            else:
+                parts.append(_table(["#", "Field", "Type", "Description"],
+                                    [[i["num"], _code(i["name"]), _code(i["type"]) + (f" (oneof {i['oneof']})" if i.get("oneof") else ""),
+                                      i["doc"]] for i in b["items"]]))
+            parts.append("\n")
     return "".join(parts)
 
 
@@ -390,7 +472,8 @@ def scenarios() -> str:
 
 
 PAGES = {"scenario-schema.md": scenario_schema, "config.md": config, "cli.md": cli, "http-api.md": http_api,
-         "features.md": features, "rules.md": rules, "topics.md": topics, "scenarios.md": scenarios}
+         "features.md": features, "rules.md": rules, "topics.md": topics, "scenarios.md": scenarios,
+         "messages.md": messages}
 
 
 def write() -> list[Path]:

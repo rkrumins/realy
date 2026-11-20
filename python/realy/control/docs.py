@@ -21,8 +21,8 @@ NAV: list[tuple[str, list[str]]] = [
                   "synthetic-data.md", "latency-budget.md"]),
     ("Run & deploy", ["running-benchmarks.md", "deployment-docker.md", "deployment-kubernetes.md", "k8s-l4.md",
                       "production.md", "capacity-planning.md", "operations.md", "security.md"]),
-    ("Develop", ["developer-guide.md", "dev/flink-job.md"]),
-    ("Reference", ["reference/scenario-schema.md", "reference/config.md", "reference/cli.md", "reference/http-api.md",
+    ("Develop", ["developer-guide.md", "dev/flink-job.md", "dev/messages.md"]),
+    ("Reference", ["reference/messages.md", "reference/scenario-schema.md", "reference/config.md", "reference/cli.md", "reference/http-api.md",
                    "reference/features.md", "reference/rules.md", "reference/topics.md", "reference/scenarios.md"]),
 ]
 

@@ -1,0 +1,1146 @@
+{
+ "control.AuditFailure": {
+  "0": {
+   "name": "SPOOL_LOCAL"
+  },
+  "1": {
+   "name": "FAIL_CLOSED"
+  }
+ },
+ "control.Bimodal": {
+  "1": {
+   "name": "median_ms",
+   "type": "double"
+  },
+  "2": {
+   "name": "p99_ms",
+   "type": "double"
+  },
+  "3": {
+   "name": "tail_prob",
+   "type": "double"
+  },
+  "4": {
+   "name": "tail_min_ms",
+   "type": "double"
+  },
+  "5": {
+   "name": "tail_max_ms",
+   "type": "double"
+  }
+ },
+ "control.ControlMessage": {
+  "1": {
+   "name": "run_id",
+   "type": "string"
+  },
+  "10": {
+   "name": "scoring",
+   "type": "ScoringConfig"
+  },
+  "11": {
+   "name": "model_server",
+   "type": "ModelServerConfig"
+  },
+  "12": {
+   "name": "rate",
+   "type": "RateCommand"
+  },
+  "13": {
+   "name": "phase",
+   "type": "RunPhase"
+  },
+  "14": {
+   "name": "ingress",
+   "type": "IngressCommand"
+  },
+  "2": {
+   "name": "issued_at_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "version",
+   "type": "uint64"
+  },
+  "4": {
+   "name": "target",
+   "type": "string"
+  }
+ },
+ "control.Empirical": {
+  "1": {
+   "name": "quantiles",
+   "type": "repeated double"
+  },
+  "2": {
+   "name": "ms",
+   "type": "repeated double"
+  }
+ },
+ "control.Fixed": {
+  "1": {
+   "name": "ms",
+   "type": "double"
+  }
+ },
+ "control.IngressCommand": {
+  "1": {
+   "name": "kafka_enabled",
+   "type": "bool"
+  }
+ },
+ "control.LatencyDist": {
+  "1": {
+   "name": "fixed",
+   "type": "Fixed"
+  },
+  "10": {
+   "name": "error_rate",
+   "type": "double"
+  },
+  "11": {
+   "name": "timeout_rate",
+   "type": "double"
+  },
+  "2": {
+   "name": "uniform",
+   "type": "Uniform"
+  },
+  "3": {
+   "name": "normal",
+   "type": "Normal"
+  },
+  "4": {
+   "name": "lognormal",
+   "type": "LogNormal"
+  },
+  "5": {
+   "name": "bimodal",
+   "type": "Bimodal"
+  },
+  "6": {
+   "name": "empirical",
+   "type": "Empirical"
+  }
+ },
+ "control.LogNormal": {
+  "1": {
+   "name": "median_ms",
+   "type": "double"
+  },
+  "2": {
+   "name": "p99_ms",
+   "type": "double"
+  },
+  "3": {
+   "name": "max_ms",
+   "type": "double"
+  }
+ },
+ "control.MetricsSnapshot": {
+  "1": {
+   "name": "run_id",
+   "type": "string"
+  },
+  "2": {
+   "name": "source",
+   "type": "string"
+  },
+  "3": {
+   "name": "instance",
+   "type": "string"
+  },
+  "4": {
+   "name": "ts_us",
+   "type": "sfixed64"
+  },
+  "5": {
+   "name": "window_ms",
+   "type": "uint32"
+  },
+  "6": {
+   "name": "counters",
+   "type": "map<string, double>"
+  },
+  "7": {
+   "name": "stages",
+   "type": "repeated StageStat"
+  },
+  "8": {
+   "name": "phase",
+   "type": "RunPhase"
+  }
+ },
+ "control.ModelServerConfig": {
+  "1": {
+   "name": "service_time",
+   "type": "LatencyDist"
+  },
+  "2": {
+   "name": "per_item_us",
+   "type": "double"
+  },
+  "3": {
+   "name": "workers",
+   "type": "uint32"
+  },
+  "4": {
+   "name": "max_batch",
+   "type": "uint32"
+  },
+  "5": {
+   "name": "max_queue_delay_us",
+   "type": "uint32"
+  },
+  "6": {
+   "name": "max_queue",
+   "type": "uint32"
+  },
+  "7": {
+   "name": "model_version",
+   "type": "string"
+  },
+  "8": {
+   "name": "weights_path",
+   "type": "string"
+  }
+ },
+ "control.Normal": {
+  "1": {
+   "name": "mean_ms",
+   "type": "double"
+  },
+  "2": {
+   "name": "sd_ms",
+   "type": "double"
+  },
+  "3": {
+   "name": "min_ms",
+   "type": "double"
+  },
+  "4": {
+   "name": "max_ms",
+   "type": "double"
+  }
+ },
+ "control.OnDeadline": {
+  "0": {
+   "name": "FALLBACK_RULES"
+  },
+  "1": {
+   "name": "TIMEOUT"
+  },
+  "2": {
+   "name": "PROVISIONAL_THEN_ASYNC"
+  }
+ },
+ "control.RateCommand": {
+  "1": {
+   "name": "tps",
+   "type": "double"
+  },
+  "2": {
+   "name": "multiplier",
+   "type": "double"
+  }
+ },
+ "control.RunPhase": {
+  "0": {
+   "name": "RUN_PHASE_UNSPECIFIED"
+  },
+  "1": {
+   "name": "PREPARE"
+  },
+  "2": {
+   "name": "WARMUP"
+  },
+  "3": {
+   "name": "MEASURE"
+  },
+  "4": {
+   "name": "DRAIN"
+  },
+  "5": {
+   "name": "COMPLETE"
+  },
+  "6": {
+   "name": "ABORTED"
+  }
+ },
+ "control.ScoringConfig": {
+  "1": {
+   "name": "version",
+   "type": "string"
+  },
+  "10": {
+   "name": "decline_threshold",
+   "type": "float"
+  },
+  "11": {
+   "name": "microbatch_window_us",
+   "type": "uint32"
+  },
+  "12": {
+   "name": "microbatch_max",
+   "type": "uint32"
+  },
+  "13": {
+   "name": "hedge_after_ms",
+   "type": "uint32"
+  },
+  "14": {
+   "name": "feature_sample_permille",
+   "type": "uint32"
+  },
+  "16": {
+   "name": "rule_set_yaml",
+   "type": "string"
+  },
+  "17": {
+   "name": "audit_on_failure",
+   "type": "AuditFailure"
+  },
+  "18": {
+   "name": "self_inclusion",
+   "type": "bool"
+  },
+  "19": {
+   "name": "echo",
+   "type": "bool"
+  },
+  "2": {
+   "name": "budget_ms",
+   "type": "uint32"
+  },
+  "20": {
+   "name": "challenge_threshold",
+   "type": "float"
+  },
+  "3": {
+   "name": "feature_deadline_ms",
+   "type": "uint32"
+  },
+  "4": {
+   "name": "model_deadline_ms",
+   "type": "uint32"
+  },
+  "5": {
+   "name": "on_deadline",
+   "type": "OnDeadline"
+  },
+  "6": {
+   "name": "feature_lookup_delay",
+   "type": "LatencyDist"
+  },
+  "7": {
+   "name": "model_extra_delay",
+   "type": "LatencyDist"
+  },
+  "8": {
+   "name": "feature_source",
+   "type": "string"
+  },
+  "9": {
+   "name": "review_threshold",
+   "type": "float"
+  }
+ },
+ "control.StageStat": {
+  "1": {
+   "name": "name",
+   "type": "string"
+  },
+  "2": {
+   "name": "count",
+   "type": "uint64"
+  },
+  "3": {
+   "name": "p50_ms",
+   "type": "double"
+  },
+  "4": {
+   "name": "p90_ms",
+   "type": "double"
+  },
+  "5": {
+   "name": "p99_ms",
+   "type": "double"
+  },
+  "6": {
+   "name": "p999_ms",
+   "type": "double"
+  },
+  "7": {
+   "name": "max_ms",
+   "type": "double"
+  }
+ },
+ "control.Uniform": {
+  "1": {
+   "name": "min_ms",
+   "type": "double"
+  },
+  "2": {
+   "name": "max_ms",
+   "type": "double"
+  }
+ },
+ "decision.DecisionPath": {
+  "0": {
+   "name": "PATH_FULL"
+  },
+  "1": {
+   "name": "PATH_RULES_ONLY_FALLBACK"
+  },
+  "2": {
+   "name": "PATH_PROVISIONAL"
+  },
+  "3": {
+   "name": "PATH_FINAL_AFTER_PROVISIONAL"
+  },
+  "4": {
+   "name": "PATH_ECHO"
+  }
+ },
+ "decision.DecisionRecord": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "10": {
+   "name": "degraded",
+   "type": "bool"
+  },
+  "11": {
+   "name": "ingress_mode",
+   "type": "IngressMode"
+  },
+  "12": {
+   "name": "instance_id",
+   "type": "string"
+  },
+  "13": {
+   "name": "decided_at_us",
+   "type": "sfixed64"
+  },
+  "14": {
+   "name": "revision",
+   "type": "uint32"
+  },
+  "15": {
+   "name": "event",
+   "type": "realy.payments.v1.TransactionEvent"
+  },
+  "16": {
+   "name": "features",
+   "type": "realy.features.v1.FeatureVector"
+  },
+  "17": {
+   "name": "trace",
+   "type": "realy.bench.v1.BenchTrace"
+  },
+  "18": {
+   "name": "feature_schema_version",
+   "type": "uint32"
+  },
+  "2": {
+   "name": "outcome",
+   "type": "Outcome"
+  },
+  "3": {
+   "name": "score",
+   "type": "float"
+  },
+  "4": {
+   "name": "reason_codes",
+   "type": "repeated string"
+  },
+  "5": {
+   "name": "rule_hits",
+   "type": "repeated RuleHit"
+  },
+  "6": {
+   "name": "model",
+   "type": "ModelResult"
+  },
+  "7": {
+   "name": "policy_version",
+   "type": "string"
+  },
+  "8": {
+   "name": "rule_set_version",
+   "type": "string"
+  },
+  "9": {
+   "name": "path",
+   "type": "DecisionPath"
+  }
+ },
+ "decision.IngressMode": {
+  "0": {
+   "name": "INGRESS_MODE_UNSPECIFIED"
+  },
+  "1": {
+   "name": "SYNC_GRPC"
+  },
+  "2": {
+   "name": "SYNC_HTTP"
+  },
+  "3": {
+   "name": "ASYNC_KAFKA_GATEWAY"
+  },
+  "4": {
+   "name": "ASYNC_FLINK_INLINE"
+  }
+ },
+ "decision.ModelResult": {
+  "1": {
+   "name": "model_name",
+   "type": "string"
+  },
+  "2": {
+   "name": "model_version",
+   "type": "string"
+  },
+  "3": {
+   "name": "deployment",
+   "type": "string"
+  },
+  "4": {
+   "name": "score",
+   "type": "float"
+  },
+  "5": {
+   "name": "raw_outputs",
+   "type": "repeated float"
+  },
+  "6": {
+   "name": "input_hash",
+   "type": "fixed64"
+  },
+  "7": {
+   "name": "timed_out",
+   "type": "bool"
+  },
+  "8": {
+   "name": "errored",
+   "type": "bool"
+  },
+  "9": {
+   "name": "batch_size",
+   "type": "uint32"
+  }
+ },
+ "decision.Outcome": {
+  "0": {
+   "name": "OUTCOME_UNSPECIFIED"
+  },
+  "1": {
+   "name": "APPROVE"
+  },
+  "2": {
+   "name": "REVIEW"
+  },
+  "3": {
+   "name": "DECLINE"
+  },
+  "4": {
+   "name": "CHALLENGE"
+  }
+ },
+ "decision.RuleHit": {
+  "1": {
+   "name": "rule_id",
+   "type": "string"
+  },
+  "2": {
+   "name": "action",
+   "type": "Outcome"
+  },
+  "3": {
+   "name": "reason",
+   "type": "string"
+  }
+ },
+ "features.Entity": {
+  "0": {
+   "name": "ENTITY_UNSPECIFIED"
+  },
+  "1": {
+   "name": "CUSTOMER"
+  },
+  "2": {
+   "name": "CARD"
+  },
+  "3": {
+   "name": "DEVICE"
+  },
+  "4": {
+   "name": "IP"
+  },
+  "5": {
+   "name": "MERCHANT"
+  },
+  "6": {
+   "name": "TERMINAL"
+  },
+  "7": {
+   "name": "PAYEE"
+  }
+ },
+ "features.EntityFreshness": {
+  "1": {
+   "name": "entity",
+   "type": "Entity"
+  },
+  "2": {
+   "name": "source",
+   "type": "FeatureSource"
+  },
+  "3": {
+   "name": "as_of_us",
+   "type": "sfixed64"
+  },
+  "4": {
+   "name": "updated_at_us",
+   "type": "sfixed64"
+  },
+  "5": {
+   "name": "found",
+   "type": "bool"
+  }
+ },
+ "features.FeatureSource": {
+  "0": {
+   "name": "FEATURE_SOURCE_UNSPECIFIED"
+  },
+  "1": {
+   "name": "STREAM"
+  },
+  "2": {
+   "name": "PROFILE"
+  },
+  "3": {
+   "name": "DERIVED"
+  }
+ },
+ "features.FeatureVector": {
+  "1": {
+   "name": "schema_version",
+   "type": "uint32"
+  },
+  "2": {
+   "name": "values",
+   "type": "repeated float"
+  },
+  "3": {
+   "name": "missing_bitmap",
+   "type": "bytes"
+  },
+  "4": {
+   "name": "computed_at_us",
+   "type": "sfixed64"
+  },
+  "5": {
+   "name": "freshness",
+   "type": "repeated EntityFreshness"
+  }
+ },
+ "grpc_predict_v2.ServerLiveRequest": {},
+ "grpc_predict_v2.ServerMetadataRequest": {},
+ "grpc_predict_v2.ServerReadyRequest": {},
+ "label.FraudLabel": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "10": {
+   "name": "amount_usd_minor",
+   "type": "int64"
+  },
+  "2": {
+   "name": "label_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "4": {
+   "name": "is_fraud",
+   "type": "bool"
+  },
+  "5": {
+   "name": "fraud_type",
+   "type": "FraudType"
+  },
+  "6": {
+   "name": "campaign_id",
+   "type": "uint64"
+  },
+  "7": {
+   "name": "source",
+   "type": "LabelSource"
+  },
+  "8": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "9": {
+   "name": "card_id",
+   "type": "uint64"
+  }
+ },
+ "label.FraudType": {
+  "0": {
+   "name": "FRAUD_TYPE_NONE"
+  },
+  "1": {
+   "name": "CARD_TESTING"
+  },
+  "10": {
+   "name": "FRIENDLY_FRAUD"
+  },
+  "2": {
+   "name": "ACCOUNT_TAKEOVER"
+  },
+  "3": {
+   "name": "LOST_STOLEN"
+  },
+  "4": {
+   "name": "COUNTERFEIT"
+  },
+  "5": {
+   "name": "MERCHANT_BREACH"
+  },
+  "6": {
+   "name": "ATM_CASHOUT"
+  },
+  "7": {
+   "name": "APP_SCAM_MULE"
+  },
+  "8": {
+   "name": "BUST_OUT"
+  },
+  "9": {
+   "name": "BOT_ECOM"
+  }
+ },
+ "label.LabelSource": {
+  "0": {
+   "name": "LABEL_SOURCE_UNSPECIFIED"
+  },
+  "1": {
+   "name": "CHARGEBACK"
+  },
+  "2": {
+   "name": "CUSTOMER_REPORT"
+  },
+  "3": {
+   "name": "INVESTIGATION"
+  }
+ },
+ "scoring_service.ScoreRequest": {
+  "1": {
+   "name": "event",
+   "type": "realy.payments.v1.TransactionEvent"
+  },
+  "2": {
+   "name": "trace",
+   "type": "realy.bench.v1.BenchTrace"
+  },
+  "3": {
+   "name": "deadline_ms",
+   "type": "uint32"
+  }
+ },
+ "scoring_service.ScoreResponse": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "outcome",
+   "type": "Outcome"
+  },
+  "3": {
+   "name": "score",
+   "type": "float"
+  },
+  "4": {
+   "name": "reason_codes",
+   "type": "repeated string"
+  },
+  "5": {
+   "name": "path",
+   "type": "DecisionPath"
+  },
+  "6": {
+   "name": "degraded",
+   "type": "bool"
+  },
+  "7": {
+   "name": "decided_at_us",
+   "type": "sfixed64"
+  },
+  "8": {
+   "name": "trace",
+   "type": "realy.bench.v1.BenchTrace"
+  }
+ },
+ "trace.BenchTrace": {
+  "1": {
+   "name": "run_id",
+   "type": "string"
+  },
+  "2": {
+   "name": "gen_id",
+   "type": "fixed32"
+  },
+  "3": {
+   "name": "seq",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "t_intended_us",
+   "type": "sfixed64"
+  },
+  "5": {
+   "name": "t_sent_us",
+   "type": "sfixed64"
+  },
+  "6": {
+   "name": "driver_domain",
+   "type": "fixed32"
+  },
+  "7": {
+   "name": "payload_crc32",
+   "type": "fixed32"
+  },
+  "8": {
+   "name": "flags",
+   "type": "uint32"
+  },
+  "9": {
+   "name": "spans",
+   "type": "repeated Span"
+  }
+ },
+ "trace.Span": {
+  "1": {
+   "name": "stage",
+   "type": "Stage"
+  },
+  "2": {
+   "name": "attr",
+   "type": "uint32"
+  },
+  "3": {
+   "name": "domain",
+   "type": "fixed32"
+  },
+  "4": {
+   "name": "start_us",
+   "type": "sfixed64"
+  },
+  "5": {
+   "name": "dur_us",
+   "type": "sfixed32"
+  }
+ },
+ "trace.Stage": {
+  "0": {
+   "name": "STAGE_UNSPECIFIED"
+  },
+  "10": {
+   "name": "INGEST"
+  },
+  "11": {
+   "name": "QUEUE_WAIT"
+  },
+  "12": {
+   "name": "DESERIALIZE"
+  },
+  "20": {
+   "name": "SHUFFLE"
+  },
+  "21": {
+   "name": "STATE_FEATURES"
+  },
+  "22": {
+   "name": "FEATURE_STORE_WRITE"
+  },
+  "30": {
+   "name": "FEATURE_LOOKUP"
+  },
+  "31": {
+   "name": "FEATURE_ASSEMBLE"
+  },
+  "40": {
+   "name": "MODEL_CALL"
+  },
+  "41": {
+   "name": "MODEL_BATCH_WAIT"
+  },
+  "42": {
+   "name": "MODEL_SERVER_QUEUE"
+  },
+  "43": {
+   "name": "MODEL_SERVER_COMPUTE"
+  },
+  "50": {
+   "name": "RULES"
+  },
+  "51": {
+   "name": "POLICY"
+  },
+  "60": {
+   "name": "AUDIT_ACK"
+  },
+  "61": {
+   "name": "SINK"
+  },
+  "70": {
+   "name": "DECISION"
+  },
+  "71": {
+   "name": "RESPONSE"
+  },
+  "80": {
+   "name": "FALLBACK"
+  },
+  "81": {
+   "name": "ASYNC_WAIT"
+  }
+ },
+ "transaction.CardType": {
+  "0": {
+   "name": "CARD_TYPE_UNSPECIFIED"
+  },
+  "1": {
+   "name": "DEBIT"
+  },
+  "2": {
+   "name": "CREDIT"
+  },
+  "3": {
+   "name": "PREPAID"
+  },
+  "4": {
+   "name": "VIRTUAL"
+  }
+ },
+ "transaction.Channel": {
+  "0": {
+   "name": "CHANNEL_UNSPECIFIED"
+  },
+  "1": {
+   "name": "POS"
+  },
+  "2": {
+   "name": "ECOM"
+  },
+  "3": {
+   "name": "ATM"
+  },
+  "4": {
+   "name": "MOTO"
+  },
+  "5": {
+   "name": "IN_APP"
+  },
+  "6": {
+   "name": "ONLINE_BANKING"
+  }
+ },
+ "transaction.EntryMode": {
+  "0": {
+   "name": "ENTRY_MODE_UNSPECIFIED"
+  },
+  "1": {
+   "name": "CHIP"
+  },
+  "2": {
+   "name": "CONTACTLESS"
+  },
+  "3": {
+   "name": "MAGSTRIPE"
+  },
+  "4": {
+   "name": "MANUAL"
+  },
+  "5": {
+   "name": "WALLET_TOKEN"
+  },
+  "6": {
+   "name": "ECOM_3DS"
+  },
+  "7": {
+   "name": "ECOM_NON_3DS"
+  },
+  "8": {
+   "name": "CREDENTIAL_ON_FILE"
+  },
+  "9": {
+   "name": "BANK_APP"
+  }
+ },
+ "transaction.PaymentType": {
+  "0": {
+   "name": "PAYMENT_TYPE_UNSPECIFIED"
+  },
+  "1": {
+   "name": "CARD_PURCHASE"
+  },
+  "2": {
+   "name": "ATM_WITHDRAWAL"
+  },
+  "3": {
+   "name": "TRANSFER"
+  },
+  "4": {
+   "name": "CARD_REFUND"
+  }
+ },
+ "transaction.ThreeDsResult": {
+  "0": {
+   "name": "THREE_DS_NONE"
+  },
+  "1": {
+   "name": "THREE_DS_ATTEMPTED"
+  },
+  "2": {
+   "name": "THREE_DS_AUTHENTICATED"
+  }
+ },
+ "transaction.TransactionEvent": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "10": {
+   "name": "amount_usd_minor",
+   "type": "int64"
+  },
+  "11": {
+   "name": "merchant_id",
+   "type": "uint64"
+  },
+  "12": {
+   "name": "mcc",
+   "type": "uint32"
+  },
+  "13": {
+   "name": "merchant_country",
+   "type": "string"
+  },
+  "14": {
+   "name": "terminal_id",
+   "type": "uint64"
+  },
+  "15": {
+   "name": "channel",
+   "type": "Channel"
+  },
+  "16": {
+   "name": "entry_mode",
+   "type": "EntryMode"
+  },
+  "17": {
+   "name": "card_present",
+   "type": "bool"
+  },
+  "18": {
+   "name": "lat",
+   "type": "double"
+  },
+  "19": {
+   "name": "lon",
+   "type": "double"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "20": {
+   "name": "device_id",
+   "type": "uint64"
+  },
+  "21": {
+   "name": "ip_v4",
+   "type": "uint32"
+  },
+  "22": {
+   "name": "ip_country",
+   "type": "string"
+  },
+  "23": {
+   "name": "ip_asn",
+   "type": "uint32"
+  },
+  "24": {
+   "name": "payee_id",
+   "type": "uint64"
+  },
+  "25": {
+   "name": "cvv_match",
+   "type": "bool"
+  },
+  "26": {
+   "name": "avs_match",
+   "type": "bool"
+  },
+  "27": {
+   "name": "recurring",
+   "type": "bool"
+  },
+  "28": {
+   "name": "credit_limit_usd",
+   "type": "uint32"
+  },
+  "29": {
+   "name": "three_ds",
+   "type": "ThreeDsResult"
+  },
+  "3": {
+   "name": "payment_type",
+   "type": "PaymentType"
+  },
+  "30": {
+   "name": "pin_verified",
+   "type": "bool"
+  },
+  "31": {
+   "name": "cryptogram_valid",
+   "type": "bool"
+  },
+  "32": {
+   "name": "scheme_score",
+   "type": "uint32"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "account_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "card_id",
+   "type": "uint64"
+  },
+  "7": {
+   "name": "card_type",
+   "type": "CardType"
+  },
+  "8": {
+   "name": "amount_minor",
+   "type": "int64"
+  },
+  "9": {
+   "name": "currency",
+   "type": "string"
+  }
+ }
+}

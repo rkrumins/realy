@@ -56,6 +56,8 @@ EVENT_COLS = [  # (proto field, ClickHouse type)
     ("card_present", "UInt8"), ("lat", "Float64"), ("lon", "Float64"), ("device_id", "UInt64"), ("ip_v4", "UInt32"),
     ("ip_country", "String"), ("ip_asn", "UInt32"), ("payee_id", "UInt64"), ("cvv_match", "UInt8"),
     ("avs_match", "UInt8"), ("recurring", "UInt8"), ("credit_limit_usd", "UInt32"),
+    # authorisation signals (TransactionEvent fields 29-32)
+    ("three_ds", "Int8"), ("pin_verified", "UInt8"), ("cryptogram_valid", "UInt8"), ("scheme_score", "UInt32"),
 ]
 KAFKA = "SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = '{topic}', kafka_group_name = '{group}',\n" \
         "         kafka_format = 'ProtobufSingle', kafka_schema = '{schema}', kafka_num_consumers = {consumers},\n" \
@@ -85,8 +87,15 @@ def generate(consumers: int = 2) -> dict[str, str]:
     ev_sel = ",\n  ".join(
         (_enum(c, c) + f" AS `{c}`") if c in ("payment_type", "channel", "entry_mode") else
         (f"toString(card_type) AS `card_type`" if c == "card_type" else f"`{c}`") for c, _ in EVENT_COLS)
+    # the Kafka queue and its view hold no data: rebuilt on every apply (offsets live in the consumer group),
+    # so an install from an earlier release gains new event columns; events_raw gains them by ALTER
+    ev_alter = "\n".join(f"ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `{c}` "
+                         f"{'LowCardinality(String)' if c in ('payment_type', 'channel', 'entry_mode', 'card_type') else t};"
+                         for c, t in EVENT_COLS)
     files["02_events.sql"] = HEADER + f"""
-CREATE TABLE IF NOT EXISTS realy.events_queue (
+DROP VIEW IF EXISTS realy.events_mv;
+DROP TABLE IF EXISTS realy.events_queue;
+CREATE TABLE realy.events_queue (
   {ev_q}
 ) ENGINE = Kafka
 {KAFKA.format(topic='payments.events.raw', group='clickhouse-events', schema='realy/payments/v1/transaction.proto:TransactionEvent', consumers=consumers)};
@@ -100,8 +109,9 @@ CREATE TABLE IF NOT EXISTS realy.events_raw (
 PARTITION BY toYYYYMMDD(fromUnixTimestamp64Micro(event_time_us))
 ORDER BY (customer_id, run_id, event_id)
 TTL toDateTime(ingested_at) + INTERVAL 30 DAY;
+{ev_alter}
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS realy.events_mv TO realy.events_raw AS
+CREATE MATERIALIZED VIEW realy.events_mv TO realy.events_raw AS
 SELECT
   arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
   {ev_sel}
@@ -119,6 +129,8 @@ FROM realy.events_queue WHERE length(_error) = 0;
     # features are only ever appended (schema v2 added eight): every f_* column is (re)declared so an
     # install created under an earlier schema gains the new ones; existing rows read the column default
     migrations = "\n".join([f"ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `{c}` {t};" for c, t in ADDED_COLUMNS]
+                           + [f"ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `event.{c}` {t};"
+                              for c, t in EVENT_COLS if c != "event_id"]
                            + [f"ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_{f.name}` Float32;"
                               for f in schema.features]
                            + [f"ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `{c}`;" for c in DROPPED_COLUMNS])
