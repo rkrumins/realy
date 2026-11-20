@@ -523,6 +523,7 @@ export interface LabelStory {
 export interface Explanation {
   error?: string;
   rule_set?: string;
+  rules_source?: "snapshot" | "current";
   served_rule_hits?: string[];
   policy?: { outcome: string | null; branch: string; why: string; thresholds: { review: number; decline: number } };
   rules?: { id: string; action: string; when: string; hit: boolean; reason: string; values: Record<string, unknown>; error?: string }[];

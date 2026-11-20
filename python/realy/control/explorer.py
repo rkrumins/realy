@@ -284,13 +284,15 @@ class Explorer:
         from ..verify.verify import ProxyScorer, Rules
         sc = Scenario.model_validate(_json.loads((d / "scenario.json").read_text()))
         cfg = sc.scoring_config()
-        rules = Rules(cfg["rule_set_yaml"])
+        from ..scenario import run_rules
+        rules_yaml, rules_source = run_rules(d, sc)
+        rules = Rules(rules_yaml)
         review = float(cfg.get("review_threshold") or 0) or rules.review
         decline = float(cfg.get("decline_threshold") or 0) or rules.decline
         fmap = {f["name"]: float(f["value"]) for f in features}
-        results = explain_rules(cfg["rule_set_yaml"], fmap, event_view(er))
+        results = explain_rules(rules_yaml, fmap, event_view(er))
         score = decision.get("score")
-        out: dict[str, Any] = {"rule_set": rules.version, "rules": results,
+        out: dict[str, Any] = {"rule_set": rules.version, "rules_source": rules_source, "rules": results,
                                "policy": policy_path(results, score, review, decline, decision.get("outcome"),
                                                      decision.get("path")),
                                "served_rule_hits": decision.get("rule_hits")}

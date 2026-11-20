@@ -241,7 +241,8 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     }
 
     # ------------------------------------------------------------------ 2-4. rules / score / outcome parity
-    rules = Rules(sc.scoring_config()["rule_set_yaml"])
+    from ..scenario import run_rules
+    rules = Rules(run_rules(run_dir, sc)[0])
     mv = None
     if "model_version" in dec.column_names:
         vals = [v for v in dec["model_version"].to_pylist() if v]

@@ -251,3 +251,12 @@ def deep_merge(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def run_rules(run_dir: Path, sc: "Scenario") -> tuple[str, str]:
+    """The rule-set YAML a finished run actually used: its snapshot (rules.yaml, written at run start),
+    else the scenario's current rule file (runs that predate snapshots). Returns (yaml, source)."""
+    snap = Path(run_dir) / "rules.yaml"
+    if snap.exists():
+        return snap.read_text(), "snapshot"
+    return sc.scoring_config()["rule_set_yaml"], "current"

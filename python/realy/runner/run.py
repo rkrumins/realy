@@ -597,6 +597,9 @@ class _Run:
         from ..usecases import registry
         self.usecases = registry().snapshot()
         (self.run_dir / "usecases.json").write_text(json.dumps(self.usecases, indent=1))
+        # ... and the exact rule set pushed to the pipeline: explanations, verify and what-ifs replay it,
+        # not whatever rules/<name>.yaml says later
+        (self.run_dir / "rules.yaml").write_text(sc.scoring_config()["rule_set_yaml"])
         self.check("prepare")
         st.start("topics")
         created = ensure_topics()

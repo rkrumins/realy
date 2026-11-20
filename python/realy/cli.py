@@ -340,7 +340,8 @@ def rules_whatif(run_dir: Path = typer.Argument(..., help="finished run (served 
     from .scenario import Scenario
     sc = Scenario.model_validate(json.loads((run_dir / "scenario.json").read_text()))
     data = load(run_dir, sample_mod)
-    as_run = sc.scoring_config()["rule_set_yaml"]
+    from .scenario import run_rules
+    as_run = run_rules(run_dir, sc)[0]
     rows = [(f"as run ({sc.rules})", evaluate(data, as_run, review, decline))]
     for r in rules:
         rows.append((r.stem, evaluate(data, r.read_text(), review, decline)))

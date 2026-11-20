@@ -67,7 +67,7 @@ export function ExplanationCard({ x }: { x?: Explanation | null }) {
   return (
     <Card>
       <CardHeader title="Why this decision" icon={<Gavel />}
-        subtitle={`rule set ${x.rule_set ?? "?"} re-evaluated on the served features; the model attributed with ${a?.method ?? "integrated gradients"}`}
+        subtitle={`rule set ${x.rule_set ?? "?"}${x.rules_source === "current" ? " (the current file: this run predates rule snapshots)" : " (as the run used it)"} re-evaluated on the served features; the model attributed with ${a?.method ?? "integrated gradients"}`}
         actions={<Badge tone={agrees ? "pass" : "warn"}>{agrees ? "matches what was served" : "differs from served hits"}</Badge>} />
       <CardBody className="space-y-5">
         {x.policy && (
