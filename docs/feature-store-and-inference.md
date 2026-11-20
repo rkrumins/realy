@@ -375,7 +375,10 @@ started fresh: `{runs: [last 50 ids], count}`.
 - **A run that will be verified starts fresh.** This applies to a console run with "verify
   correctness" and to `pulsebench run --verify`. When the warm state holds other runs' events, or
   nobody knows whose, the provenance step says so ("fresh state for exact verification: the warm
-  state also holds the events of 2 earlier run(s) (…)"). It keeps the scenario's own history.
+  state also holds the events of 2 earlier run(s) (…)"). The fresh state is warmed with the same
+  history a world switch replays (`REALY_WORLD_SWITCH_BACKFILL_DAYS`, default 1 day). Without it
+  every device and payee looks new and the measured window is another slice of the world: measured,
+  the new-device rule hit 893 good customers instead of 294, and the false-positive rate doubled.
 - **Verify does not misjudge inherited state.** On a run that read inherited state (one verified
   after the fact, e.g. `pulsebench verify` on an unverified run), the feature check is reported as
   *not comparable* and the result as **inconclusive**, with the reason. It is not a 74% "failure".

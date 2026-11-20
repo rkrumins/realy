@@ -350,3 +350,17 @@ def test_a_feature_layout_change_starts_state_fresh():
     s = load_schema()
     assert s.state_layout() == dataclasses.replace(s, features=[f for f in s.features if f.name != "scheme_score"]).state_layout()
     assert s.state_layout() != dataclasses.replace(s, features=[f for f in s.features if f.name != "card_cvv_fail_count_1h"]).state_layout()
+
+
+def test_runner_chosen_fresh_state_is_warmed_with_history(monkeypatch):
+    """A fresh start the runner chooses (world switch, exact verification) replays history: cold state
+    makes every device look new and moves the measured window to another slice of the world."""
+    from realy.runner.run import fresh_history_days
+    from realy.scenario import load_scenario
+    sc = load_scenario("smoke")
+    sc.traffic.backfill_days = 0
+    assert fresh_history_days(sc) == 1.0
+    monkeypatch.setenv("REALY_WORLD_SWITCH_BACKFILL_DAYS", "2")
+    assert fresh_history_days(sc) == 2.0
+    sc.traffic.backfill_days = 3
+    assert fresh_history_days(sc) == 3                                                 # the scenario's own wins

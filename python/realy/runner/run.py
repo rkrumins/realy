@@ -648,8 +648,14 @@ class _Run:
         dec = world_switch_state(sc, self.state_identity(), log, ep.flink_rest)
         why_verify = verify_needs_fresh(sc, dec, self.h.verifiable) if not dec.get("reason") else None
         if why_verify:
-            log(f"exact verification requested: {why_verify}: starting Flink state fresh")
+            # warm the fresh state with the same history a world switch replays: without it every device,
+            # payee and country looks new (measured: the new-device rule hit 3x the good customers) and
+            # the measured window is another slice of the world, so the run would not compare with others.
+            # The verifier replays that history from the event log, so exactness is unaffected.
             sc.flink_state = "fresh"
+            sc.traffic.backfill_days = fresh_history_days(sc)
+            log(f"exact verification requested: {why_verify}: starting Flink state fresh, warmed with "
+                f"{sc.traffic.backfill_days:g} sim day(s) of history")
         if dec.get("reason"):
             st.finish("provenance", f"fresh state: {dec['reason']}")
         elif why_verify:
@@ -1093,6 +1099,12 @@ def world_switch_state(sc: Scenario, world_hash: str, log: Callable[[str], None]
             f"{bf:g} sim day(s) of history warm it (REALY_WORLD_SWITCH_BACKFILL_DAYS)")
         sc.flink_state, sc.traffic.backfill_days = state, bf
     return {"state": sc.flink_state, "reason": reason, "why": prov.get("why", ""), "lineage": prov.get("lineage")}
+
+
+def fresh_history_days(sc: Scenario) -> float:
+    """History that warms state the runner starts fresh on its own (world switch, exact verification):
+    the scenario's own, else REALY_WORLD_SWITCH_BACKFILL_DAYS (default 1)."""
+    return sc.traffic.backfill_days or float(os.environ.get("REALY_WORLD_SWITCH_BACKFILL_DAYS", "1"))
 
 
 def verify_needs_fresh(sc: Scenario, dec: dict[str, Any], verifiable: bool) -> str | None:
