@@ -53,6 +53,12 @@ On Kubernetes, with Kafka (3-broker KRaft) and Flink inside the same local clust
   * **Realistic labels:** models train on the labels a bank would have (late, partial, noisy).
   * **Out-of-sample evaluation:** they are scored on a world they never saw (`make eval`), and every
     report says in-sample or out-of-sample.
+  * **Measured:** out of sample, a model trained on 30-day labels flags 0.94 of fraud and declines
+    0.86, on the same traffic, against 0.97 and 0.95 with perfect labels. Waiting 60 days for labels
+    halves the fraud approved. Pruning one rule by its measured precision (0.036) halved the review
+    queue ([fraud-detection.md](docs/fraud-detection.md)).
+  * **Offline what-ifs:** `pulsebench rules-whatif` replays any rule set, threshold or model over a
+    finished run's served vectors.
 * **A full operator console**, built with React and Tailwind CSS:
   * launch, queue and schedule runs;
   * watch a live topology map with events/s and p99 on every hop, plus a feed of real decisions;
@@ -92,6 +98,9 @@ console container. The others ran on the same services built on the host.
 | † first `smoke` right after `make up` (cold stack, auto-primed) | 500 | 19.9 / 92.2 ms | 40.1 ms | PASS · zero loss |
 | echo calibration (instrument floor) | 2,000 | 4.5 / 30.6 ms | 0.6 ms | PASS |
 | † async gateway, warm, trained proxy, 9 fraud typologies | 500 | 19.3 / 76.0 ms | 40.7 ms | PASS · verify PASS · detection in-sample (out-of-sample: [fraud-detection.md](docs/fraud-detection.md#training-and-evaluation)) |
+| † `fraud-eval`, out-of-sample, model trained on observed labels | 500 | 43.7 / 262 ms | 93.8 ms | **FAIL** latency (host saturated, 6% fallbacks) · verify PASS · recall 0.92 flagged / 0.85 declined, FPR 4.1% |
+| † `fraud-eval`, same world, ground-truth model | 500 | 17.3 / 111 ms | 44.4 ms | PASS · recall 0.97 / 0.95, FPR 3.7% |
+| † `tail-stress`, hedging off → on (`hedge_after_ms` 30) | 500 | p99 92.6 → 87.0 ms | 63.2 → 50.7 ms | PASS · fallbacks 3.8% → 2.5% |
 | † Flink-inline (fresh state) | 500 | 24.6 / 111.5 ms | 80.4 ms | PASS · features **exact** · verify PASS · tail = 42% keyBy shuffles |
 | sync gRPC unary / bidi stream | 500 | 18.9 / 96.4 ms · 14.7 / 43.5 ms | 45.7 / 32.7 ms | PASS |
 | brief's example (100 ms feature + 30–100 ms model vs 150 ms) | 1,000 | 171 / 593 ms | 162 ms | FAIL as predicted by `pulsebench budget` |

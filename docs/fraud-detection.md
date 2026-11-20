@@ -73,13 +73,31 @@ Amounts in stream features are USD **minor** units (cents); `amount_usd` is doll
 
 ## Rules
 
-Rule set `baseline-v2` (`rules/baseline.yaml`, CEL). Every rule is evaluated for every event and
-recorded (`rule_ids`), so precision is measurable per rule. The precision column is measured on the
-out-of-sample evaluation run (fraud-eval, seed 1337).
+Rule set `baseline-v3` (`rules/baseline.yaml`, CEL; `baseline-v1` / `-v2` kept for comparison). Every rule is evaluated for every event and
+recorded (`rule_ids`), so precision is measurable per rule. Measured on the out-of-sample evaluation
+run (fraud-eval, seed 1337, run under `baseline-v2`):
 
-«RULE_TABLE»
+| Rule | Action | Fires | Precision | Legitimate customers hit | Fires when |
+|---|---|---|---|---|---|
+| `CARD_TESTING` | DECLINE | 369 | 1.000 | 0.00% | ≥ 3 small card-not-present authorisations on the card in 10 min |
+| `VELOCITY_CARD_5M` | REVIEW | 111 | 1.000 | 0.00% | > 6 transactions on the card in 5 min |
+| `CARD_TESTING_MERCHANT` | REVIEW | 163 | 1.000 | 0.00% | a merchant receiving a burst of small CNP authorisations |
+| `MAGSTRIPE_FOREIGN` | REVIEW | 2,078 | 0.999 | 0.00% | magstripe fallback abroad (cloned card) |
+| `SCORE_DECLINE` | DECLINE | 4,456 | 0.986 | 0.02% | model score ≥ 0.90 |
+| `CONTACTLESS_SPLIT` | REVIEW | 89 | 0.978 | 0.00% | ≥ 4 contactless payments totalling > $200 in 30 min |
+| `ATM_TERMINAL_CASHOUT` | REVIEW | 2,762 | 0.975 | 0.02% | terminal dispensed > $5,000 in 1 h |
+| `ATM_VELOCITY` | DECLINE | 2,042 | 0.975 | 0.02% | ≥ 3 ATM withdrawals on the card in 1 h |
+| `VELOCITY_CARD_10M_DISTINCT` | REVIEW | 33 | 0.970 | 0.00% | card at 5+ distinct merchants in 10 min |
+| `BOT_DEVICE_MANY_CARDS` | DECLINE | 500 | 0.936 | 0.01% | device used with 4+ cards in 1 h |
+| `MULE_FAN_IN` | DECLINE | 192 | 0.891 | 0.01% | payee paid by 6+ distinct senders in 24 h |
+| `SCORE_REVIEW` | REVIEW | 400 | 0.812 | 0.03% | model score ≥ 0.55 |
+| `BUST_OUT_UTILISATION` | REVIEW | 359 | 0.490 | 0.06% | credit line > 80% used in 24 h with an 8× ticket |
+| `IMPOSSIBLE_TRAVEL` | DECLINE | 554 | 0.356 | 0.12% | card-present payments implying > 900 km/h |
+| `APP_SCAM_NEW_PAYEE` | REVIEW | 2,432 | 0.104 | 0.74% | > $1,000 transfer to a payee never paid before |
+| `ATO_NEW_DEVICE_HIGH_AMOUNT` | REVIEW | 2,553 | 0.098 | 0.78% | > $300 remote purchase from a device never seen for the customer |
+| `ATO_NEW_DEVICE_NEW_COUNTRY` | REVIEW (removed in v3) | 9,618 | 0.036 | 3.15% | new device + new IP country + > $100 |
 
-**What changed from `baseline-v1`, and how it was decided:**
+**What changed since `baseline-v1`, and how it was decided:**
 - **`ATO_NEW_DEVICE_NEW_COUNTRY`: DECLINE → REVIEW.**
   - **Why:** on a seed-42 run, a world other than the evaluation's, `pulsebench rules-whatif` measured
     precision 0.047 over 1,876 fires.
@@ -89,8 +107,27 @@ out-of-sample evaluation run (fraud-eval, seed 1337).
   - **On the evaluation world:** see below.
 - **`VELOCITY_CARD_1H_DISTINCT` renamed `VELOCITY_CARD_10M_DISTINCT`:** it always used the 10-minute
   window.
+- **`baseline-v3`: `ATO_NEW_DEVICE_NEW_COUNTRY` removed.** Even as REVIEW it was the only
+  reason for 52% of the legitimate customers sent to review or declined, at precision 0.036, while
+  the model and `ATO_NEW_DEVICE_HIGH_AMOUNT` catch almost all the same fraud. Decided on fraud-train (seed 7):
+  FPR 3.84% → 1.86%, flagged recall 0.944 → 0.943.
 
-«RULE_CHANGE_EVAL»
+**The rule changes, replayed on the evaluation world** (`pulsebench rules-whatif`, fraud-eval served
+vectors and scores, observed-label model):
+
+| Rule set | Flagged recall | Declined recall | Precision (flagged / declined) | Good customers declined | Sent to review or declined (FPR) | Fraud $ approved |
+|---|---|---|---|---|---|---|
+| baseline-v1 (ATO country rule = DECLINE) | 0.919 | 0.880 | 0.306 / 0.344 | 3.32% | 4.13% | $213,891 |
+| baseline-v2 (= REVIEW, as run) | 0.919 | 0.845 | 0.306 / 0.908 | 0.17% | 4.13% | $213,891 |
+| **baseline-v3** (rule removed, current) | 0.915 | 0.845 | 0.503 / 0.908 | 0.17% | **1.79%** | $217,585 |
+| v3b (also drop the two ~10%-precision REVIEW rules; rejected) | 0.886 | 0.845 | 0.862 / 0.908 | 0.17% | 0.28% | $449,093 |
+
+- **v1 → v2:** 19× fewer good customers declined (3.32% → 0.17%), at 3.5 points of decline recall.
+  Those payments still go to review.
+- **v2 → v3:** the review queue is halved (4.13% → 1.79% of legitimate customers) for 0.3 points of
+  flagged recall and $3.7k more fraud approved, out of $2.86M.
+- **Method:** every variant was decided on the training world (fraud-train, seed 7: FPR 3.84% →
+  1.86% for v3a) and only confirmed here, so the rules are not fitted to the evaluation.
 
 ## The model
 
@@ -131,14 +168,51 @@ out-of-sample evaluation run (fraud-eval, seed 1337).
 10% of campaigns are never reported at all. The decision is per campaign, as with a victim who
 never notices.
 
-«LABEL_STATS»
+Measured on fraud-train (300,010 events, 7,389 truly fraudulent):
+
+| Training labels | Fraud labelled | Of which friendly fraud |
+|---|---|---|
+| observed, 30 days after the window | 6,114 (82.6% of true fraud) | 0.2% |
+| observed, 60 days | 6,579 (88.8%) | 0.3% |
+| observed, 90 days | 6,587 (88.9%) | 0.3% |
+| ground truth (the generator) | 7,389 (100%) | 0% |
+
+The 11% still missing at 90 days is fraud that is never reported.
 
 ## Typologies
 
 Each typology is scripted from real-world patterns (`python/realy/gen/campaigns.py`). It is
 scheduled inside the measured window of `fraud-eval`, and measured there out of sample.
 
-«TYPOLOGY_TABLE»
+Out of sample: fraud-eval (seed 1337), models trained on fraud-train (seed 7). The model columns re-score the **same** served
+vectors with each model under `baseline-v2` (`rules-whatif --model`, no deadline fallbacks), so they compare models on identical traffic.
+
+| Typology | Events (campaigns) | Flagged / declined, observed 30 d | Observed 60 d | Ground truth | Fraud $ approved (30 d → 60 d → GT) |
+|---|---|---|---|---|---|
+| card testing | 648 (42) | 0.85 / 0.80 | 0.98 / 0.95 | 1.00 / 0.98 | $45,512 → $858 → $0 |
+| account takeover | 174 (57) | 0.82 / 0.41 | 0.98 / 0.86 | 0.99 / 0.91 | $34,864 → $2,700 → $622 |
+| lost / stolen | 231 (41) | 0.70 / 0.65 | 0.68 / 0.64 | 0.70 / 0.63 | $4,442 → $4,647 → $4,090 |
+| counterfeit | 185 (38) | 0.96 / 0.90 | 0.97 / 0.92 | 0.97 / 0.94 | $5,063 → $4,100 → $4,583 |
+| merchant breach | 274 (36) | 0.90 / 0.34 | 0.96 / 0.81 | 0.98 / 0.92 | $9,950 → $4,225 → $1,145 |
+| ATM cash-out | 3,632 (5) | 0.99 / 0.97 | 0.98 / 0.97 | 0.99 / 0.99 | $19,213 → $25,806 → $10,106 |
+| APP scam / mule | 244 (36) | 0.99 / 0.80 | 0.99 / 0.80 | 0.99 / 0.87 | $3,000 → $3,000 → $3,000 |
+| bust-out | 68 (25) | 0.44 / 0.04 | 0.53 / 0.18 | 0.62 / 0.40 | $47,184 → $40,061 → $31,540 |
+| bot e-commerce | 369 (24) | 0.88 / 0.83 | 0.94 / 0.91 | 0.95 / 0.95 | $1,888 → $751 → $575 |
+| **all** | 5,825 | 0.937 / 0.864 | 0.961 / 0.920 | 0.973 / 0.951 | $171,116 → $86,149 → $55,659 |
+
+What the table says:
+- **Fast-labelled typologies are learnt well from observed labels:** ATM cash-out (investigation, 0.2×),
+  APP scams (0.3×) and counterfeit (0.5×).
+- **Slow-labelled typologies suffer:** card testing, ATO, merchant breach (chargebacks, 1–45 days)
+  and bust-out (1.5×). With a 30-day cut a third of their labels has not arrived, and the model
+  learns those payments as legitimate. A 60-day cut recovers most of it: fraud approved halves,
+  $171k → $86k.
+- **Lost / stolen stays at about 0.70** for every model. A contactless spree at the victim's home
+  shows no device, IP or location novelty, so the model alone is weak here (ROC-AUC 0.90 on the
+  dedicated scenario). `CONTACTLESS_SPLIT` (precision 0.978) and velocity rules carry it.
+- **Bust-out is the hardest:** the build-up makes the account look healthy. Even ground truth
+  declines only 40%, because the bust looks like a good customer's big purchase until the line is
+  exhausted.
 
 ### Card testing
 - **Real world:** stolen card numbers are validated with tiny online authorisations, often at one
@@ -160,10 +234,11 @@ scheduled inside the measured window of `fraud-eval`, and measured there out of 
 - **Lights up:** `cust_device_novel`, `cust_ip_country_novel`, `amount_to_avg_ratio` (7–150×
   measured), `dist_from_home_km`, `local_hour` (night in the customer's time zone), and
   `cust_payee_novel` on the transfer.
-- **Rules:** `ATO_NEW_DEVICE_HIGH_AMOUNT` and `ATO_NEW_DEVICE_NEW_COUNTRY` (both REVIEW); the model
-  carries the decline.
-- **Why REVIEW, not DECLINE:** legitimate customers also change phones, travel and use mobile IPs.
-  A new device plus a new IP country alone is weak evidence.
+- **Rules:** `ATO_NEW_DEVICE_HIGH_AMOUNT` (REVIEW); the model carries the decline.
+- **Why so little from rules:** legitimate customers also change phones, travel and use mobile IPs.
+  A new device plus a new IP country alone is weak evidence (precision 0.036), so `baseline-v3`
+  removed that rule and leaves the combination to the model, which weighs it against amount,
+  merchant, hour and history.
 
 ### Lost / stolen card
 - **Real world:** a physical card is spent quickly, near where it was taken, contactless and just
@@ -240,7 +315,23 @@ The legitimate world is not uniform:
 
 That is where false positives come from, measured per rule as the `legit_hit_rate`:
 
-«FP_TABLE»
+Measured on fraud-eval (share of all legitimate customers each source flags; baseline-v2 as run):
+
+| Source | Legitimate customers flagged | Precision | Why legitimate customers trip it |
+|---|---|---|---|
+| `ATO_NEW_DEVICE_NEW_COUNTRY` (removed in v3) | 3.15% | 0.036 | a new phone plus travel or a mobile IP in another country |
+| `ATO_NEW_DEVICE_HIGH_AMOUNT` | 0.78% | 0.098 | genuine big online purchases from a new device |
+| `APP_SCAM_NEW_PAYEE` | 0.74% | 0.104 | first transfers to new payees: rent, family, a new supplier |
+| `IMPOSSIBLE_TRAVEL` | 0.12% | 0.356 | flights with short gaps between card-present payments |
+| `BUST_OUT_UTILISATION` | 0.06% | 0.490 | a legitimate large purchase on a nearly full credit line |
+| model (score ≥ 0.55) | 0.05% | 0.81–0.99 | |
+
+**Warm state from another world inflates false positives.** A run on a different world over warm
+Flink state served features only 78.8% exact. `IMPOSSIBLE_TRAVEL` then fired on 4.4% of legitimate
+customers, because a card's "last location" came from another world's card with the same id. The
+runner now records which world built the running Flink job's state, starts fresh whenever that is
+another world or unknown, and `pulsebench verify` fails gateway runs below 98% exact-set agreement
+([how](feature-store-and-inference.md#whose-state-is-it-provenance-and-world-switches)).
 
 ## Training and evaluation
 
@@ -254,8 +345,78 @@ pulsebench run fraud-eval          # seed 1337: no customer, card, device, merch
 pulsebench rules-whatif /runs/fraud-eval-… --rules rules/baseline-v1.yaml
 ```
 
-«EVAL_TABLE»
+**As the runs served them** (500 TPS on one 4 vCPU host; verify PASS on the observed-label run:
+features 99.1% exact, rule / score / outcome parity 100%, ClickHouse audit 300,010 / 300,010):
+
+| Run | Model (labels) | Sample | Model ROC-AUC / PR-AUC | Recall flagged / declined | Precision | FPR | Fraud $ approved | Rules-only fallbacks (all / measured window) | Latency verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| fraud-train (seed 7) | proxy-105020-42 (ground truth, trained on a seed-42 world) | reported **unknown** (legacy model, no provenance) | 0.949 / 0.935 | 0.944 / 0.899 | 0.383 | 3.84% | $153k of $3.24M | 2.1% / 1.9% | FAIL (p99 158 ms) |
+| fraud-eval (seed 1337) | proxy-obs-300010-42 (observed, 30 d) | **out-of-sample** | 0.9946 / 0.955 | 0.919 / 0.845 | 0.306 | 4.13% | $214k of $2.86M | 6.3% / 6.0% | FAIL (p99 262 ms) |
+| fraud-eval (seed 1337) | proxy-gt-300010-42 (ground truth) | **out-of-sample** | 0.9978 / 0.986 | 0.965 / 0.947 | 0.339 | 3.73% | $75k of $2.86M | 3.5% / 0.7% | PASS (p99 111 ms) |
+
+Detection is measured on every decision, so the "all" share includes the 1-day backfill, replayed
+faster than real time; the measured window is what the latency verdict covers. The fallback share
+depends on how busy the host was: on one 4 vCPU host running every component, model deadlines
+expired far more often in the observed-label run (e2e p99 262 ms, latency FAIL) than in the
+ground-truth run (111 ms, PASS), with the same scenario and load. Rules alone flag only 32–42% of the fraud they see, so every
+fallback costs recall; this is why hedging (see [latency-budget](latency-budget.md)) matters. **On identical traffic with no fallbacks**, the models compare as
+follows:
+
+| Model | Recall flagged / declined | Precision | FPR | Fraud $ approved |
+|---|---|---|---|---|
+| observed labels, 30-day cut | 0.937 / 0.864 | 0.309 | 4.14% | $171,116 |
+| observed labels, 60-day cut | 0.961 / 0.920 | 0.315 | 4.13% | $86,149 |
+| observed labels, 90-day cut | 0.958 / 0.904 | 0.313 | 4.16% | $106,872 |
+| ground truth (unattainable) | 0.973 / 0.951 | 0.317 | 4.15% | $55,659 |
+
+**In-sample vs out-of-sample.** The training holdout (same world) reported ROC-AUC 0.997 / PR-AUC 0.956 for
+the observed-label MLP; out of sample it scored 0.9946 / 0.955. The proxy generalises, but every report now says which
+of the two you are looking at.
+
+**What to take into production:**
+1. **Train on a window whose labels have matured** (60 days or more here), or exclude recent rows
+   rather than learning them as legitimate.
+2. **Add decision-history features.** Recent declines on the card, device or customer let the model
+   see "this card was just stopped for testing", as in the worked example.
+3. **Prune rules by measured precision.** Every rule's fires and precision are in
+   `realy.v_rule_performance`.
+4. **Evaluate on a world (or a time period) the model has never seen.** Gate deployments on that,
+   not on the training holdout.
 
 ## Worked example: a card-testing burst, event by event
 
-«WORKED_EXAMPLE»
+One campaign from fraud-eval (out-of-sample, observed-label model). Times are simulated seconds from the first test;
+`small CNP 10m` is `card_small_cnp_count_10m` as served, which includes the event itself.
+
+| t (s) | Amount | MCC | small CNP 10m | card 1m | Model score | Rules | Outcome |
+|---|---|---|---|---|---|---|---|
+| 0.0 | $0.77 | 5815 | 1 | 1 | 0.1366 | – | APPROVE |
+| 12.1 | $1.24 | 5815 | 2 | 2 | 0.0001 | – | APPROVE |
+| 30.2 | $0.60 | 5815 | 3 | 3 | 0.0007 | CARD_TESTING | DECLINE |
+| 39.0 | $0.97 | 5815 | 4 | 4 | 0.0003 | CARD_TESTING | DECLINE |
+| 91.5 | $1.89 | 5815 | 5 | 2 | 0.0080 | CARD_TESTING | DECLINE |
+| 97.3 | $0.97 | 5815 | 6 | 2 | fallback | CARD_TESTING | DECLINE |
+| 150.4 | $1.45 | 5815 | 7 | 3 | 0.0037 | CARD_TESTING, VELOCITY_CARD_5M | DECLINE |
+| 160.0 | $0.62 | 5815 | 8 | 2 | 0.0000 | CARD_TESTING, VELOCITY_CARD_5M | DECLINE |
+| 163.6 | $1.24 | 5815 | 9 | 3 | 0.0007 | CARD_TESTING, VELOCITY_CARD_5M | DECLINE |
+| 172.2 | $0.82 | 5815 | 10 | 4 | 0.0113 | CARD_TESTING, VELOCITY_CARD_5M | DECLINE |
+| 199.3 | $1.96 | 5815 | 11 | 5 | 0.7341 | CARD_TESTING, VELOCITY_CARD_5M | DECLINE |
+| 1,259.2 | $1,038.34 | 5732 | 0 | 1 | 0.0055 | – | APPROVE |
+| 1,632.4 | $823.81 | 5964 | 0 | 1 | 0.0000 | – | APPROVE |
+| 2,188.5 | $1,408.27 | 5964 | 0 | 1 | 0.0000 | – | APPROVE |
+
+What happened:
+1. **Tests 1–2 are approved:** $0.77 and $1.24 at a digital-goods merchant (MCC 5815). One or two
+   small authorisations look like normal app-store traffic, and the model agrees (0.14, then 0.0001).
+2. **The third test trips `CARD_TESTING`:** $0.60, with `card_small_cnp_count_10m` = 3. Every later
+   test is declined; `VELOCITY_CARD_5M` joins from the seventh. One test fell back to rules only
+   when the model deadline expired, and the rule declined it anyway.
+3. **The cash-out goes through.** 21–36 minutes later the card buys $1,038 of electronics (MCC 5732)
+   and $824 and $1,408 at direct-marketing resellers (5964). By then the 10-minute window is empty,
+   the amounts are 10–18× the customer's usual ticket, and the model scores them about 0. Card-testing
+   chargebacks often arrive after 30 days, so the observed-label model never learnt this pattern
+   well (decline recall 0.80 vs 0.98 with ground truth). Nothing tells it the card was declined for
+   testing minutes earlier.
+
+The fix is a decision-history feature: declines on this card in the last hour. That is a feature-DSL
+change (an aggregator over `payments.decisions`), not a rule.

@@ -1,4 +1,4 @@
-# realy — common workflows. `make help` lists targets.
+# PulseBench — common workflows. `make help` lists targets.
 # Docker-only (nothing else needed on the host):  make up · make down · make logs · make k8s-local
 # Host development (JDK 21, Python 3.11+, Node 22):  make dev-* targets
 SHELL := /bin/bash

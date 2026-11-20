@@ -333,6 +333,38 @@ time and the stream.
     resubmitting from it, so RocksDB state stays warm across topology changes.
   - **On savepoint failure:** the driver cancels the job and logs that state starts cold.
 
+### Whose state is it? Provenance and world switches
+
+Keyed state is only meaningful for the world (the set of customers, cards and devices) that built it.
+Entity ids are deterministic per world, so customer 4,812 of one synthetic world is a different
+person from customer 4,812 of another. Warm state from another world is worse than cold state:
+a run over it served features only 78.8% exact, and `IMPOSSIBLE_TRAVEL` fired on 4.4% of legitimate
+customers because a card's "last location" belonged to someone else.
+
+**How the runner knows** (`python/realy/runner/flink.py`):
+- **Record:** when it starts a feature job and the job reaches RUNNING, it writes
+  `realy:flink-job:<pipeline>` = `{jid, group, world}`: the job id, the Kafka consumer group the job
+  commits to, and the world hash it was built for.
+- **Check:** each run trusts that record only if its `jid` is the job running now. Otherwise the
+  state's world is **unknown**: no record yet, a job restarted by hand, Redis flushed, or a run that
+  died before its state was reset.
+- **Decide:** a known match keeps the state warm. A different world, or an unknown one, starts it
+  fresh: cancel the job, clear the `fs:*` stream blobs, start a new job with its own consumer group,
+  and replay `REALY_WORLD_SWITCH_BACKFILL_DAYS` (default 1) simulated days of history.
+- **Wait on the right group:** the backfill waits until the feature job has caught up, using the
+  group from the record. A job started fresh by an earlier run commits as `realy-flink-<that run>`,
+  so a later warm run that keeps it must wait on that group. If the job does not catch up within
+  `REALY_BACKFILL_TIMEOUT_S` (900 s), the report FAILs with "feature state did not catch up"; the
+  run never proceeds silently on stale features.
+- **Backstop:** `pulsebench verify` fails a gateway run whose served features agree with an exact
+  recomputation on fewer than 98% of events.
+
+Both rules came from a contaminated measurement. The first version recorded the world before the
+state was reset and treated "no record" as "same world"; a later run then measured over another
+world's state, and its backfill wait timed out on a group no job consumed. In production the same
+question is "which model and feature version built this state". Pin it the same way: bind
+provenance to the running job, and treat unknown as a reason to rebuild.
+
 ### What happens when something fails
 
 | Failure | What survives | What the pipeline does | What a run shows |

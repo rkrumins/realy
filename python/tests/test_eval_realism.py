@@ -101,11 +101,57 @@ def test_verifier_finds_hot_deployed_model_versions(tmp_path, monkeypatch):
 def test_world_switch_starts_state_fresh():
     from realy.runner.run import world_switch_decision
     assert world_switch_decision("aaa", "aaa", "warm", None) == ("warm", None, None)           # same world
-    assert world_switch_decision(None, "aaa", "warm", None) == ("warm", None, None)            # first run
     st, bf, why = world_switch_decision("aaa", "bbb", "warm", None, 1.0)
     assert (st, bf) == ("fresh", 1.0) and "aaa" in why                                         # switched: fresh + history
     assert world_switch_decision("aaa", "bbb", "warm", 2.0)[1] == 2.0                          # keeps its own backfill
     assert world_switch_decision("aaa", "bbb", "fresh", None)[2] is None                       # already fresh
+    # unknown provenance is NOT "the same world": that assumption let a run measure over another
+    # world's state (no record yet, or a record left by a run that never reset the state)
+    st, bf, why = world_switch_decision(None, "aaa", "warm", None, 1.0, "no feature job running")
+    assert (st, bf) == ("fresh", 1.0) and "unknown" in why and "no feature job" in why
+
+
+class _KV:
+    def __init__(self):
+        self.kv = {}
+
+    def get(self, k):
+        return self.kv.get(k)
+
+    def set(self, k, v):
+        self.kv[k] = v.encode() if isinstance(v, str) else v
+
+
+def test_state_provenance_is_bound_to_the_running_job(monkeypatch):
+    from realy.runner import flink
+    r = _KV()
+    running = [{"jid": "job-A", "name": "realy-features"}]
+    monkeypatch.setattr(flink, "_running", lambda c: running)
+    assert flink.state_provenance("http://flink", r=r)["world"] is None                         # no record
+    flink.record_job("job-A", "realy-flink-run1", "world-1", r=r)
+    p = flink.state_provenance("http://flink", r=r)
+    assert (p["world"], p["group"]) == ("world-1", "realy-flink-run1")
+    running[0]["jid"] = "job-B"                                                                # restarted by hand
+    p = flink.state_provenance("http://flink", r=r)
+    assert p["world"] is None and "job-A" in p["why"]
+    running.clear()
+    assert "no feature job" in flink.state_provenance("http://flink", r=r)["why"]
+
+
+def test_backfill_waits_on_the_group_the_running_job_commits_to(monkeypatch):
+    """A job started fresh by an earlier run commits as realy-flink-<that run>; a later warm run that
+    keeps it must wait on that group, not on realy-flink (which nothing consumes: a 900 s stall)."""
+    from realy.runner import flink
+    from realy.runner.run import feature_group
+    from realy.scenario import load_scenario
+    sc = load_scenario("smoke")
+    sc.flink_state = "warm"
+    monkeypatch.setattr(flink, "job_record", lambda r=None: {"jid": "j", "group": "realy-flink-fraud-eval-1"})
+    assert feature_group(sc, "run2", log=lambda m: None) == "realy-flink-fraud-eval-1"
+    monkeypatch.setattr(flink, "job_record", lambda r=None: None)
+    assert feature_group(sc, "run2", log=lambda m: None) == "realy-flink"
+    sc.flink_state = "fresh"
+    assert feature_group(sc, "run2", log=lambda m: None) == "realy-flink-run2"
 
 
 def test_profile_seed_marker_names_the_current_world():

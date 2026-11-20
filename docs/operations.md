@@ -1,6 +1,6 @@
 # Operations and troubleshooting
 
-Most entries below come from a real failure found while building and running realy: the symptom,
+Most entries below come from a real failure found while building and running PulseBench: the symptom,
 the cause, and what the code or config now does about it.
 
 ## Health at a glance
@@ -134,6 +134,8 @@ decision were silently never scored; in production, skipped fraud checks):
 | Report flags a high **schedule lag** | the emitter host cannot keep up (CPU starved), so events leave late | open-loop pacing records intended vs sent time; late events count against the run ([architecture](architecture.md)) instead of silently lowering the load |
 | First run after `make up` fails its p99, with seconds of latency in the first ~15 s | cold JVMs (JIT) and a just-submitted Flink job compete for CPU | the runner detects a cold pipeline (gateway scored < 20k events, or Flink job < 90 s old) and primes it with 30 s of unmeasured history events at the scenario's rate (`REALY_PRIME_S`; scored by the gateway or Flink, then discarded) before measuring (`cold pipeline ... priming` in the log; `auto_prime` in the manifest). Disable with `REALY_AUTO_PRIME=0`. Not applied to `flink_state: fresh` (exact verification) or the sync rail |
 | False positives at the start of every run | velocity features begin empty (cold start), so "first card use" looks novel | `traffic.backfill_days` replays unpaced history first and excludes it from results |
+| Detection and feature agreement much worse after switching scenarios (e.g. `IMPOSSIBLE_TRAVEL` on 4% of good customers, features 79% exact) | warm Flink state and Redis blobs built by **another world**: entity ids repeat across seeds, so a card's history belongs to someone else | the feature job's provenance (`realy:flink-job:<pipeline>`: job id, consumer group, world) decides; another or unknown world → fresh state, blobs cleared, 1 day of history replayed; `verify` fails below 98% exact-set agreement ([details](feature-store-and-inference.md#whose-state-is-it-provenance-and-world-switches)) |
+| Backfill "waiting for realy-flink" for 15 minutes, then the run continues | the wait used a consumer group no job consumed (the kept job had been started fresh, as `realy-flink-<run>`) | the wait uses the group from the job's provenance record; a catch-up timeout now FAILs the report ("feature state did not catch up") instead of passing as caught up |
 | A run inherits a previous run's model delay or echo mode | a partial config left earlier fields set | every run pushes a **complete** `ScoringConfig` and `ModelServerConfig` (defaults filled in, [config](reference/config.md)) |
 | ClickHouse row counts lower than decisions across runs | `ReplacingMergeTree` collapsed identical event ids from different runs | `run_id` is part of every sorting key; identity is `(run_id, event_id)` |
 | Cross-process spans negative or skewed by about 10 ms | JVMs used an anchored monotonic clock that drifted from wall time | every service stamps `Clock.systemUTC()` / `time.time_ns()` ([architecture](architecture.md#clock-domains-and-in-band-telemetry)) |

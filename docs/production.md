@@ -100,6 +100,45 @@ Use the **gateway with the online store** for synchronous and low-latency asynch
   reproduces the shape, not your numbers.
 - **Deadlines:** keep the 80 ms model deadline with the rules-only fallback. `tail-stress` showed the
   deadlines protecting the p99 when the model degrades, and reports count every degraded decision.
+  - **A fallback costs recall:** rules alone flagged 32–42% of the fraud they saw in the evaluation
+    runs, against 92–97% with the model. Budget the degraded share as a detection SLO, not only a
+    latency one.
+- **Hedging** (`ScoringConfig.hedge_after_ms`): a duplicate request on another channel when the first
+  has not answered, first answer wins. Measured on `tail-stress` with `hedge_after_ms = 30`:
+
+  | | off | on |
+  |---|---|---|
+  | rules-only fallbacks | 3.76% | **2.48%** |
+  | model-call p99 | 60.1 ms | 43.3 ms |
+  | hot-path p99 | 63.2 ms | 50.7 ms |
+  | e2e p99 / p99.9 | 92.6 / 166.9 ms | 87.0 / 140.8 ms |
+  | within the 150 ms budget | 99.85% | 99.93% |
+
+  It sent 1,244 duplicates (2.8% of 45,010 calls), and 496 of them won (40%). Set it near the model-call p99 of a
+  healthy run, so that only the slow tail is duplicated; size Triton for that extra load.
+
+### 6a. Models, labels and evaluation
+
+Measured with `make eval`: train on one synthetic world (fraud-train, seed 7), evaluate on another
+(fraud-eval, seed 1337). Details: [fraud-detection.md](fraud-detection.md#training-and-evaluation).
+
+- **Train on the labels you will actually have.** With a 30-day cut, only 82.6% of true fraud was
+  labelled. Out of sample, that model declined 0.86 of fraud against 0.95 for a ground-truth model
+  (same traffic), approving $171k of fraud against $56k.
+  - **Let labels mature:** a 60-day cut labelled 88.8% and halved the fraud approved ($86k). Train
+    on a window that ends 60+ days ago, or drop recent rows rather than learning them as legitimate.
+  - **Slow-labelled typologies suffer most:** card testing, ATO, merchant breach and bust-out
+    (chargebacks, investigations).
+- **Gate a model on data it has never seen.** Reports compare the served model's training provenance
+  with the run's world and print in-sample, out-of-sample or unknown. Promote on the out-of-sample
+  number only.
+- **Add decision-history features.** In the worked card-testing example, the cash-outs 20–36 minutes
+  after the declined tests scored about 0, because no feature records that the card was just declined.
+- **Prune rules by measured precision** (`realy.v_rule_performance`, `pulsebench rules-whatif`):
+  `baseline-v3` removed one rule with precision 0.036 and halved the review queue (FPR 4.13% → 1.79%)
+  for 0.3 points of flagged recall.
+- **Shadow before promoting:** `pulsebench deploy-model` hot-swaps the mock's weights. With Triton,
+  publish a new version to the model repository and compare both on mirrored traffic.
 
 ### 7. Scoring gateway
 
@@ -116,11 +155,16 @@ Use the **gateway with the online store** for synchronous and low-latency asynch
 
 - **SLOs:** e2e p99 ≤ 150 ms, hot-path p99 ≤ 100 ms, and a degraded-fraction budget (for example
   ≤ 0.5% rules-only decisions).
+- **Detection SLOs, once labels mature:** recall and precision per typology, fraud dollars approved,
+  and the legitimate-customer review rate (FPR), from `realy.v_rule_performance` and the labels.
 - **Alert on:**
   - consumer lag (gateway, Flink, ClickHouse) and `store_update_lag` p99;
   - checkpoint duration over one third of the interval;
   - Triton queue time and GPU duty cycle;
-  - audit gaps: run the `realy.v_audit_gaps` view daily and page on any row.
+  - audit gaps: run the `realy.v_audit_gaps` view daily and page on any row;
+  - audit append p99 (`lat_audit_append_us`; 39.6 ms locally, 2–5 ms expected on dedicated brokers);
+  - Flink checkpoint failures (all 21 of 21 completed locally: RocksDB incremental, 118 MB state,
+    p50 327 ms).
 
 ### 9. Security and data governance (real data)
 

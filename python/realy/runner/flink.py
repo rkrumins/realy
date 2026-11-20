@@ -23,6 +23,58 @@ ENTRY = "io.realy.flink.FraudJob"
 SAVEPOINT_DIR = os.environ.get("FLINK_SAVEPOINT_DIR", "file:///checkpoints/savepoints")
 
 
+# Provenance of the running job's keyed state: which world it was built from and which consumer
+# group the job commits to. Bound to the job id, so a stale record (job restarted by hand, Redis
+# flushed, the JobManager replaced) reads as "unknown" and never as "the same world".
+JOB_KEY = "realy:flink-job:{pipeline}"
+
+
+def _job_key() -> str:
+    from .lifecycle import pipeline
+    return JOB_KEY.format(pipeline=pipeline())
+
+
+def record_job(jid: str, group: str, world: str | None, r=None) -> None:
+    from .seed import redis_client
+    (r or redis_client()).set(_job_key(), json.dumps({"jid": jid, "group": group, "world": world, "at": time.time()}))
+
+
+def job_record(r=None) -> dict | None:
+    from .seed import redis_client
+    raw = (r or redis_client()).get(_job_key())
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
+def state_provenance(rest: str | None, r=None) -> dict:
+    """What the pipeline's feature state is: {"running": jid or None, "world": hash or None (unknown),
+    "group": consumer group or None, "why": text}. "world" is known only when the job running now is
+    the one the record was written for."""
+    out: dict = {"running": None, "world": None, "group": None, "why": ""}
+    if not rest:
+        out["why"] = "no Flink REST endpoint"
+        return out
+    with httpx.Client(base_url=rest, timeout=10) as c:
+        running = _running(c)
+    if not running:
+        out["why"] = "no feature job running"
+        return out
+    out["running"] = running[0]["jid"]
+    rec = job_record(r)
+    if not rec:
+        out["why"] = f"job {out['running'][:8]} has no provenance record"
+    elif rec.get("jid") != out["running"]:
+        out["why"] = f"the provenance record is for job {str(rec.get('jid'))[:8]}, job {out['running'][:8]} is running"
+    else:
+        out["world"], out["group"] = rec.get("world"), rec.get("group")
+        out["why"] = "recorded"
+    return out
+
+
 def _running(c: httpx.Client) -> list[dict]:
     jobs = c.get("/jobs/overview").json().get("jobs", [])
     return [j for j in jobs if j["state"] in ("RUNNING", "CREATED", "INITIALIZING", "RESTARTING")
@@ -89,7 +141,10 @@ def desired_mode(sc: Scenario) -> str | None:
 
 
 def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = print, parallelism: int | None = None,
-                force: bool = False, run_id: str | None = None) -> str | None:
+                force: bool = False, run_id: str | None = None, world: str | None = None) -> str | None:
+    """Make the job the topology needs run. A job it starts is recorded (job id, consumer group,
+    `world`) once RUNNING, so the next run can tell whose state it holds; a job kept as is keeps its
+    record."""
     mode = desired_mode(sc)
     if not rest or mode is None:
         return None
@@ -114,8 +169,9 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 continue
             log(f"flink: stopping {j['name']} with savepoint{' (new job jar)' if new_code else ''}")
             savepoint = _stop_with_savepoint(c, j["jid"], log) or savepoint
+        group = f"realy-flink-{run_id}" if fresh and run_id else "realy-flink"
         args = ["--mode", mode, "--parallelism", str(par), "--bootstrap", os.environ.get("FLINK_KAFKA_BOOTSTRAP", "kafka:29092"),
-                "--group", f"realy-flink-{run_id}" if fresh and run_id else "realy-flink", "--scoring-config", scoring,
+                "--group", group, "--scoring-config", scoring,
                 "--checkpoint-ms", str(int(os.environ.get("FLINK_CHECKPOINT_MS", "10000"))),
                 "--exactly-once", "true" if sc.exactly_once else "false"]
         # online-store blobs carrying aggregator state (exact gateway features); "none" = values only
@@ -137,4 +193,8 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 raise RuntimeError(f"flink job {want} {st.get('state')}")
             time.sleep(0.5)
         log(f"flink: {want} running (job {jid[:8]}, parallelism {par}{', restored from savepoint' if savepoint else ''})")
+        try:
+            record_job(jid, group, world)
+        except Exception as e:  # noqa: BLE001 - without a record the next run starts fresh: safe
+            log(f"warn: could not record the job's state provenance ({e.__class__.__name__})")
         return jid

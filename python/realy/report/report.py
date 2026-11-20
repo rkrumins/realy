@@ -336,6 +336,10 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
         reasons.append(f"only {compliance:.2%} of events within {budget.e2e_p99_ms:.0f} ms (< {budget.min_compliance:.0%})")
     if sust and not sust.get("sustainable", True):
         reasons.append("not sustainable (backlog growing or p99 drifting)")
+    if man.get("backfill_caught_up") is False:
+        lag = man.get("backfill_lag")
+        reasons.append(f"feature state did not catch up after the backfill (lag {lag if lag is not None and lag >= 0 else 'unknown'}):"
+                       " features in the measured window were stale")
     if abort:
         reasons.insert(0, f"aborted ({abort.get('kind')}, in {abort.get('phase')}): {abort['reason']}")
     # An operator / instrument / watchdog abort leaves no verdict on the system under test (ABORTED);

@@ -91,7 +91,7 @@ def new_run_id(sc: Scenario) -> str:
     return f"{sc.name}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
 
-def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str], None]) -> None:
+def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str], None], world: str | None = None) -> None:
     scoring = sc.scoring_config()
     model_cfg = sc.model_server_config()
     msgs = [
@@ -120,7 +120,7 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
     if sc.topology == "flink-inline" or sc.topology.startswith("gateway"):
         try:
             from .flink import ensure_jobs
-            ensure_jobs(sc, ep.flink_rest, log, run_id=run_id)
+            ensure_jobs(sc, ep.flink_rest, log, run_id=run_id, world=world)
         except Exception as e:  # noqa: BLE001
             log(f"warn: flink job management skipped: {e}")
 
@@ -254,11 +254,12 @@ def wait_gateway_primed(ep: Endpoints, decisions_before: int | None, primed: int
     decision counter of the replica the Service routes to (exact only for a single replica)."""
     from ..common.kafka import wait_group_caught_up
     grp = os.environ.get("GATEWAY_GROUP", "realy-gateway")
-    lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max(500, primed // 200),
+    max_lag = max(500, primed // 200)
+    lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max_lag,
                                timeout_s=min(timeout_s, 300.0), log=log, no_offsets_grace_s=20.0, stop=stop)
     if lag == -2:
         return False
-    if lag >= 0:
+    if 0 <= lag <= max_lag:   # a timeout returns the last (too high) lag: not caught up
         log(f"prime: gateway caught up (lag {lag:,})")
         return True
     if decisions_before is None:
@@ -423,12 +424,12 @@ class _Run:
         except Exception as e:  # noqa: BLE001
             log(f"warn: profile seeding skipped ({e})")
         self.check("prepare")
-        world_switch_state(sc, self.world.content_hash, log)
+        world_switch_state(sc, self.world.content_hash, log, ep.flink_rest)
         prof = sc.traffic.profile
         self.base_tps = prof.tps if prof.kind != "step" else (prof.start_tps or prof.tps)
         self.ts = auto_time_scale(self.world, self.base_tps) if sc.traffic.time_scale == "auto" else float(sc.traffic.time_scale)
         log(f"time scale {self.ts:.1f} sim-s per wall-s (natural rate {natural_rate_total(self.world):.1f} ev/sim-s)")
-        apply_topology(sc, self.run_id, ep, log)
+        apply_topology(sc, self.run_id, ep, log, world=self.world.content_hash)
         self.sleep(float(os.environ.get("REALY_CONFIG_SETTLE_S", "2")), "config settle")
         self.prime_days = auto_prime_days(sc, ep, self.world, self.base_tps, log)
         if self.prime_days:
@@ -535,11 +536,19 @@ class _Run:
             timeout = float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900"))
             stopped = lambda: bool(h.abort_reason)  # noqa: E731
             if sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc"):
-                grp = f"realy-flink-{self.run_id}" if sc.flink_state == "fresh" else "realy-flink"
-                lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max(500, bf // 200), timeout_s=timeout,
+                grp = feature_group(sc, self.run_id, log)
+                max_lag = max(500, bf // 200)
+                lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max_lag, timeout_s=timeout,
                                            log=log, stop=stopped)
                 self.check("backfill catch-up")
-                log(f"backfill: feature job caught up (lag {lag:,})")
+                ok = 0 <= lag <= max_lag
+                self.manifest["backfill_caught_up"] = ok
+                self.manifest["backfill_lag"] = lag
+                if ok:
+                    log(f"backfill: feature job caught up (group {grp}, lag {lag:,})")
+                else:
+                    log(f"WARN backfill: feature job NOT caught up after {timeout:.0f} s (group {grp}, lag "
+                        f"{lag if lag >= 0 else 'unknown'}): measured-window features are stale and the report will say so")
             if self.prime_days and sc.topology in ("gateway-kafka", "echo-kafka"):
                 wait_gateway_primed(ep, self.gw_before, bf, timeout, log, stop=stopped)
                 self.check("prime catch-up")
@@ -679,44 +688,60 @@ class _Run:
         return summary
 
 
-STATE_WORLD_KEY = "realy:state-world:{pipeline}"
-
-
 def world_switch_decision(prev_world: str | None, world: str, flink_state: str, backfill_days: float | None,
-                          default_backfill_days: float = 1.0) -> tuple[str, float | None, str | None]:
+                          default_backfill_days: float = 1.0, why_unknown: str = "") -> tuple[str, float | None, str | None]:
     """Entity ids are deterministic per world (customer = row number, cards and devices by shard
     counters), so Flink's keyed state and the online store built for one world are wrong for another:
     a card's last location, a customer's 30-day average and its novelty sets would belong to a
-    different entity (measured: 78.8% feature agreement instead of 99.1%). When the pipeline's state
-    belongs to another world, start it fresh and warm it with history. Returns
-    (flink_state, backfill_days, reason or None)."""
-    if flink_state == "fresh" or prev_world in (None, world):
+    different entity (measured: 78.8% feature agreement instead of 99.1%). Unless the state is known
+    to belong to this world, start it fresh and warm it with history. `prev_world` None means the
+    state's world is unknown, which is treated like another world: assuming it matches is how
+    contaminated runs happen. Returns (flink_state, backfill_days, reason or None)."""
+    if flink_state == "fresh" or prev_world == world:
         return flink_state, backfill_days, None
-    reason = f"pipeline state belongs to world {prev_world[:12]}, this run uses {world[:12]}"
+    if prev_world is None:
+        reason = f"the pipeline state's world is unknown ({why_unknown or 'no provenance'})"
+    else:
+        reason = f"pipeline state belongs to world {prev_world[:12]}, this run uses {world[:12]}"
     return "fresh", backfill_days or default_backfill_days, reason
 
 
-def world_switch_state(sc: Scenario, world_hash: str, log: Callable[[str], None]) -> None:
-    from .lifecycle import pipeline
-    key = STATE_WORLD_KEY.format(pipeline=pipeline())
-    try:
-        from .seed import redis_client
-        r = redis_client()
-        prev = r.get(key)
-        prev = prev.decode() if isinstance(prev, bytes) else prev
-    except Exception as e:  # noqa: BLE001
-        log(f"warn: cannot read the pipeline's state world ({e.__class__.__name__}); assuming unchanged")
+def world_switch_state(sc: Scenario, world_hash: str, log: Callable[[str], None], flink_rest: str | None) -> None:
+    """Decide fresh vs warm from the provenance record of the job running now (flink.state_provenance).
+    Nothing is recorded here: ensure_jobs records a job only once it is RUNNING, so a run that dies
+    before its state was reset leaves no record claiming it was."""
+    from .flink import desired_mode, state_provenance
+    if desired_mode(sc) is None:
         return
-    state, bf, reason = world_switch_decision(prev, world_hash, sc.flink_state, sc.traffic.backfill_days,
-                                              float(os.environ.get("REALY_WORLD_SWITCH_BACKFILL_DAYS", "1")))
+    try:
+        prov = state_provenance(flink_rest)
+    except Exception as e:  # noqa: BLE001
+        prov = {"world": None, "why": f"cannot read it: {e.__class__.__name__}"}
+    state, bf, reason = world_switch_decision(prov.get("world"), world_hash, sc.flink_state, sc.traffic.backfill_days,
+                                              float(os.environ.get("REALY_WORLD_SWITCH_BACKFILL_DAYS", "1")),
+                                              prov.get("why", ""))
     if reason:
         log(f"world switch: {reason}: starting Flink state fresh and clearing online-store stream blobs, "
             f"{bf:g} sim day(s) of history warm it (REALY_WORLD_SWITCH_BACKFILL_DAYS)")
         sc.flink_state, sc.traffic.backfill_days = state, bf
+
+
+def feature_group(sc: Scenario, run_id: str, log: Callable[[str], None] = print) -> str:
+    """The consumer group the running feature job commits to: from its provenance record (a job kept
+    across runs keeps the group it was started with), else the name ensure_jobs would have used."""
+    if sc.flink_state == "fresh":
+        return f"realy-flink-{run_id}"     # this run started the job itself (ensure_jobs)
+    guess = "realy-flink"
     try:
-        r.set(key, world_hash)
+        from .flink import job_record
+        rec = job_record()
+        if rec and rec.get("group"):
+            if rec["group"] != guess:
+                log(f"backfill: the running feature job commits as {rec['group']}")
+            return rec["group"]
     except Exception:  # noqa: BLE001
         pass
+    return guess
 
 
 def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None = None,

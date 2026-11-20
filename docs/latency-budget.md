@@ -24,6 +24,10 @@ All runs: zero missing decisions and zero duplicates unless stated. Budget: e2e 
 | echo-calibration | echo (gateway answers immediately) | 2,000 | 4.5 ms | 30.6 ms | 0.6 ms | PASS | **instrument floor**: Kafka round trip + driver |
 | smoke (warm) | gateway-kafka | 500 | 19.1 ms | 75.9 ms | 37.8 ms | PASS | tail: egress 78% |
 | mixed-realistic | gateway-kafka + 1-day backfill, trained proxy | 500 | 19.8 ms | 107.3 ms | 44.6 ms | PASS | recall 0.99, precision 0.48, FPR 3.8% **in-sample** (the model was trained on this world; see [fraud-detection.md](fraud-detection.md#training-and-evaluation) for out-of-sample numbers); `verify` PASS |
+| fraud-eval, observed-label model | gateway-kafka + 1-day backfill | 500 | 43.7 ms | 262.2 ms | 93.8 ms | **FAIL** | host CPU-saturated: 94.5% within budget, 6.0% rules-only fallbacks; **out-of-sample** detection: recall 0.919 / 0.845 (flagged / declined), precision 0.31, FPR 4.1%; `verify` PASS |
+| fraud-eval, ground-truth model | gateway-kafka + 1-day backfill | 500 | 17.3 ms | 111.4 ms | 44.4 ms | PASS | same scenario: 99.6% within budget, 0.7% fallbacks; out-of-sample: recall 0.965 / 0.947, precision 0.34, FPR 3.7% |
+| fraud-train, legacy model | gateway-kafka + 1-day backfill | 500 | 20.8 ms | 157.7 ms | 59.1 ms | FAIL | 98.9% within budget (< 99%); 1.9% fallbacks |
+| tail-stress, hedging off / on | gateway-kafka, slow-model tail | 500 | 24.4 / 24.4 ms | 92.6 / 87.0 ms | 63.2 / 50.7 ms | PASS | `hedge_after_ms = 30`: fallbacks 3.76% → 2.48%, model p99 60 → 43 ms, p99.9 167 → 141 ms |
 | flink-inline-smoke (fresh) | flink-inline | 500 | 23.1 ms | 99.4 ms | 70.6 ms | PASS | tail: **keyBy shuffles 61%**; features verified **exact** |
 | sync-smoke | gateway-grpc (unary) | 500 | 18.9 ms | 96.4 ms | 45.7 ms | PASS | audit ack p99 39.8 ms = 27% of tail |
 | sync-vs-async | gateway-grpc (bidi stream) | 500 | 14.7 ms | 43.5 ms | 32.7 ms | PASS | streaming halves the sync p99 |
@@ -71,6 +75,15 @@ emitter's own schedule lag exceeded the 2 s guardrail. Run `step-ramp` / `baseli
    deadlines + rules-only fallback keep the system answering (81% degraded) but the budget fails.
 6. **Cold state inflates false positives** (device/IP-country novelty): 16% FPR cold vs 3.8% with one
    simulated day of backfill and the trained proxy.
-7. **Instrument hygiene changed the numbers**: batch-waiting / busy-polling collectors, 5 ms
+   State from **another world** is worse than cold: a different seed over warm Flink state served
+   features only 78.8% exact and `IMPOSSIBLE_TRAVEL` fired on 4.4% of legitimate customers. The runner
+   now starts state fresh unless the running job's recorded world matches, and `verify` fails gateway runs below 98% exact-set
+   agreement.
+7. **Hedging trims the model tail cheaply:** duplicates on 2.8% of calls cut rules-only fallbacks by a
+   third on `tail-stress`. On a saturated host, though, fallbacks follow CPU contention, not the model:
+   the same evaluation scenario ran at 6.0% and 0.7% fallbacks (measured window) on two runs, and
+   one of them failed the latency budget. Read the degraded share
+   together with the host CPU in the report's resources section.
+8. **Instrument hygiene changed the numbers**: batch-waiting / busy-polling collectors, 5 ms
    `fetch.max.wait.ms` churn, a JVM-spawning healthcheck and a userland docker proxy each inflated the
    measured tail before they were fixed — calibrate the instrument (echo run) before trusting results.
