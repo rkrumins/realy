@@ -76,7 +76,8 @@ emitter's own schedule lag exceeded the 2 s guardrail. Run `step-ramp` / `baseli
 6. **Cold state inflates false positives** (device/IP-country novelty): 16% FPR cold vs 3.8% with one
    simulated day of backfill and the trained proxy.
    State from **another world** is worse than cold: a different seed over warm Flink state served
-   features only 78.8% exact and `IMPOSSIBLE_TRAVEL` fired on 4.4% of legitimate customers. The runner
+   features only 78.8% exact and `IMPOSSIBLE_TRAVEL` fired on 4.4% of legitimate customers (FPR
+   7.27%; rerun on clean state: 99.8% exact, FPR 1.31%). The runner
    now starts state fresh unless the running job's recorded world matches, and `verify` fails gateway runs below 98% exact-set
    agreement.
 7. **Hedging trims the model tail cheaply:** duplicates on 2.8% of calls cut rules-only fallbacks by a

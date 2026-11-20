@@ -359,6 +359,10 @@ customers because a card's "last location" belonged to someone else.
 - **Backstop:** `pulsebench verify` fails a gateway run whose served features agree with an exact
   recomputation on fewer than 98% of events.
 
+Measured on `lost-stolen-contactless`, over another world's state vs on clean state: features 78.8% →
+99.8% exact, false-positive rate 7.27% → 1.31%, model ROC-AUC 0.90 → 0.965 (details in
+[fraud-detection.md](fraud-detection.md#legitimate-behaviour-and-false-positives)).
+
 Both rules came from a contaminated measurement. The first version recorded the world before the
 state was reset and treated "no record" as "same world"; a later run then measured over another
 world's state, and its backfill wait timed out on a group no job consumed. In production the same

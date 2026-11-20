@@ -208,8 +208,10 @@ What the table says:
   learns those payments as legitimate. A 60-day cut recovers most of it: fraud approved halves,
   $171k → $86k.
 - **Lost / stolen stays at about 0.70** for every model. A contactless spree at the victim's home
-  shows no device, IP or location novelty, so the model alone is weak here (ROC-AUC 0.90 on the
-  dedicated scenario). `CONTACTLESS_SPLIT` (precision 0.978) and velocity rules carry it.
+  shows no device, IP or location novelty, so the model alone ranks it less well. On the dedicated
+  `lost-stolen-contactless` scenario (24 campaigns, out of sample) it scored ROC-AUC 0.965 but PR-AUC
+  only 0.67, and lost/stolen fraud was flagged 0.75 and declined 0.70. `CONTACTLESS_SPLIT`
+  (precision 0.88–0.98) and the velocity rules carry it.
 - **Bust-out is the hardest:** the build-up makes the account look healthy. Even ground truth
   declines only 40%, because the bust looks like a good customer's big purchase until the line is
   exhausted.
@@ -329,6 +331,18 @@ Measured on fraud-eval (share of all legitimate customers each source flags; bas
 **Warm state from another world inflates false positives.** A run on a different world over warm
 Flink state served features only 78.8% exact. `IMPOSSIBLE_TRAVEL` then fired on 4.4% of legitimate
 customers, because a card's "last location" came from another world's card with the same id. The
+same scenario rerun on clean state:
+
+| lost-stolen-contactless | over another world's state | clean state |
+|---|---|---|
+| features exact (verify) | 78.8% | 99.8% |
+| `IMPOSSIBLE_TRAVEL` fires / legitimate customers hit | 3,995 / 4.44% | 73 / 0.08% |
+| false-positive rate | 7.27% | 1.31% |
+| model ROC-AUC / PR-AUC | 0.90 / 0.31 | 0.965 / 0.67 |
+| fraud flagged / declined | 0.60 / 0.42 | 0.79 / 0.63 |
+| lost / stolen flagged / declined | 0.46 / 0.39 | 0.75 / 0.70 |
+
+The
 runner now records which world built the running Flink job's state, starts fresh whenever that is
 another world or unknown, and `pulsebench verify` fails gateway runs below 98% exact-set agreement
 ([how](feature-store-and-inference.md#whose-state-is-it-provenance-and-world-switches)).
