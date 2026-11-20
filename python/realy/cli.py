@@ -331,6 +331,8 @@ def rules_whatif(run_dir: Path = typer.Argument(..., help="finished run (served 
                  review: Optional[float] = typer.Option(None, help="override the review threshold for every variant"),
                  decline: Optional[float] = typer.Option(None, help="override the decline threshold for every variant"),
                  sample_mod: int = typer.Option(1, help="evaluate events with id % N == 0 only (speed)"),
+                 model: list[Path] = typer.Option([], "--model", help="also re-score the served vectors with these "
+                                                  "proxy weights (repeatable): model comparison on identical traffic"),
                  as_json: bool = typer.Option(False, "--json")):
     """Replay rule sets / thresholds over a finished run offline: precision, recall, FPR, $ approved per
     variant and per rule, against the run's own policy. Tune on a training run, confirm on the evaluation run."""
@@ -338,9 +340,15 @@ def rules_whatif(run_dir: Path = typer.Argument(..., help="finished run (served 
     from .scenario import Scenario
     sc = Scenario.model_validate(json.loads((run_dir / "scenario.json").read_text()))
     data = load(run_dir, sample_mod)
-    rows = [(f"as run ({sc.rules})", evaluate(data, sc.scoring_config()["rule_set_yaml"], review, decline))]
+    as_run = sc.scoring_config()["rule_set_yaml"]
+    rows = [(f"as run ({sc.rules})", evaluate(data, as_run, review, decline))]
     for r in rules:
         rows.append((r.stem, evaluate(data, r.read_text(), review, decline)))
+    if model:
+        from .report.whatif import rescore
+        for w in model:
+            d2 = rescore(data, w)
+            rows.append((f"model {d2['model_version']}", evaluate(d2, as_run, review, decline)))
     typer.echo(json.dumps(dict(rows), indent=1) if as_json else render(rows))
 
 

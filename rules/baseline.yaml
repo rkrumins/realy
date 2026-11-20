@@ -7,7 +7,7 @@
 # Precedence: DECLINE rule > ALLOW rule > score >= decline > REVIEW rule > score >= review > APPROVE
 # On the rules-only fallback path (model/feature deadline), score is ignored and the decision is
 # flagged degraded.
-version: baseline-v2
+version: baseline-v3
 thresholds:
   review: 0.55
   decline: 0.90
@@ -44,14 +44,12 @@ rules:
     when: "f.cust_device_novel > 0.5 && f.amount_usd > 300.0 && f.is_cnp > 0.5"
     action: REVIEW
     reason: "high-value remote purchase from a device never seen for this customer"
-  # v2: was DECLINE. Replayed with `realy rules-whatif` on a seed-42 run (not the evaluation world):
-  # precision 0.047 over 1,876 fires; as REVIEW, legitimate declines fall 3.68% -> 0.82% of good customers
-  # with flagged recall unchanged (0.915). A DECLINE split on amount_to_avg_ratio >= 8 / 12 added < 1 pt
-  # of decline recall at precision 0.077 and was rejected. The model score still declines at >= 0.90.
-  - id: ATO_NEW_DEVICE_NEW_COUNTRY
-    when: "f.cust_device_novel > 0.5 && f.cust_ip_country_novel > 0.5 && f.amount_usd > 100.0"
-    action: REVIEW
-    reason: "new device and new IP country with a material amount"
+  # v3: ATO_NEW_DEVICE_NEW_COUNTRY removed (it was DECLINE in v1, REVIEW in v2). Replayed with
+  # `pulsebench rules-whatif`, tuned on fraud-train (seed 7) and confirmed on fraud-eval (seed 1337):
+  # precision 0.036 over 9,618 fires on the evaluation world, 3.15% of all legitimate customers sent to
+  # review. Removing it: review rate (FPR) 4.13% -> 1.79%, flagged recall 0.919 -> 0.915, fraud $ approved
+  # +$3.7k of $2.86M. New device + new IP country stays a model input (the model weighs it with the
+  # amount, the merchant and the hour); ATO_NEW_DEVICE_HIGH_AMOUNT keeps the remote high-value case.
   - id: ATM_VELOCITY
     when: "f.card_atm_count_1h >= 3.0"
     action: DECLINE

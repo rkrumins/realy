@@ -24,8 +24,11 @@ def blob(values: np.ndarray, version: int, as_of: int, updated: int) -> bytes:
 
 def seed_profiles(world: World, force: bool = False, r: redis.Redis | None = None) -> int:
     r = r or redis_client()
-    marker = f"pf:_world:{world.content_hash}"
-    if not force and r.exists(marker):
+    # Customer / merchant ids repeat across worlds (they are row numbers), so pf:* holds ONE world's
+    # profiles at a time. The marker names that world; seed whenever another world is in place.
+    marker = "pf:_world"
+    cur = r.get(marker)
+    if not force and cur is not None and (cur.decode() if isinstance(cur, bytes) else cur) == world.content_hash:
         return 0
     schema = load_schema()
     now = now_us()
@@ -46,7 +49,7 @@ def seed_profiles(world: World, force: bool = False, r: redis.Redis | None = Non
                 pipe.execute()
         pipe.execute()
         n += ids.shape[0]
-    r.set(marker, now)
+    r.set(marker, world.content_hash)
     return n
 
 

@@ -168,7 +168,9 @@ def train(run_dirs: list[Path], hidden: tuple[int, ...] = (64, 32), trees: int =
                          "roc_auc_vs_truth": float(roc_auc_score(yte_truth, p)) if yte_truth.any() else None,
                          "pr_auc_vs_truth": float(average_precision_score(yte_truth, p)) if yte_truth.any() else None,
                          "evaluated_on": "random holdout of the training runs (in-sample world)"}
-    tag = "obs" if lstats["labels"] == "observed" else "gt"
+    # the version names what the model learnt from: label mode and (when not the default 30 days)
+    # the label maturity, so models trained differently never overwrite each other
+    tag = "gt" if lstats["labels"] != "observed" else ("obs" if maturity_days == 30 else f"obs{maturity_days:g}")
     version = f"proxy-{tag}-{X.shape[0]}-{seed}"
     out = Path(out)
     files = export_mlp(mlp, dim, n_feat, version, out, schema.names)

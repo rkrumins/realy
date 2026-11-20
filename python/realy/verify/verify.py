@@ -284,8 +284,15 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         out["audit"] = audit_checks(ch, run_dir.name, n_run_events, scorer, rules, schema)
     except Exception as e:  # noqa: BLE001
         out["audit"] = {"error": f"ClickHouse unavailable or not ingesting: {e}"}
+    # exact-set target: flink-inline computes in-task (must be exact); gateway topologies re-window state
+    # blobs and differ only by store lag (REALY_VERIFY_MIN_EXACT, default 0.98). Lower means the served
+    # features are wrong, e.g. state left over from another world.
+    exact = out["features"]["exact_set_agreement"] or 0
+    target = 0.999 if sc.topology == "flink-inline" else float(os.environ.get("REALY_VERIFY_MIN_EXACT", "0.98"))
+    out["features"]["exact_set_target"] = target
+    out["features"]["exact_set_ok"] = exact >= target or out["features"]["compared_events"] == 0
     passed = (out["rules"]["parity"] == 1.0 and out["score"]["parity"] == 1.0 and out["outcome"]["parity"] == 1.0
-              and (sc.topology != "flink-inline" or (out["features"]["exact_set_agreement"] or 0) >= 0.999))
+              and out["features"]["exact_set_ok"])
     a = out.get("audit", {})
     if "complete" in a:
         passed = passed and a["complete"]
@@ -365,7 +372,8 @@ def render(v: dict[str, Any]) -> str:
     f = v["features"]
     lines = [f"=== verify {v['run_id']}: {'PASS' if v['passed'] else 'FAIL'} ===",
              f"features: {f['compared_events']:,} served vectors vs reference; exact-set agreement "
-             f"{(f['exact_set_agreement'] or 0):.4%} ({f['note']})",
+             f"{(f['exact_set_agreement'] or 0):.4%} (target {f.get('exact_set_target', 0):.1%}"
+             f"{'' if f.get('exact_set_ok', True) else ' - BELOW TARGET'}; {f['note']})",
              "  lowest agreement: " + ", ".join(f"{k} {a:.1%}" for k, a in f["worst"]),
              f"rules parity (Java CEL vs Python CEL): {v['rules']['parity']:.4%} of {v['rules']['checked']:,}",
              f"score parity (proxy model recompute): {v['score']['parity']:.4%} of {v['score']['checked']:,}",

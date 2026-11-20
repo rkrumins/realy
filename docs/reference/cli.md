@@ -147,6 +147,7 @@ pulsebench rules-whatif RUN_DIR [OPTIONS]
 | `--review` | float |  | override the review threshold for every variant |
 | `--decline` | float |  | override the decline threshold for every variant |
 | `--sample-mod` | int | `1` | evaluate events with id % N == 0 only (speed) |
+| `--model` | list[path] |  | also re-score the served vectors with these proxy weights (repeatable): model comparison on identical traffic |
 | `--json` | flag |  |  |
 
 ## `pulsebench run`

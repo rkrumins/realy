@@ -309,6 +309,21 @@ time and the stream.
   - **Cost:** a decision becomes visible only when the checkpoint that contains it commits.
     Measured: e2e p50 5.3 s, p99 10.2 s against 61 ms of hot path.
   - **Use:** fine for an audit stream, never for authorisation.
+- **Measured** (the Flink job during a `fraud-eval` run: 200k customers plus one simulated day of
+  history, parallelism 2, 16 subtasks), read from the Flink REST API:
+
+  | | Value |
+  |---|---|
+  | State backend / storage | `EmbeddedRocksDBStateBackend` / `FileSystemCheckpointStorage` |
+  | Mode, interval | at-least-once, 10 s (timeout 120 s, aligned barriers not needed) |
+  | Checkpoints | 21 of 21 completed, 0 failed |
+  | Full state in RocksDB | 118 MB |
+  | Uploaded per checkpoint (incremental) | 28.6 MB latest, 24 MB median (about a quarter of the state) |
+  | Checkpoint duration | p50 327 ms, max 1.6 s; decisions never wait for it |
+
+  Incremental checkpoints upload only the SST files RocksDB wrote since the last checkpoint, so their
+  cost tracks the rate of change, not the size of the state. At 10M customers (≈31 GB of state in the
+  production plan) a checkpoint still uploads only what changed in the last 10–30 s.
 - **Source offsets:** offsets are committed back to Kafka on checkpoint
   (`commit.offsets.on.checkpoint`). Kafka's consumer-lag view of `realy-flink` therefore trails by up
   to one checkpoint. On restore, Flink uses the offsets stored in the checkpoint, not Kafka's.

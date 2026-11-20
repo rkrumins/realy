@@ -423,6 +423,7 @@ class _Run:
         except Exception as e:  # noqa: BLE001
             log(f"warn: profile seeding skipped ({e})")
         self.check("prepare")
+        world_switch_state(sc, self.world.content_hash, log)
         prof = sc.traffic.profile
         self.base_tps = prof.tps if prof.kind != "step" else (prof.start_tps or prof.tps)
         self.ts = auto_time_scale(self.world, self.base_tps) if sc.traffic.time_scale == "auto" else float(sc.traffic.time_scale)
@@ -676,6 +677,46 @@ class _Run:
             from ..report.history import store
             store(self.run_dir, log=self.log)
         return summary
+
+
+STATE_WORLD_KEY = "realy:state-world:{pipeline}"
+
+
+def world_switch_decision(prev_world: str | None, world: str, flink_state: str, backfill_days: float | None,
+                          default_backfill_days: float = 1.0) -> tuple[str, float | None, str | None]:
+    """Entity ids are deterministic per world (customer = row number, cards and devices by shard
+    counters), so Flink's keyed state and the online store built for one world are wrong for another:
+    a card's last location, a customer's 30-day average and its novelty sets would belong to a
+    different entity (measured: 78.8% feature agreement instead of 99.1%). When the pipeline's state
+    belongs to another world, start it fresh and warm it with history. Returns
+    (flink_state, backfill_days, reason or None)."""
+    if flink_state == "fresh" or prev_world in (None, world):
+        return flink_state, backfill_days, None
+    reason = f"pipeline state belongs to world {prev_world[:12]}, this run uses {world[:12]}"
+    return "fresh", backfill_days or default_backfill_days, reason
+
+
+def world_switch_state(sc: Scenario, world_hash: str, log: Callable[[str], None]) -> None:
+    from .lifecycle import pipeline
+    key = STATE_WORLD_KEY.format(pipeline=pipeline())
+    try:
+        from .seed import redis_client
+        r = redis_client()
+        prev = r.get(key)
+        prev = prev.decode() if isinstance(prev, bytes) else prev
+    except Exception as e:  # noqa: BLE001
+        log(f"warn: cannot read the pipeline's state world ({e.__class__.__name__}); assuming unchanged")
+        return
+    state, bf, reason = world_switch_decision(prev, world_hash, sc.flink_state, sc.traffic.backfill_days,
+                                              float(os.environ.get("REALY_WORLD_SWITCH_BACKFILL_DAYS", "1")))
+    if reason:
+        log(f"world switch: {reason}: starting Flink state fresh and clearing online-store stream blobs, "
+            f"{bf:g} sim day(s) of history warm it (REALY_WORLD_SWITCH_BACKFILL_DAYS)")
+        sc.flink_state, sc.traffic.backfill_days = state, bf
+    try:
+        r.set(key, world_hash)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None = None,

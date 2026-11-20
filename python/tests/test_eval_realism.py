@@ -72,3 +72,78 @@ def test_auc_metrics_match_definitions():
     assert roc_auc(y, s) == pytest.approx(8 / 9)
     assert average_precision(y, s) == pytest.approx((1 + 1 + 0.75) / 3)
     assert roc_auc(y, np.ones(6)) == pytest.approx(0.5)
+
+
+def test_clickhouse_exception_after_200_is_a_clear_error(monkeypatch):
+    """ClickHouse streams results: an exception raised mid-query arrives in a 200 body."""
+    import httpx
+
+    from realy.verify import verify as v
+    body = '{"n": 1}\nCode: 241. DB::Exception: Memory limit exceeded: while reading column features_raw'
+
+    def fake_post(*a, **k):
+        return httpx.Response(200, text=body, request=httpx.Request("POST", "http://ch"))
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(v.ClickHouseError, match="Memory limit"):
+        v._q("http://ch", "SELECT 1")
+
+
+def test_verifier_finds_hot_deployed_model_versions(tmp_path, monkeypatch):
+    from realy.verify.verify import ProxyScorer
+    src = json.loads((Path(proxy.REPO_ROOT) / "models" / "proxy" / "default.weights.json").read_text())
+    (tmp_path / "proxy" / "versions").mkdir(parents=True)
+    (tmp_path / "proxy" / "versions" / "proxy-obs-9-1.weights.json").write_text(json.dumps({**src, "version": "proxy-obs-9-1"}))
+    monkeypatch.setattr(proxy, "MODELS", tmp_path)
+    assert ProxyScorer.for_version("proxy-obs-9-1").version == "proxy-obs-9-1"
+
+
+def test_world_switch_starts_state_fresh():
+    from realy.runner.run import world_switch_decision
+    assert world_switch_decision("aaa", "aaa", "warm", None) == ("warm", None, None)           # same world
+    assert world_switch_decision(None, "aaa", "warm", None) == ("warm", None, None)            # first run
+    st, bf, why = world_switch_decision("aaa", "bbb", "warm", None, 1.0)
+    assert (st, bf) == ("fresh", 1.0) and "aaa" in why                                         # switched: fresh + history
+    assert world_switch_decision("aaa", "bbb", "warm", 2.0)[1] == 2.0                          # keeps its own backfill
+    assert world_switch_decision("aaa", "bbb", "fresh", None)[2] is None                       # already fresh
+
+
+def test_profile_seed_marker_names_the_current_world():
+    from realy.runner import seed
+
+    class R:
+        def __init__(self):
+            self.kv = {}
+
+        def get(self, k):
+            return self.kv.get(k)
+
+        def set(self, k, v):
+            self.kv[k] = v.encode() if isinstance(v, str) else v
+
+        def pipeline(self, transaction=False):
+            outer = self
+
+            class P:
+                def set(self, k, v):
+                    outer.kv[k] = v
+
+                def execute(self):
+                    return []
+            return P()
+
+    class W:
+        def __init__(self, h):
+            self.content_hash = h
+
+        def customer_profile_arrays(self):
+            return {"customer_id": np.array([1, 2]), "tenure_days": np.array([1, 2]), "segment": np.array([0, 1]),
+                    "avg_ticket_usd": np.array([10, 20]), "home_lat": np.zeros(2), "home_lon": np.zeros(2),
+                    "home_country_idx": np.zeros(2), "tz_offset_min": np.zeros(2)}
+
+        def merchant_profile_arrays(self):
+            return {"merchant_id": np.array([1]), "risk_tier": np.array([1]), "fraud_rate_30d": np.array([0.0])}
+    r = R()
+    assert seed.seed_profiles(W("A"), r=r) > 0 and seed.seed_profiles(W("A"), r=r) == 0
+    assert seed.seed_profiles(W("B"), r=r) > 0          # another world overwrote pf:* ...
+    assert seed.seed_profiles(W("A"), r=r) > 0          # ... so switching back re-seeds (used to be skipped)

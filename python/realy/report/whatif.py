@@ -55,6 +55,20 @@ def load(run_dir: Path, sample_mod: int = 1) -> dict[str, Any]:
     }
 
 
+def rescore(data: dict[str, Any], weights: str | Path) -> dict[str, Any]:
+    """The same served feature vectors scored by another model (offline, the verifier's exact
+    implementation of the proxy MLP). Every event counts as model-scored: this measures model + policy
+    on identical traffic without the run's deadline fallbacks."""
+    from ..verify.verify import ProxyScorer
+    sc = ProxyScorer(weights)
+    X = np.asarray(data["features"], np.float32)
+    out = dict(data)
+    out["score"] = sc.score(X).astype(np.float64)
+    out["path"] = np.zeros(X.shape[0], np.int8)
+    out["model_version"] = sc.version
+    return out
+
+
 def evaluate(data: dict[str, Any], rules_yaml: str, review: float | None = None, decline: float | None = None) -> dict[str, Any]:
     schema = load_schema()
     rules = Rules(rules_yaml)
@@ -77,7 +91,7 @@ def evaluate(data: dict[str, Any], rules_yaml: str, review: float | None = None,
     flagged, declined = outcome >= 2, outcome == 3
     legit = ~y
     amt = data["amount"]
-    res = {"rules": rules.version, "review": rules.review, "decline": rules.decline, "events": int(n),
+    res = {"rules": rules.version, "model": data.get("model_version", "as served"), "review": rules.review, "decline": rules.decline, "events": int(n),
            "fraud_events": int(y.sum()),
            "recall_flagged": float(flagged[y].mean()) if y.any() else None,
            "recall_declined": float(declined[y].mean()) if y.any() else None,
@@ -86,7 +100,13 @@ def evaluate(data: dict[str, Any], rules_yaml: str, review: float | None = None,
            "false_positive_rate": float(flagged[legit].mean()) if legit.any() else None,
            "legit_declined_rate": float(declined[legit].mean()) if legit.any() else None,
            "fraud_usd_approved": float(amt[y & ~flagged].sum() / 100), "fraud_usd_total": float(amt[y].sum() / 100),
-           "by_rule": {}}
+           "by_rule": {}, "by_type": {}}
+    ft = data["fraud_type"]
+    for t in sorted(set(int(x) for x in ft[y])):
+        m = y & (ft == t)
+        res["by_type"][int(t)] = {"events": int(m.sum()), "recall_flagged": float(flagged[m].mean()),
+                                  "recall_declined": float(declined[m].mean()),
+                                  "usd_approved": float(amt[m & ~flagged].sum() / 100)}
     for rid, idx in sorted(per_rule.items()):
         ix = np.asarray(idx)
         res["by_rule"][rid] = {"fires": int(ix.size), "fraud": int(y[ix].sum()), "precision": float(y[ix].mean()),
