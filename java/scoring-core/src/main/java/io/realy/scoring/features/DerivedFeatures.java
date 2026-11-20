@@ -26,10 +26,11 @@ public final class DerivedFeatures {
             if (s.expr() != null) {
                 // expression features (feature_schema.yaml `expr`): the rules' environment, `event` + `f`;
                 // `f` holds every feature filled so far (stream, profile, and earlier derived ones)
-                if (vars == null) vars = new java.util.HashMap<>(java.util.Map.of("event", EventView.of(e)));
-                java.util.Map<String, Double> f = new java.util.HashMap<>(schema.features.size());
-                for (FeatureSpec o : schema.features) f.put(o.name(), (double) v[o.index()]);
-                vars.put("f", f);
+                // One environment per event: `f` is a live view over v (no copy, values boxed only when an
+                // expression reads them), so each expression sees every feature as it stands when it runs,
+                // exactly what the Python mirror's snapshot holds. (Copying all features into a map per
+                // expression cost ~0.1 ms of gateway CPU per event with six expressions.)
+                if (vars == null) vars = java.util.Map.of("event", EventView.of(e), "f", new FeatureMap(schema, v));
                 v[s.index()] = (float) s.expr().eval(vars);
             } else {
                 v[s.index()] = (float) value(schema, s.fn(), e, attrs, v);
