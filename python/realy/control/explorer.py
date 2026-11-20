@@ -172,7 +172,7 @@ class Explorer:
         return s.rows(idx)
 
     # ------------------------------------------------------------------ one decision
-    def decision(self, run_id: str, event_id: int) -> dict[str, Any]:
+    def decision(self, run_id: str, event_id: int, maturity_days: float = 30.0) -> dict[str, Any]:
         d = self.run_dir(run_id)
         flt = [("event_id", "=", event_id)]
         ev = _read(d, "events-*.parquet", None, flt)
@@ -242,8 +242,71 @@ class Explorer:
                          "agg": f.agg, "value": float(v), "default": f.default,
                          "missing": bool(bits[f.index]) if f.index < bits.size else False}
                         for f, v in zip(schema.features, fr["values"])]
+        try:
+            label.update(self._label_story(run_id, d, er, maturity_days))
+        except Exception as e:  # noqa: BLE001 - an explanation must never break the event view
+            label["story_error"] = f"{type(e).__name__}: {e}"
+        explanation = None
+        if features is not None and decision is not None:
+            try:
+                explanation = self._explain(d, er, features, decision)
+            except Exception as e:  # noqa: BLE001
+                explanation = {"error": f"{type(e).__name__}: {e}"}
         return {"event": event, "decision": decision, "features": features, "spans": spans, "timing": timing,
-                "label": label}
+                "label": label, "explanation": explanation}
+
+    def _label_story(self, run_id: str, d: Path, er: dict[str, Any], maturity_days: float) -> dict[str, Any]:
+        from ..explain import label_story
+        from ..usecases import for_run
+        reg = for_run(d)
+        step = None
+        cid = int(er.get("campaign_id") or 0)
+        if cid and er.get("campaign_role"):
+            members = _read(d, "events-*.parquet", ["event_id", "event_time_us", "campaign_role"],
+                            [("campaign_id", "=", cid)])
+            if members is not None and members.num_rows:
+                m = members.to_pydict()
+                same = sorted((t, e) for t, e, r in zip(m["event_time_us"], m["event_id"], m["campaign_role"])
+                              if r == er["campaign_role"])
+                ids = [e for _, e in same]
+                if int(er["event_id"]) in ids:
+                    step = (ids.index(int(er["event_id"])) + 1, len(ids))
+        run_end = int(np.max(self.slim(run_id).ev["event_time_us"])) if len(self.slim(run_id).ev["event_time_us"]) else 0
+        return {"story": label_story(er, reg, run_end, maturity_days, step)}
+
+    def _explain(self, d: Path, er: dict[str, Any], features: list[dict[str, Any]], decision: dict[str, Any]) -> dict[str, Any]:
+        """Policy path, every rule with the values it saw, and the model's attribution (realy.explain)."""
+        import json as _json
+
+        from ..explain import explain_rules, integrated_gradients, policy_path, top_attributions
+        from ..features.derived import event_view
+        from ..scenario import Scenario
+        from ..verify.verify import ProxyScorer, Rules
+        sc = Scenario.model_validate(_json.loads((d / "scenario.json").read_text()))
+        cfg = sc.scoring_config()
+        rules = Rules(cfg["rule_set_yaml"])
+        review = float(cfg.get("review_threshold") or 0) or rules.review
+        decline = float(cfg.get("decline_threshold") or 0) or rules.decline
+        fmap = {f["name"]: float(f["value"]) for f in features}
+        results = explain_rules(cfg["rule_set_yaml"], fmap, event_view(er))
+        score = decision.get("score")
+        out: dict[str, Any] = {"rule_set": rules.version, "rules": results,
+                               "policy": policy_path(results, score, review, decline, decision.get("outcome"),
+                                                     decision.get("path")),
+                               "served_rule_hits": decision.get("rule_hits")}
+        if score is not None and decision.get("path") in ("FULL", None):
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                scorer = ProxyScorer.for_version(decision.get("model_version"))
+            x = np.asarray([f["value"] for f in features], np.float64)
+            ig = integrated_gradients(scorer, x)
+            out["attribution"] = {"model_version": scorer.version, "score": ig["score"],
+                                  "served_score": score, "baseline_score": ig["baseline_score"],
+                                  "logit": ig["logit"], "baseline_logit": ig["baseline_logit"],
+                                  "top": top_attributions(ig, [f["name"] for f in features], x, scorer.mean),
+                                  "method": "integrated gradients from the training mean (64 steps)"}
+        return out
 
     # ------------------------------------------------------------------ customer / campaigns
     def customer(self, run_id: str, cid: int) -> dict[str, Any]:
@@ -304,12 +367,12 @@ def make_router(runs_dir: Path) -> APIRouter:
         return {"results": ex.search(run_id, q, kind, max(1, min(limit, 1000)))}
 
     @r.get("/decisions/{event_id}")
-    def decision(run_id: str, event_id: str) -> dict[str, Any]:
+    def decision(run_id: str, event_id: str, maturity_days: float = 30.0) -> dict[str, Any]:
         try:
             eid = int(event_id)
         except ValueError:
             raise HTTPException(400, "event_id must be an integer") from None
-        return ex.decision(run_id, eid)
+        return ex.decision(run_id, eid, maturity_days)
 
     @r.get("/customers/{cid}")
     def customer(run_id: str, cid: str) -> dict[str, Any]:

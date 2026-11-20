@@ -1,3 +1,5 @@
+import { BaseRateAndImpact, Insights, LabelCoverage, ModelEvaluation } from "@/components/insights";
+import { StartupPanel } from "@/components/startup";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft, Copy, Database, Download, FileCode2, FileText, GitCompareArrows, Microscope, ScanSearch, ShieldCheck, ShieldX, Target,
@@ -147,6 +149,11 @@ function Detection({ r }: { r: Report }) {
         <Kpi label="False-positive rate" value={fmtPct(d.false_positive_rate, 2)} tone={isNum(d.false_positive_rate) && d.false_positive_rate > 0.05 ? "warn" : undefined} />
         <Kpi label="Fraud $ approved" value={fmtUsd(d.fraud_usd_approved)} sub={`of ${fmtUsd(d.fraud_usd_total)}`} />
       </div>
+      <BaseRateAndImpact r={r} />
+      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <ModelEvaluation d={d} />
+        <LabelCoverage d={d} />
+      </div>
       {types.length > 0 && (
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {types.map(([name, t]) => (
@@ -169,7 +176,7 @@ function Detection({ r }: { r: Report }) {
         </div>
       )}
       {rules.length > 0 && (
-        <Card className="mt-4 overflow-hidden">
+        <Card id="rules" className="mt-4 scroll-mt-20 overflow-hidden">
           <CardHeader title="Rules" subtitle="sorted by legitimate hits: the false-positive drivers first" />
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-[12.5px]">
@@ -312,7 +319,8 @@ export default function RunReport() {
       ) : (
         <>
           <Kpis r={r} />
-          <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+          <Insights items={r.insights} runId={d.run_id} />
+          <div id="latency" className="mt-6 grid scroll-mt-20 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <Card>
               <CardHeader title="Latency by step" subtitle="measured stage decomposition (collector, one clock domain): p50 bars chained along the hot path, p99 whiskers" />
               <CardBody><StepWaterfall stages={r.stages} budget={r.budget?.e2e_p99_ms} /></CardBody>
@@ -380,7 +388,13 @@ export default function RunReport() {
           )}
 
           <Detection r={r} />
-          <Verify v={d.verify} />
+          <div id="verify" className="scroll-mt-20"><Verify v={d.verify} /></div>
+          {r.startup && (
+            <div id="startup" className="scroll-mt-20">
+              <SectionTitle>Startup</SectionTitle>
+              <StartupPanel startup={r.startup} phase="COMPLETE" className="mt-0" />
+            </div>
+          )}
 
           {svc.length > 0 && (
             <>

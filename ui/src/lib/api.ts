@@ -109,7 +109,8 @@ export const api = {
   // explorer
   search: (run: string, q: string, kind = "auto", limit = 50) =>
     request<{ results: SearchRow[] }>(`/api/runs/${enc(run)}/search?q=${enc(q)}&kind=${enc(kind)}&limit=${limit}`),
-  decision: (run: string, eventId: string) => request<DecisionDetail>(`/api/runs/${enc(run)}/decisions/${enc(eventId)}`),
+  decision: (run: string, eventId: string, maturityDays = 30) =>
+    request<DecisionDetail>(`/api/runs/${enc(run)}/decisions/${enc(eventId)}?maturity_days=${maturityDays}`),
   customer: (run: string, cid: string) => request<CustomerResponse>(`/api/runs/${enc(run)}/customers/${enc(cid)}`),
   campaigns: (run: string) => request<{ campaigns: Campaign[] }>(`/api/runs/${enc(run)}/campaigns`),
   campaign: (run: string, cid: string) => request<{ events: SearchRow[] }>(`/api/runs/${enc(run)}/campaigns/${enc(cid)}`),

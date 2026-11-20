@@ -1,3 +1,4 @@
+import { ExplanationCard, LabelStoryCard } from "@/components/explain";
 import { useQuery } from "@tanstack/react-query";
 import { CreditCard, Fingerprint, Flag, ScanSearch, Search, ShieldAlert, Timer, User, X } from "lucide-react";
 import * as React from "react";
@@ -62,7 +63,9 @@ function ResultsTable({ rows, onPick, selected, onCustomer }: { rows: SearchRow[
 }
 
 function DecisionPanel({ run, eventId, onClose, onCustomer }: { run: string; eventId: string; onClose: () => void; onCustomer: (c: string) => void }) {
-  const q = useQuery({ queryKey: ["decision", run, eventId], queryFn: () => api.decision(run, eventId), retry: 0 });
+  const [maturity, setMaturity] = React.useState(30);
+  const q = useQuery({ queryKey: ["decision", run, eventId, maturity], queryFn: () => api.decision(run, eventId, maturity), retry: 0,
+    placeholderData: (prev) => prev });
   const top = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => { if (q.data) top.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [q.data, eventId]);
   if (q.isLoading) return <Card className="p-5"><Skeleton className="h-6 w-48" /><Skeleton className="mt-4 h-64" /></Card>;
@@ -132,6 +135,10 @@ function DecisionPanel({ run, eventId, onClose, onCustomer }: { run: string; eve
           </div>
         </div>
       </Card>
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
+        <LabelStoryCard story={d.label.story} maturity={maturity} onMaturity={setMaturity} />
+        <ExplanationCard x={d.explanation} />
+      </div>
       <Card>
         <CardHeader title="Span waterfall" subtitle="every service appends spans tagged with its clock domain; cross-domain gaps are transit" />
         <CardBody><SpanWaterfall detail={d} /></CardBody>
@@ -262,8 +269,9 @@ export default function Explorer() {
   const [event, setEvent] = useParam("event");
   const [customer, setCustomer] = useParam("customer");
   const [tab, setTab] = useParam("tab");
-  const [text, setText] = React.useState("");
-  const [query, setQuery] = React.useState("");
+  const [qp, setQp] = useParam("q");
+  const [text, setText] = React.useState(qp ?? "");
+  const [query, setQuery] = React.useState(qp ?? "");
   const runs = useQuery({ queryKey: ["runs"], queryFn: () => api.runs(500) });
   const done = (runs.data?.history ?? []).filter((r) => r.status === "done");
   const runId = run || done[0]?.run_id || "";
@@ -278,12 +286,12 @@ export default function Explorer() {
         <Select className="w-full sm:w-[360px]" value={runId} onChange={(v) => setRun(v, { event: null, customer: null })} ariaLabel="Run"
           options={done.map((r) => ({ value: r.run_id, label: <span className="font-mono text-[12.5px]">{r.run_id}</span>, hint: `${r.verdict ?? ""} · ${fmtNum(r.decided)} decisions` }))}
           placeholder={runs.isLoading ? "Loading runs…" : "Pick a run"} />
-        <form className="relative min-w-[240px] flex-1" onSubmit={(e) => { e.preventDefault(); setQuery(text.trim()); setTab(null); }}>
+        <form className="relative min-w-[240px] flex-1" onSubmit={(e) => { e.preventDefault(); setQuery(text.trim()); setQp(text.trim() || null); setTab(null); }}>
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" />
           <Input value={text} onChange={(e) => setText(e.target.value)} className="pl-9" data-testid="explorer-search"
             placeholder="event id, customer:123, card:…, campaign:…, fraud:card_testing, outcome:DECLINE" />
         </form>
-        <Button variant="secondary" onClick={() => { setQuery(text.trim()); setTab(null); }}><ScanSearch />Search</Button>
+        <Button variant="secondary" onClick={() => { setQuery(text.trim()); setQp(text.trim() || null); setTab(null); }}><ScanSearch />Search</Button>
       </div>
       {!runId ? <EmptyState icon={<ScanSearch />} title="No completed runs">Run a scenario first; its events and decisions become explorable here.</EmptyState> : (
         <Tabs value={tab || "search"} onValueChange={(t) => setTab(t === "search" ? null : t)}>

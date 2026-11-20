@@ -381,6 +381,15 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     if expect:
         rep["summary"]["expected_verdict"] = expect
         rep["summary"]["matches_expectation"] = expect == verdict
+    try:
+        from ..usecases import for_run
+        from .insights import build_insights, load_config, previous_report
+        cfg = load_config()
+        rep["insights_config"] = cfg
+        rep["insights"] = build_insights(rep, cfg, previous_report(run_dir, scenario.name), for_run(run_dir))
+    except Exception as e:  # noqa: BLE001 - insights must never break a report
+        rep["insights"] = [{"severity": "info", "area": "report", "title": f"insights unavailable: {type(e).__name__}: {e}",
+                            "detail": "", "evidence": {}, "link": None, "action": ""}]
     rep["text"] = render_text(rep)
     _write(run_dir, rep)
     return rep
@@ -427,11 +436,32 @@ def _abort_info(run: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _label_coverage(ev: pa.Table, fraud: np.ndarray, ftype: np.ndarray, run_dir: Path) -> dict[str, Any] | None:
+    """Of this run's fraud, the share a training set cut `label_maturity_days` (contracts/insights.yaml)
+    after the window would see labelled, overall and per typology. Late and unreported fraud trains
+    as legitimate."""
+    if "label_delay_us" not in ev.column_names or not fraud.any():
+        return None
+    from ..usecases import for_run
+    from .insights import load_config
+    days = float(load_config().get("label_maturity_days", 30))
+    et = ev["event_time_us"].to_numpy()
+    delay = ev["label_delay_us"].to_numpy()
+    cut = int(et[fraud].max()) + int(days * 86_400_000_000)
+    seen = fraud & (delay >= 0) & (et + np.maximum(delay, 0) <= cut)
+    names = for_run(run_dir).fraud_type_names()
+    by_type = {names.get(int(t), str(t)): round(float(seen[fraud & (ftype == t)].mean()), 4)
+               for t in np.unique(ftype[fraud])}
+    return {"maturity_days": days, "fraud_events": int(fraud.sum()),
+            "reported": round(float((delay[fraud] >= 0).mean()), 4), "coverage": round(float(seen[fraud].mean()), 4),
+            "by_type": by_type}
+
+
 def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
     ev = _read(run_dir, "events-*.parquet")
     if ev is None or d is None or not d.num_rows:
         return {}
-    cols = ["event_id", "is_fraud", "fraud_type", "campaign_id", "amount_usd_minor", "event_time_us"]
+    cols = ["event_id", "is_fraud", "fraud_type", "campaign_id", "amount_usd_minor", "event_time_us", "label_delay_us"]
     ev = ev.select([c for c in cols if c in ev.column_names])
     eid = ev["event_id"].to_numpy()
     order = np.argsort(d_id)
@@ -456,6 +486,8 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
         "recall_declined": float(declined[fraud].mean()) if fraud.any() else None,
         "precision_flagged": float(fraud[flagged].mean()) if flagged.any() else None,
         "false_positive_rate": float(flagged[legit].mean()) if legit.any() else None,
+        "legit_flagged": int((flagged & legit).sum()), "legit_declined": int((declined & legit).sum()),
+        "fraud_flagged": int((flagged & fraud).sum()), "fraud_declined": int((declined & fraud).sum()),
         "fraud_usd_total": float(amt[fraud].sum() / 100), "fraud_usd_approved": float(amt[fraud & ~flagged].sum() / 100),
         "by_type": {},
     }
@@ -488,6 +520,7 @@ def _detection(run_dir: Path, d: pa.Table, d_id: np.ndarray) -> dict[str, Any]:
             model["fraud_base_rate"] = float(y[scored].mean())
         res["model"] = model
     res["evaluation"] = _evaluation(run_dir, d)
+    res["labels"] = _label_coverage(ev, fraud, ftype, run_dir)
     from ..usecases import for_run
     for t, name in for_run(run_dir).fraud_type_names().items():
         m = fraud & (ftype == t)
@@ -608,6 +641,11 @@ def render_text(rep: dict[str, Any]) -> str:
              f"hot-path p99 {_f(s['hot_path_p99_ms'])} ms  within budget {s['within_budget']:.2%}"]
     if s["reasons"]:
         lines.append("reasons: " + "; ".join(s["reasons"]))
+    ins = [x for x in rep.get("insights") or [] if x.get("severity") != "good"][:6]
+    if ins:
+        mark = {"critical": "!!", "warning": " !", "info": " -"}
+        lines.append("insights:")
+        lines += [f"  {mark.get(x['severity'], ' -')} {x['title']}" for x in ins]
     if rep.get("startup"):
         steps = [x for x in rep["startup"].get("steps", []) if x.get("id") != "measure" and x.get("status") != "pending"]
         lines.append(f"startup: prepared in {s.get('prepare_s', 0):.1f} s: " + ", ".join(_startup_item(x) for x in steps))

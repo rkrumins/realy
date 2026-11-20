@@ -178,6 +178,8 @@ export interface Level {
 }
 
 export interface ReportSummary {
+  measured_s?: number | null;
+  prepare_s?: number | null;
   verdict: Verdict;
   reasons: string[];
   emitted: number;
@@ -215,6 +217,37 @@ export interface Detection {
     approved_before_first_decline_mean: number; usd_approved: number;
   }>;
   by_rule?: Record<string, { hits: number; fraud: number; legit: number; precision: number; legit_hit_rate: number }>;
+  legit_flagged?: number;
+  legit_declined?: number;
+  fraud_flagged?: number;
+  fraud_declined?: number;
+  model?: {
+    scored: number; rules_only_fallback: number; fallback_recall_flagged: number | null;
+    roc_auc?: number; pr_auc?: number; fraud_base_rate?: number;
+  };
+  evaluation?: {
+    sample: "in-sample" | "out-of-sample" | "unknown" | "not-trained"; reason?: string; model_version?: string;
+    labels?: string; trained_on?: { run_id: string; scenario?: string; seed?: number }[];
+  };
+  labels?: { maturity_days: number; fraud_events: number; reported: number; coverage: number; by_type: Record<string, number> } | null;
+}
+
+/** A ranked finding (python/realy/report/insights.py). */
+export interface Insight {
+  severity: "critical" | "warning" | "info" | "good";
+  area: string;
+  title: string;
+  detail: string;
+  evidence: Record<string, unknown>;
+  link: { kind: string; query?: string; id?: string; a?: string; b?: string } | null;
+  action: string;
+}
+
+export interface InsightsConfig {
+  production_base_rate?: number;
+  label_maturity_days?: number;
+  costs?: { review_cost_usd?: number; reviews_per_analyst_hour?: number; decline_friction_usd?: number; challenge_abandon_rate?: number };
+  thresholds?: Record<string, number>;
 }
 
 export interface Report {
@@ -239,6 +272,9 @@ export interface Report {
     backlog_growing?: boolean; max_backlog?: number; sustainable?: boolean;
   };
   detection: Detection;
+  insights?: Insight[];
+  insights_config?: InsightsConfig;
+  startup?: StartupSnapshot | null;
   service: { stages?: Record<string, { p50_median_ms: number; p99_median_ms: number; p99_max_ms: number; count: number }>; counters?: Record<string, number> };
   sync?: Record<string, number>;
 }
@@ -470,7 +506,30 @@ export interface DecisionDetail {
     t_intended_us?: number | null; t_sent_us?: number | null; t_ingest_us?: number | null;
     t_decision_us?: number | null; t_collected_us?: number | null; t_response_us?: number | null; e2e_ms?: number | null; ack_us?: number | null;
   };
-  label: { is_fraud: boolean; fraud_type: string; campaign_id: string };
+  label: {
+    is_fraud: boolean; fraud_type: string; campaign_id: string;
+    story?: LabelStory; story_error?: string;
+  };
+  explanation?: Explanation | null;
+}
+
+export interface LabelStory {
+  title: string; truth: "fraud" | "legitimate"; typology: string | null; campaign_id: string | null;
+  role: string | null; role_typology: string | null; step: { index: number; of: number } | null;
+  label_source: string | null; label_delay_days: number | null; maturity_days: number;
+  observed: string; training: string;
+}
+
+export interface Explanation {
+  error?: string;
+  rule_set?: string;
+  served_rule_hits?: string[];
+  policy?: { outcome: string | null; branch: string; why: string; thresholds: { review: number; decline: number } };
+  rules?: { id: string; action: string; when: string; hit: boolean; reason: string; values: Record<string, unknown>; error?: string }[];
+  attribution?: {
+    model_version: string | null; score: number; served_score: number; baseline_score: number; logit: number; baseline_logit: number;
+    method: string; top: { feature: string; value: number; typical: number; contribution: number; direction: string }[];
+  };
 }
 
 export interface CustomerResponse {

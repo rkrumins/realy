@@ -77,7 +77,7 @@ The console UI is a client of this API; scripts and CI can use it too. Live Open
 | `GET` | `/api/runs/{run_id}/campaigns/{cid}` |  |  | Campaign |
 | `GET` | `/api/runs/{run_id}/campaigns` |  |  | Campaigns |
 | `GET` | `/api/runs/{run_id}/customers/{cid}` |  |  | Customer |
-| `GET` | `/api/runs/{run_id}/decisions/{event_id}` |  |  | Decision |
+| `GET` | `/api/runs/{run_id}/decisions/{event_id}` | `?maturity_days` |  | Decision |
 | `GET` | `/api/runs/{run_id}/search` | `?q, ?kind, ?limit` |  | Search |
 
 ## topology
