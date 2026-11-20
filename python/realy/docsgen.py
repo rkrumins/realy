@@ -298,6 +298,84 @@ def messages() -> str:
     return "".join(parts)
 
 
+# ------------------------------------------------------------------------------------------ environment
+_PY_ENV = re.compile(r"""(?:_?os)\.environ(?:\.get\(\s*|\[\s*)["']([A-Z][A-Z0-9_]+)["']\s*(?:,\s*([^)\]]+?))?\s*[)\]]""")
+_JAVA_ENV = re.compile(r"""Env\.(?:str|integer|lng|bool|dbl)\(\s*"([A-Z][A-Z0-9_]+)"\s*,\s*([^)]+?)\)|System\.getenv\(\s*"([A-Z][A-Z0-9_]+)"\s*\)""")
+_COMPONENTS = [("python/realy/control", "console"), ("python/realy/runner", "runner"), ("python/realy/emit", "emitter"),
+               ("python/realy/collect", "collector"), ("python/realy/verify", "verifier"), ("python/realy/report", "report"),
+               ("python/realy/train", "trainer"), ("python/realy", "python (shared)"),
+               ("java/scoring-gateway", "gateway"), ("java/flink-job", "Flink job"), ("java/mock-model-server", "model server"),
+               ("java/load-emitter", "Java load emitter"), ("java/scoring-core", "gateway + Flink (scoring core)"),
+               ("java/common", "every JVM service")]
+
+
+def environment() -> str:
+    """Every environment variable read by the code (Python os.environ, Java Env.* / System.getenv), with its
+    default and where it is read, and the values the compose stack sets."""
+    found: dict[str, dict[str, Any]] = {}
+
+    def note(var: str, default: str | None, path: Path, line: int) -> None:
+        rel = str(path.relative_to(REPO_ROOT))
+        comp = next((c for pre, c in _COMPONENTS if rel.startswith(pre)), rel.split("/")[0])
+        e = found.setdefault(var, {"defaults": set(), "components": set(), "where": []})
+        if default is not None:
+            d = default.strip()
+            if len(d) < 60:
+                e["defaults"].add(d)
+        e["components"].add(comp)
+        if len(e["where"]) < 3:
+            e["where"].append(f"{rel}:{line}")
+
+    for f in sorted((REPO_ROOT / "python" / "realy").rglob("*.py")):
+        if "_pb2" in f.name:
+            continue
+        for n, line in enumerate(f.read_text().splitlines(), 1):
+            for m in _PY_ENV.finditer(line):
+                note(m.group(1), m.group(2), f, n)
+    for f in sorted((REPO_ROOT / "java").rglob("*.java")):
+        if "/test/" in str(f) or "/build/" in str(f):
+            continue
+        for n, line in enumerate(f.read_text().splitlines(), 1):
+            for m in _JAVA_ENV.finditer(line):
+                if m.group(1):
+                    note(m.group(1), m.group(2), f, n)
+                else:
+                    note(m.group(3), None, f, n)
+    # variables read through a table rather than one call each: Kafka security (Python + Java)
+    from .common.kafka import SECURITY_ENV
+    kpy = REPO_ROOT / "python" / "realy" / "common" / "kafka.py"
+    sec_line = next((i for i, ln in enumerate(kpy.read_text().splitlines(), 1) if ln.startswith("SECURITY_ENV")), 1)
+    for var in SECURITY_ENV:
+        note(var, "unset: PLAINTEXT", kpy, sec_line)
+    kj = REPO_ROOT / "java" / "common" / "src" / "main" / "java" / "io" / "realy" / "common" / "KafkaProps.java"
+    if kj.exists():
+        for n, line in enumerate(kj.read_text().splitlines(), 1):
+            for m in re.finditer(r'"(KAFKA_[A-Z_]+)"', line):
+                note(m.group(1), "unset: PLAINTEXT" if "SASL" in m.group(1) or "SSL" in m.group(1) or "SECURITY" in m.group(1) else None, kj, n)
+    compose = yaml.safe_load((REPO_ROOT / "deploy" / "compose" / "docker-compose.yml").read_text())
+    set_by: dict[str, list[str]] = {}
+    for svc, spec in (compose.get("services") or {}).items():
+        env = spec.get("environment") or {}
+        for k in (env if isinstance(env, dict) else {x.split("=")[0]: None for x in env}):
+            set_by.setdefault(k, []).append(svc)
+    parts = [HEADER.format(src="python/realy/**/*.py, java/**/*.java, deploy/compose/docker-compose.yml"),
+             "# Environment variables\n\n",
+             "Every environment variable the code reads, found by scanning it (so this page cannot miss one): "
+             "Python `os.environ`, Java `Env.str / integer / lng` and `System.getenv`. *Default* is the value used "
+             "when the variable is unset (as written in the code); *compose* lists the services of "
+             "`deploy/compose/docker-compose.yml` that set it. Secrets (Kafka SASL passwords, the console token) "
+             "come from the environment only and are never logged.\n\n"]
+    rows = []
+    for var in sorted(found):
+        e = found[var]
+        rows.append([_code(var), " / ".join(sorted(_code(d.strip('"').strip("'")) for d in e["defaults"])) or "",
+                     ", ".join(sorted(e["components"])), ", ".join(sorted(set_by.get(var, []))),
+                     "<br>".join(f"`{w}`" for w in e["where"])])
+    parts.append(_table(["Variable", "Default", "Read by", "Compose sets it in", "Where"], rows))
+    parts.append(f"\n{len(found)} variables.\n")
+    return "".join(parts)
+
+
 # ------------------------------------------------------------------------------------------ CLI
 def cli() -> str:
     import typer.main
@@ -473,7 +551,7 @@ def scenarios() -> str:
 
 PAGES = {"scenario-schema.md": scenario_schema, "config.md": config, "cli.md": cli, "http-api.md": http_api,
          "features.md": features, "rules.md": rules, "topics.md": topics, "scenarios.md": scenarios,
-         "messages.md": messages}
+         "messages.md": messages, "environment.md": environment}
 
 
 def write() -> list[Path]:
