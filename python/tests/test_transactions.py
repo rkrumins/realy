@@ -181,3 +181,31 @@ def test_verifier_replays_the_assembly_order_and_contexts(tmp_path):
     for evs in by_cust.values():
         non_tr = [e for e in evs if e not in ctx]
         assert [pos[e] for e in non_tr] == sorted(pos[e] for e in non_tr)
+
+
+def test_report_summarises_transactions(tmp_path):
+    """The report's transactions section: assembled, partial, the assembly wait, and decisions by payee
+    check result with ground truth, from the decisions' txn columns."""
+    import json
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from realy.report.report import transactions_summary
+    n = 6
+    pq.write_table(pa.table({
+        "event_id": np.arange(1, n + 1, dtype=np.uint64), "revision": np.zeros(n, np.uint8),
+        "outcome": np.asarray([1, 2, 1, 3, 1, 1], np.int8),
+        "txn": ["a2a_transfer/assembled"] * 4 + ["", ""],
+        "txn_parts": np.asarray([7, 7, 5, 1, -1, -1], np.int32),
+        "txn_partial": np.asarray([False, False, False, True, False, False]),
+        "txn_context": [json.dumps({"payee_check": "PAYEE_MATCH"}), json.dumps({"payee_check": "PAYEE_NO_MATCH"}),
+                        json.dumps({"payee_check": "PAYEE_MATCH"}), json.dumps({}), "", ""],
+        "st_txn_assembly": np.asarray([20_000, 30_000, 40_000, 150_000, -1, -1], np.int32)}), tmp_path / "decisions-0.parquet")
+    pq.write_table(pa.table({"event_id": np.arange(1, n + 1, dtype=np.uint64),
+                             "is_fraud": np.asarray([False, True, False, True, False, False])}), tmp_path / "events-0.parquet")
+    (tmp_path / "emit-0.json").write_text(json.dumps({"parts_sent": 17}))
+    s = transactions_summary(tmp_path)
+    assert s["assembled"] == 4 and s["partial"] == 1 and s["parts_sent"] == 17
+    assert s["by_payee_check"]["PAYEE_NO_MATCH"] == {"decided": 1, "fraud": 1, "stopped": 1, "fraud_stopped": 1}
+    assert s["by_payee_check"]["PAYEE_CHECK_UNSPECIFIED"]["fraud_stopped"] == 1      # the partial one, declined
+    assert s["assembly_wait_ms"]["p50"] > 20

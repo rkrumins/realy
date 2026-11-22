@@ -9,6 +9,10 @@ The pipeline does not hard-code its messages. Three contracts say what they mean
 | [`contracts/events/<type>.yaml`](../../contracts/events/payment.yaml) | what a protobuf message means: its id, event time, which fields hold which entities, location, amount | [reference/bindings.md](../reference/bindings.md) (every field) |
 | [`contracts/pipelines/<name>.yaml`](../../contracts/pipelines/payments.yaml) | which event types flow (scored or only folded into state), the partition entity, the namespace, topics, features and model | [reference/bindings.md](../reference/bindings.md#pipelines) |
 
+A transaction made of several linked messages (an initiation, a payee check, an authentication...) is
+a fourth contract, [`contracts/transactions/<name>.yaml`](../../contracts/transactions/a2a_transfer.yaml):
+see [transactions](transactions.md).
+
 `PIPELINE` selects the pipeline (default `payments`). Each run writes the resolved binding to its directory
 (`pipeline.json`), so it is always read back with the bindings it ran with.
 

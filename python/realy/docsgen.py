@@ -571,6 +571,26 @@ def bindings() -> str:
         topics = ", ".join(f"{k}: `{v}`" for k, v in p.topics.items())
         out.append(f"| `{p.name}` | {p.namespace or '(default)'} | {p.partition_key} | {types} | "
                    f"{', '.join(p.exact_entities())} | {topics} |")
+    from .bindings.transactions import transactions
+    for name, tx in transactions().items():
+        out.append(f"\n## Transaction `{name}`\n")
+        out.append(f"Linked by `{tx.link}`; assembled into `{tx.into}` when `{tx.trigger}`"
+                   + (f" and {', '.join(f'`{r}`' for r in tx.require)}" if tx.require else "")
+                   + f" have arrived (wait {tx.wait_ms} ms, then {tx.on_timeout.replace('_', ' ')}); optional: "
+                   + (", ".join(f"`{r}`" for r in tx.optional) or "none") + ". Guide: [transactions](../dev/transactions.md).\n")
+        out.append("| Bit | Role | Event type | Part of |")
+        out.append("|---|---|---|---|")
+        for i, (role, ty) in enumerate(tx.roles.items()):
+            part = ("trigger" if role == tx.trigger else "required" if role in tx.require else "optional"
+                    if role in tx.optional else "stage " + ", ".join(s.name for s in tx.stages if s.role == role))
+            out.append(f"| {1 << i} | `{role}` | `{ty}` | {part} |")
+        out.append("\n| Context (`event.txn.*`) | Kind | Default |")
+        out.append("|---|---|---|")
+        for c in tx.context:
+            what = {"from": f"`{c.role}.{c.field}`", "count": f"count of `{c.role}`",
+                    "changed": f"`{c.field}` changed `{c.between[0]}` -> `{c.between[1]}`" if c.between else "",
+                    "elapsed": f"seconds `{c.between[0]}` -> `{c.between[1]}`" if c.between else ""}[c.kind]
+            out.append(f"| `{c.name}` | {what} | `{tx.context_default(c)!r}` |")
     for name, t in event_types().items():
         out.append(f"\n## Event type `{name}`\n")
         out.append(f"Message `{t.message}`; id `{t.id}`{' (hashed)' if t.id_hash else ''}; time `{t.time}` "

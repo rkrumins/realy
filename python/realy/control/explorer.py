@@ -37,7 +37,7 @@ PATH = {0: "FULL", 1: "RULES_ONLY_FALLBACK", 2: "PROVISIONAL", 3: "FINAL_AFTER_P
 SCORED_PATHS = (0, 3)       # decisions that carry a model score; a fallback / provisional / echo stores 0.0
 INGRESS = {0: None, 1: "SYNC_GRPC", 2: "SYNC_HTTP", 3: "ASYNC_KAFKA_GATEWAY", 4: "ASYNC_FLINK_INLINE"}
 STAGE_NAMES = {10: "INGEST", 11: "QUEUE_WAIT", 12: "DESERIALIZE", 20: "SHUFFLE", 21: "STATE_FEATURES",
-               22: "FEATURE_STORE_WRITE", 30: "FEATURE_LOOKUP", 31: "FEATURE_ASSEMBLE", 40: "MODEL_CALL",
+               22: "FEATURE_STORE_WRITE", 23: "TXN_ASSEMBLY", 30: "FEATURE_LOOKUP", 31: "FEATURE_ASSEMBLE", 40: "MODEL_CALL",
                41: "MODEL_BATCH_WAIT", 42: "MODEL_SERVER_QUEUE", 43: "MODEL_SERVER_COMPUTE", 50: "RULES",
                51: "POLICY", 60: "AUDIT_ACK", 61: "SINK", 70: "DECISION", 71: "RESPONSE", 80: "FALLBACK",
                81: "ASYNC_WAIT"}
@@ -134,6 +134,19 @@ def _by_event(ids_sorted: np.ndarray, ids: np.ndarray) -> tuple[np.ndarray, np.n
         return np.zeros(ids.size, np.int64), np.zeros(ids.size, bool)
     pos = np.clip(np.searchsorted(ids_sorted, ids), 0, ids_sorted.size - 1)
     return pos, ids_sorted[pos] == ids
+
+
+def _txn_roles(name: str, parts: int | None) -> list[dict[str, Any]]:
+    """The roles of a transaction contract and whether each was present when it was assembled."""
+    try:
+        from ..bindings.transactions import transaction
+        t = transaction(name)
+    except Exception:  # noqa: BLE001 - a contract removed since the run: show the mask only
+        return []
+    p = int(parts or 0)
+    return [{"role": r, "type": ty, "present": bool(p & t.bit(r)),
+             "part": ("trigger" if r == t.trigger else "required" if r in t.require else
+                      "optional" if r in t.optional else "stage")} for r, ty in t.roles.items()]
 
 
 class _RunMeta:
@@ -848,6 +861,16 @@ class Explorer:
                         "rule_hits": [x for x in (r.get("rule_hits") or "").split(",") if x],
                         "model_version": (scored[-1] if scored else r).get("model_version"),
                         "revision": r.get("revision", 0), "revisions": len(rows)}
+            if r.get("txn"):
+                # a transaction assembled from several messages: which one, its stage, the parts it had
+                tname, _, tstage = str(r["txn"]).partition("/")
+                try:
+                    tctx = json.loads(r.get("txn_context") or "{}")
+                except ValueError:
+                    tctx = {}
+                decision["transaction"] = {"name": tname, "stage": tstage, "parts_present": r.get("txn_parts"),
+                                           "partial": bool(r.get("txn_partial")), "context": tctx,
+                                           "roles": _txn_roles(tname, r.get("txn_parts"))}
             if r.get("span_stage"):
                 for st, at, dm, s0, du in zip(r["span_stage"], r["span_attr"], r["span_domain"], r["span_start_us"],
                                               r["span_dur_us"]):

@@ -567,11 +567,19 @@ export interface SearchResponse {
   matched: Record<string, number>;
 }
 
+/** A transaction assembled from several linked messages (contracts/transactions). */
+export interface TxnInfo {
+  name: string; stage: string; parts_present: number | null; partial: boolean;
+  context: Record<string, string | number>;
+  roles: { role: string; type: string; present: boolean; part: string }[];
+}
+
 export interface DecisionDetail {
   event: Record<string, unknown>;
   decision: {
     outcome: string; score: number | null; score_note?: string | null; path: string; degraded: boolean; ingress_mode: string;
     reason_codes: string[]; rule_hits: string[]; model_version: string; revision: number; revisions?: number;
+    transaction?: TxnInfo;
   } | null;
   features: { index: number; name: string; entity: string | null; source: string; agg?: string; value: number; missing: boolean; default: number }[] | null;
   features_note?: string | null;

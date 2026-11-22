@@ -283,7 +283,8 @@ def _wait_gateway_scored(admin: str | None, target: int, timeout_s: float,
 
 
 def wait_gateway_primed(ep: Endpoints, decisions_before: int | None, primed: int, timeout_s: float,
-                        log: Callable[[str], None], stop: Callable[[], bool] | None = None) -> bool:
+                        log: Callable[[str], None], stop: Callable[[], bool] | None = None,
+                        topic: str = "payments.events.raw") -> bool:
     """Wait until the gateway has scored the priming events. Priming events (unlike regular `x-backfill`
     history, which the gateway skips) are scored, and the gateway's consumer group commits offsets as it
     goes: group lag is correct for any number of replicas. Fallback when the group has no offsets: the
@@ -291,7 +292,7 @@ def wait_gateway_primed(ep: Endpoints, decisions_before: int | None, primed: int
     from ..common.kafka import wait_group_caught_up
     grp = os.environ.get("GATEWAY_GROUP", "realy-gateway")
     max_lag = max(500, primed // 200)
-    lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max_lag,
+    lag = wait_group_caught_up(grp, topic, max_lag=max_lag,
                                timeout_s=min(timeout_s, 300.0), log=log, no_offsets_grace_s=20.0, stop=stop)
     if lag == -2:
         return False
@@ -862,7 +863,8 @@ class _Run:
         if self.bf_primed:
             if sc.topology in ("gateway-kafka", "echo-kafka"):
                 st.start("prime", f"{self.bf_primed:,} prime events sent; waiting for the gateway to score them")
-                primed = wait_gateway_primed(ep, self.gw_before, self.bf_primed, timeout, log, stop=stopped)
+                topic = _assembled_topic() if self.sc.traffic.flows else "payments.events.raw"
+                primed = wait_gateway_primed(ep, self.gw_before, self.bf_primed, timeout, log, stop=stopped, topic=topic)
                 self.check("prime catch-up")
                 n = _gateway_decisions(ep.gateway_admin)
                 scored = (f"; gateway has scored {n - (self.gw_before or 0):,} since the run started"
@@ -884,6 +886,8 @@ class _Run:
         from ..common.kafka import group_lag
         st = self.startup
         groups = [("clickhouse-events", "payments.events.raw"), ("clickhouse-decisions", "payments.decisions")]
+        if self.sc.traffic.flows:
+            groups.append(("clickhouse-events-assembled", _assembled_topic()))
         try:
             lags = {g: group_lag(g, t) for g, t in groups}
         except Exception as e:  # noqa: BLE001

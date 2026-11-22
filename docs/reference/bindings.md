@@ -27,6 +27,33 @@ Order is the Flink job's keyed-stage order (append only).
 |---|---|---|---|---|---|
 | `payments` | (default) | customer | `payment` (scored), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled` |
 
+## Transaction `a2a_transfer`
+
+Linked by `payment_id`; assembled into `payment` when `initiation` and `payee_check` have arrived (wait 150 ms, then score partial); optional: `device`. Guide: [transactions](../dev/transactions.md).
+
+| Bit | Role | Event type | Part of |
+|---|---|---|---|
+| 1 | `initiation` | `payment_initiation` | trigger |
+| 2 | `device` | `device_context` | optional |
+| 4 | `payee_check` | `payee_check` | required |
+| 8 | `authentication` | `sca_result` | stage authenticated, sca_failed |
+| 16 | `submission` | `payment_submission` | stage submitted |
+| 32 | `status` | `payment_status` | stage settled, rejected, returned |
+
+| Context (`event.txn.*`) | Kind | Default |
+|---|---|---|
+| `payee_check` | `payee_check.result` | `'PAYEE_CHECK_UNSPECIFIED'` |
+| `payee_type_mismatch` | `payee_check.account_type_mismatch` | `False` |
+| `new_payee` | `initiation.new_payee` | `False` |
+| `remote_access` | `device.remote_access` | `False` |
+| `on_call` | `device.on_call` | `False` |
+| `session_age_s` | `device.session_age_s` | `0` |
+| `sca_attempts` | count of `authentication` | `0` |
+| `sca_passed` | `authentication.passed` | `False` |
+| `payee_changed` | `payee_id` changed `initiation` -> `submission` | `False` |
+| `amount_changed` | `amount_usd_minor` changed `initiation` -> `submission` | `False` |
+| `secs_to_submit` | seconds `initiation` -> `submission` | `0.0` |
+
 ## Event type `device_context`
 
 Message `realy.flows.v1.DeviceContext`; id `event_id`; time `event_time_us` (us); amount ``.

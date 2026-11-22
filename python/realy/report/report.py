@@ -54,6 +54,53 @@ def _ms(us: np.ndarray) -> np.ndarray:
     return us.astype(np.float64) / 1000.0
 
 
+def transactions_summary(run_dir: Path) -> dict[str, Any] | None:
+    """Multi-message transactions of a run (decisions carrying a TxnContext): how many were assembled,
+    how many without a required part, how long they waited for their parts, and how they were decided
+    by their flow signals (e.g. the payee check result), with ground truth."""
+    import json as _json
+    dec = _read(run_dir, "decisions-*.parquet")
+    if dec is None or "txn" not in dec.column_names:
+        return None
+    dec = dec.filter(pa.compute.equal(dec["revision"], 0))
+    names = dec["txn"].to_pylist()
+    idx = [i for i, n in enumerate(names) if n]
+    if not idx:
+        return None
+    sub = dec.take(pa.array(idx))
+    ctx = [(_json.loads(x) if x else {}) for x in sub["txn_context"].to_pylist()]
+    partial = sub["txn_partial"].to_numpy(zero_copy_only=False)
+    wait = sub["st_txn_assembly"].to_numpy() if "st_txn_assembly" in sub.column_names else np.zeros(0)
+    wait = wait[wait >= 0]
+    oc = sub["outcome"].to_numpy()
+    fraud = {}
+    ev = _read(run_dir, "events-*.parquet")
+    if ev is not None and "is_fraud" in ev.column_names:
+        fraud = dict(zip(ev["event_id"].to_numpy().tolist(), ev["is_fraud"].to_numpy(zero_copy_only=False).tolist()))
+    eids = sub["event_id"].to_numpy().tolist()
+    by_check: dict[str, dict[str, int]] = {}
+    for c, o, e in zip(ctx, oc.tolist(), eids):
+        k = str(c.get("payee_check", "PAYEE_CHECK_UNSPECIFIED"))
+        b = by_check.setdefault(k, {"decided": 0, "fraud": 0, "stopped": 0, "fraud_stopped": 0})
+        b["decided"] += 1
+        stopped = OUTCOME.get(int(o)) in ("DECLINE", "REVIEW", "CHALLENGE")
+        b["stopped"] += int(stopped)
+        if fraud.get(int(e)):
+            b["fraud"] += 1
+            b["fraud_stopped"] += int(stopped)
+    parts_sent = 0
+    for f in glob.glob(str(run_dir / "emit-*.json")):
+        try:
+            parts_sent += int(_json.loads(Path(f).read_text()).get("parts_sent") or 0)
+        except (OSError, ValueError):
+            pass
+    return {"contracts": sorted({n.split("/", 1)[0] for n in names if n}), "assembled": len(idx),
+            "partial": int(partial.sum()), "partial_fraction": float(partial.mean()) if partial.size else 0.0,
+            "parts_sent": parts_sent,
+            "assembly_wait_ms": _pct(_ms(wait)) if wait.size else None,
+            "by_payee_check": dict(sorted(by_check.items()))}
+
+
 def build_report(run_dir: Path | str) -> dict[str, Any]:
     run_dir = Path(run_dir)
     man = json.loads((run_dir / "manifest.json").read_text())
@@ -380,6 +427,9 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     rep.update({"summary": summary, "stages": overall, "levels": levels, "funnel": funnel, "backlog": backlog,
                 "e2e_p99_by_second": series_p99, "e2e_p50_by_second": series_p50, "tail_attribution": tail,
                 "sustainability": sust, "detection": detection, "service": service, "resources": res})
+    txn = transactions_summary(run_dir)
+    if txn:
+        rep["transactions"] = txn
     from ..runner.startup import read as read_startup
     startup = read_startup(run_dir)
     if startup:
@@ -773,6 +823,15 @@ def render_text(rep: dict[str, Any]) -> str:
                      + ", ".join(f"{k} {v:.0%}" for k, v in sorted(t['share'].items(), key=lambda x: -x[1])[:5]))
     from .resources import render as _render_resources
     lines.extend(_render_resources(rep.get("resources") or {}))
+    tx = rep.get("transactions")
+    if tx:
+        w = tx.get("assembly_wait_ms") or {}
+        lines.append(f"transactions ({', '.join(tx['contracts'])}): {tx['assembled']:,} assembled from {tx['parts_sent']:,} more "
+                     f"messages; {tx['partial']:,} without a required part ({tx['partial_fraction']:.2%}); "
+                     f"assembly wait p50 {_f(w.get('p50'))} ms p99 {_f(w.get('p99'))} ms")
+        for k, b in (tx.get("by_payee_check") or {}).items():
+            lines.append(f"  payee check {k:24s} {b['decided']:6,} decided, {b['stopped']:5,} stopped; "
+                         f"fraud {b['fraud']:4,} ({b['fraud_stopped']:,} stopped)")
     det = rep.get("detection")
     if det and det.get("fraud_events"):
         lines.append(f"detection: recall(flagged) {_f(det['recall_flagged'])}  precision {_f(det['precision_flagged'])}  "

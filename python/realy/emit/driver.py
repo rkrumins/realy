@@ -160,7 +160,7 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
                 if len(b):
                     if b.records is not None:     # multi-message transactions: every message, typed
                         q.put(("backfill", si, [r.payload for r in b.records], [r.key for r in b.records],
-                               b.event_ids, b.labels, [r.type for r in b.records]))
+                               b.event_ids, b.labels, [r.type for r in b.records], [r.scored for r in b.records]))
                         log_parts(b.records, None)
                     else:
                         q.put(("backfill", si, b.payloads, b.keys, b.event_ids, b.labels))
@@ -325,6 +325,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
             bf_hdr = hdr.get(mode, hdr["bulk"])
             paced = mode == "prime" and prime_rate > 0
             btypes = item[6] if len(item) > 6 else None
+            bscored = item[7] if len(item) > 7 else None   # parts of transactions produce no decision of their own
             for bi, (p_, k_) in enumerate(zip(item[2], item[3])):
                 h_ = bf_hdr if not (btypes and btypes[bi]) else bf_hdr + [("x-event-type", btypes[bi].encode())]
                 if paced and seg_n % 50 == 0:
@@ -340,7 +341,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                         producer.poll(0.01)
                 backfilled += 1
                 seg_n += 1
-                if mode == "prime":
+                if mode == "prime" and (bscored is None or bscored[bi]):
                     primed += 1
                 # progress from inside a batch too: a paced prime batch can take tens of seconds
                 if results is not None and (seg_n & 511) == 0 and time.monotonic() - last_progress >= 0.5:

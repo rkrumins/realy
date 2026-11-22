@@ -17,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, isNotFound } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { fmtFeature, fmtMs, fmtNum, fmtPct, fmtScore, fmtSimTime, fmtUsd, isNum, titleCase } from "@/lib/format";
-import type { DecisionDetail, EntityDef, EntityResponse, EntityRow, ExplorerViews, Lens, SearchRow, TrailRow, ViewColumn, ViewContext } from "@/lib/types";
+import type { DecisionDetail, EntityDef, EntityResponse, EntityRow, ExplorerViews, Lens, SearchRow, TrailRow, ViewColumn, ViewContext, TxnInfo } from "@/lib/types";
 
 const OUTCOME_COLOR: Record<string, string> = { APPROVE: "var(--pass)", CHALLENGE: "var(--info)", REVIEW: "var(--warn)", DECLINE: "var(--fail)" };
 const UNSCORED: Record<string, string> = {
@@ -153,6 +153,34 @@ function ScoreHeadline({ d }: { d: DecisionDetail }) {
   );
 }
 
+/** The messages a transaction was assembled from (which arrived in time) and its context (event.txn). */
+function AssembledFrom({ t }: { t: TxnInfo }) {
+  const ctx = Object.entries(t.context).filter(([k]) => !["parts"].includes(k));
+  return (
+    <div className="mt-4">
+      <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-subtle">
+        Assembled from {t.roles.length || "its"} messages · {t.name}
+        {t.partial && <Badge tone="warn">partial: a required part was late</Badge>}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {t.roles.map((r) => (
+          <span key={r.role} title={`${r.type} (${r.part})`}
+                className={cn("rounded-md border px-2 py-0.5 font-mono text-[11.5px]",
+                  r.present ? "border-pass/40 bg-pass/[0.07] text-text" : "border-border bg-surface-2 text-subtle line-through")}>
+            {r.role}
+          </span>
+        ))}
+      </div>
+      <div className="mt-1 text-[11.5px] text-subtle">decided at stage <span className="font-mono">{t.stage}</span>; struck through: not arrived when it was assembled</div>
+      {!!ctx.length && (
+        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-0.5">
+          {ctx.map(([k, v]) => <Stat key={k} label={`txn.${k}`} value={String(v)} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DecisionPanel({ run, eventId, onClose, onEntity }: { run: string; eventId: string; onClose: () => void; onEntity: OpenEntity }) {
   const [maturity, setMaturity] = React.useState(30);
   const q = useQuery({ queryKey: ["decision", run, eventId, maturity], queryFn: () => api.decision(run, eventId, maturity), retry: 0,
@@ -192,6 +220,7 @@ function DecisionPanel({ run, eventId, onClose, onEntity }: { run: string; event
           <div className="border-border p-5 md:border-r">
             <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-subtle"><CreditCard className="size-3.5" />Transaction</div>
             <TransactionFields ev={ev} onEntity={onEntity} />
+            {d.decision?.transaction && <AssembledFrom t={d.decision.transaction} />}
           </div>
           <div className="p-5">
             <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-subtle"><Fingerprint className="size-3.5" />Rules fired</div>
