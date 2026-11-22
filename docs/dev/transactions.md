@@ -77,6 +77,16 @@ payment reads every name's default. `rules/baseline-flows.yaml` uses it:
 | `FlowJobTest` (Flink MiniCluster, RocksDB, parallelism 2) | the real job graph assembles the golden stream as the twin does, and customer and card features equal sequential aggregation in that order |
 | `pulsebench run flows-smoke --verify` / `flows-inline` | the whole stack: rules, score and outcome parity, exact customer and card features, a complete audit |
 
+Measured on this stack (4 vCPU, 500 TPS, 2026-11-22):
+
+| Run | Transfers assembled | Partial | Assembly wait p50 / p99 | e2e p99 | Verify |
+|---|---|---|---|---|---|
+| `flows-inline` (Flink scores) | 2,982 from 14,751 more messages | 0.67% | 1.5 / 81 ms | 135 ms (PASS) | exact features 100%, rules / score / outcome 100%, audit complete |
+| `flows-smoke` (gateway scores from the assembled topic) | 1,986 from 9,831 more messages | 0.55% | 1.7 / 68 ms | 341 ms (FAIL: Kafka on this host, one more hop) | exact-set 99.83% (gateway store lag), rules / score / outcome 100%, audit complete |
+
+The flow's own signals carry detection: of the transfers whose payee name did not match the account,
+65 of the 67 frauds were stopped (`flows-inline`).
+
 ## Walkthrough: your own flow
 
 1. **Messages.** Write the protobuf messages under `contracts/proto`, each carrying the link id, the

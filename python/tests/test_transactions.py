@@ -168,7 +168,12 @@ def test_verifier_replays_the_assembly_order_and_contexts(tmp_path):
     forced_id = transfers[0]
     dec = pa.table({"event_id": np.asarray([forced_id], np.uint64), "txn_partial": [True], "txn_parts": [1],
                     "txn": ["a2a_transfer/assembled"]})
-    order, ctx, info = flow_order(cols, parts, dec)
+    order, ctx, info, rows_as_assembled = flow_order(cols, parts, dec)
+    assert set(rows_as_assembled) == set(transfers)
+    # the forced partial had no payee check; an optional device context that came late is absent
+    for eid, row in rows_as_assembled.items():
+        if not ctx[eid]["parts"] & 0b10:
+            assert row["device_id"] == 0
     assert sorted(order.tolist()) == list(range(len(rows)))           # every event exactly once
     assert set(ctx) == set(transfers) and info["assembled"] == len(transfers)
     assert ctx[forced_id]["partial"] is True and ctx[forced_id]["parts"] & 0b101 == 0b001   # no payee check

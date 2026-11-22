@@ -156,9 +156,10 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     # multi-message transactions: the pipeline saw parts, assembled in its partition order (the twin
     # replays that, forcing the partial assemblies the decisions recorded); rules see each one's context
     txn_ctx: dict[int, dict] = {}
+    assembled_rows: dict[int, dict] = {}
     parts = _read(run_dir, "parts-*.parquet")
     if parts is not None and parts.num_rows:
-        order, txn_ctx, flow_info = flow_order(cols, parts, dec)
+        order, txn_ctx, flow_info, assembled_rows = flow_order(cols, parts, dec)
         out["transactions"] = flow_info
     n_all = order.size
     mod = max(1, int(math.ceil(n_all / max_events)))
@@ -190,6 +191,8 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     buf = [0.0] * nf
     for i in order.tolist():
         ev = {k: lists[k][i] for k in names}
+        # an assembled transaction as the pipeline saw it: a part that came too late is absent from it
+        ev.update(assembled_rows.get(int(ev["event_id"]), {}))
         view = event_view(ev, txn_ctx.get(int(ev["event_id"])))
         ctx = cel.Context()
         ctx.add_variable("event", view)
@@ -267,6 +270,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     for k, eid in enumerate(sample):
         j = d_pos[eid]
         ev = {c: lists[c][ev_idx[eid]] for c in names}
+        ev.update(assembled_rows.get(eid, {}))
         fmap = {f.name: float(served[eid][f.index]) for f in schema.features}
         view = event_view(ev, txn_ctx.get(eid))
         hits = rules.evaluate(fmap, view)
@@ -318,12 +322,15 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     return out
 
 
-def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table) -> tuple[np.ndarray, dict[int, dict], dict]:
+def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table
+               ) -> tuple[np.ndarray, dict[int, dict], dict, dict[int, dict]]:
     """The order the pipeline processed a run's events in when some of them arrived as parts of
     multi-message transactions (parts-*.parquet): every unified event and part in emission order (one
     customer's messages stay ordered on its partition), through the reference assembler. Returns the
     event-log indices in that order (assembled transactions at their assembly), each assembled
-    transaction's context (event.txn) by event id, and a summary."""
+    transaction's context (event.txn) by event id, a summary, and each assembled transaction's fields
+    as assembled (the event log holds the transfer the generator drew; an optional part that arrived
+    after assembly is not in what the pipeline scored)."""
     from ..bindings import event_type
     from ..bindings.codec import message_class
     from ..bindings.transactions import Assembler, transaction, transactions
@@ -358,6 +365,7 @@ def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table) -> t
     names = list(cols)
     out_idx: list[int] = []
     ctx: dict[int, dict] = {}
+    rows: dict[int, dict] = {}
     n_asm = n_partial = 0
 
     def take(outs):
@@ -372,6 +380,7 @@ def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table) -> t
             out_idx.append(i)
             if o.kind == "assembled":
                 ctx[eid] = o.context
+                rows[eid] = {k: (v.item() if hasattr(v, "item") else v) for k, v in o.row.items()}
                 n_asm += 1
                 n_partial += int(o.partial)
     for _, kind, i, ty in stream:
@@ -385,7 +394,7 @@ def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table) -> t
     rest = [i for i in np.lexsort((cols["event_id"], cols["event_time_us"])).tolist() if i not in seen]
     info = {"contracts": txns, "parts": len(ptypes), "assembled": n_asm, "partial": n_partial,
             "partial_replayed_from_decisions": forced, "not_assembled": len(rest)}
-    return np.asarray(out_idx + rest, np.int64), ctx, info
+    return np.asarray(out_idx + rest, np.int64), ctx, info, rows
 
 
 class ClickHouseError(RuntimeError):
