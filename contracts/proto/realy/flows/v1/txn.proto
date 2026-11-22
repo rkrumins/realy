@@ -1,0 +1,21 @@
+// The context of a transaction formed by several linked messages (contracts/transactions/*.yaml): which
+// transaction, at which stage, which of its parts were present when it was assembled, and its context
+// values (CEL `txn.*`). Travels with the assembled unified event (Kafka header `x-txn`, the Flink
+// envelope) and is recorded on its decision.
+syntax = "proto3";
+
+package realy.flows.v1;
+
+option java_package = "io.realy.contracts.flows.v1";
+option java_multiple_files = true;
+
+message TxnContext {
+  string transaction = 1;          // contract name, e.g. a2a_transfer ("" = a one-message transaction)
+  fixed64 txn_id = 2;              // the link field's value (payment_id)
+  string stage = 3;                // "assembled", or the scored stage it was decided again at
+  uint32 parts_present = 4;        // bit i = the contract's i-th message role had arrived
+  bool partial = 5;                // assembled at the wait deadline without a required part
+  map<string, string> strings = 6; // context values: enums by name, strings
+  map<string, double> numbers = 7; // context values: numbers, bools (1/0), counts, seconds
+  sfixed64 assembled_at_us = 8;    // wall time it was assembled (the assembly wait is measured from the trigger's ingest)
+}

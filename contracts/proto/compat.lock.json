@@ -597,6 +597,361 @@
    "type": "repeated EntityFreshness"
   }
  },
+ "realy.flows.v1.A2aChannel": {
+  "0": {
+   "name": "A2A_CHANNEL_UNSPECIFIED"
+  },
+  "1": {
+   "name": "A2A_MOBILE_APP"
+  },
+  "2": {
+   "name": "A2A_ONLINE_BANKING"
+  },
+  "3": {
+   "name": "A2A_BRANCH"
+  },
+  "4": {
+   "name": "A2A_API"
+  }
+ },
+ "realy.flows.v1.A2aScheme": {
+  "0": {
+   "name": "A2A_SCHEME_UNSPECIFIED"
+  },
+  "1": {
+   "name": "A2A_INSTANT"
+  },
+  "2": {
+   "name": "A2A_BATCH"
+  },
+  "3": {
+   "name": "A2A_HIGH_VALUE"
+  }
+ },
+ "realy.flows.v1.DeviceContext": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "10": {
+   "name": "remote_access",
+   "type": "bool"
+  },
+  "11": {
+   "name": "emulator",
+   "type": "bool"
+  },
+  "12": {
+   "name": "on_call",
+   "type": "bool"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "payment_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "device_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "ip_v4",
+   "type": "uint32"
+  },
+  "7": {
+   "name": "ip_country",
+   "type": "string"
+  },
+  "8": {
+   "name": "ip_asn",
+   "type": "uint32"
+  },
+  "9": {
+   "name": "session_age_s",
+   "type": "uint32"
+  }
+ },
+ "realy.flows.v1.PayeeCheck": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "payment_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "payee_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "result",
+   "type": "PayeeCheckResult"
+  },
+  "7": {
+   "name": "account_type_mismatch",
+   "type": "bool"
+  }
+ },
+ "realy.flows.v1.PayeeCheckResult": {
+  "0": {
+   "name": "PAYEE_CHECK_UNSPECIFIED"
+  },
+  "1": {
+   "name": "PAYEE_MATCH"
+  },
+  "2": {
+   "name": "PAYEE_CLOSE_MATCH"
+  },
+  "3": {
+   "name": "PAYEE_NO_MATCH"
+  },
+  "4": {
+   "name": "PAYEE_NOT_CHECKED"
+  }
+ },
+ "realy.flows.v1.PaymentInitiation": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "10": {
+   "name": "channel",
+   "type": "A2aChannel"
+  },
+  "11": {
+   "name": "new_payee",
+   "type": "bool"
+  },
+  "12": {
+   "name": "reference",
+   "type": "string"
+  },
+  "13": {
+   "name": "lat",
+   "type": "double"
+  },
+  "14": {
+   "name": "lon",
+   "type": "double"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "payment_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "account_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "payee_id",
+   "type": "uint64"
+  },
+  "7": {
+   "name": "amount_minor",
+   "type": "int64"
+  },
+  "8": {
+   "name": "currency",
+   "type": "string"
+  },
+  "9": {
+   "name": "amount_usd_minor",
+   "type": "int64"
+  }
+ },
+ "realy.flows.v1.PaymentStatus": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "payment_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "code",
+   "type": "PaymentStatusCode"
+  },
+  "6": {
+   "name": "reason",
+   "type": "string"
+  }
+ },
+ "realy.flows.v1.PaymentStatusCode": {
+  "0": {
+   "name": "PAYMENT_STATUS_UNSPECIFIED"
+  },
+  "1": {
+   "name": "PAYMENT_ACCEPTED"
+  },
+  "2": {
+   "name": "PAYMENT_SETTLED"
+  },
+  "3": {
+   "name": "PAYMENT_REJECTED"
+  },
+  "4": {
+   "name": "PAYMENT_RETURNED"
+  },
+  "5": {
+   "name": "PAYMENT_RECALLED"
+  }
+ },
+ "realy.flows.v1.PaymentSubmission": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "10": {
+   "name": "scheme",
+   "type": "A2aScheme"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "payment_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "account_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "payee_id",
+   "type": "uint64"
+  },
+  "7": {
+   "name": "amount_minor",
+   "type": "int64"
+  },
+  "8": {
+   "name": "currency",
+   "type": "string"
+  },
+  "9": {
+   "name": "amount_usd_minor",
+   "type": "int64"
+  }
+ },
+ "realy.flows.v1.ScaMethod": {
+  "0": {
+   "name": "SCA_METHOD_UNSPECIFIED"
+  },
+  "1": {
+   "name": "SCA_BIOMETRIC"
+  },
+  "2": {
+   "name": "SCA_APP_PUSH"
+  },
+  "3": {
+   "name": "SCA_SMS_OTP"
+  },
+  "4": {
+   "name": "SCA_CARD_READER"
+  }
+ },
+ "realy.flows.v1.ScaResult": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "payment_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "method",
+   "type": "ScaMethod"
+  },
+  "6": {
+   "name": "passed",
+   "type": "bool"
+  },
+  "7": {
+   "name": "attempt",
+   "type": "uint32"
+  }
+ },
+ "realy.flows.v1.TxnContext": {
+  "1": {
+   "name": "transaction",
+   "type": "string"
+  },
+  "2": {
+   "name": "txn_id",
+   "type": "fixed64"
+  },
+  "3": {
+   "name": "stage",
+   "type": "string"
+  },
+  "4": {
+   "name": "parts_present",
+   "type": "uint32"
+  },
+  "5": {
+   "name": "partial",
+   "type": "bool"
+  },
+  "6": {
+   "name": "strings",
+   "type": "map<string, string>"
+  },
+  "7": {
+   "name": "numbers",
+   "type": "map<string, double>"
+  },
+  "8": {
+   "name": "assembled_at_us",
+   "type": "sfixed64"
+  }
+ },
  "realy.payments.v1.CardType": {
   "0": {
    "name": "CARD_TYPE_UNSPECIFIED"
@@ -978,6 +1333,10 @@
   "18": {
    "name": "feature_schema_version",
    "type": "uint32"
+  },
+  "19": {
+   "name": "txn",
+   "type": "realy.flows.v1.TxnContext"
   },
   "2": {
    "name": "outcome",

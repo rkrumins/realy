@@ -1,0 +1,78 @@
+# A transaction formed by several linked messages: an account-to-account transfer as a payment hub sees
+# it (contracts/proto/realy/flows/v1/a2a.proto). Its parts are assembled into the unified payment event,
+# so every feature, rule, model and report works on it, and its own context is CEL `txn.*`.
+#
+#   link       the field every message of the transaction carries (the `txn` entity)
+#   messages   role -> event type (contracts/events)
+#   assemble   the scored transaction: built `into` the unified event when the `trigger` and every
+#              `require`d part have arrived (with the `optional` parts that arrived before them). A
+#              required part still missing `wait_ms` after the trigger: assembled without it
+#              (`on_timeout`: score_partial | rules_only), recorded in parts_present.
+#              fields: unified event field <- role.field | {const} | {from, map} (enum name mapping)
+#   stages     the lifecycle after assembly: which message (and `when`, CEL over that message) moves it.
+#              A `scored` stage is decided again: the assembled event with its `fields` overrides, read
+#              against the features without being counted twice.
+#   context    txn.<name> in CEL (and `source: txn` features): from a part's field, a count of a role's
+#              messages, a field changed between two roles, the time between two roles
+name: a2a_transfer
+link: payment_id
+messages:
+  initiation: payment_initiation
+  device: device_context
+  payee_check: payee_check
+  authentication: sca_result
+  submission: payment_submission
+  status: payment_status
+assemble:
+  into: payment
+  trigger: initiation
+  require: [payee_check]
+  optional: [device]
+  wait_ms: 150
+  on_timeout: score_partial
+  fields:
+    event_id: initiation.event_id
+    event_time_us: initiation.event_time_us
+    payment_type: { const: TRANSFER }
+    customer_id: initiation.customer_id
+    account_id: initiation.account_id
+    payee_id: initiation.payee_id
+    amount_minor: initiation.amount_minor
+    currency: initiation.currency
+    amount_usd_minor: initiation.amount_usd_minor
+    channel: { from: initiation.channel, map: { A2A_MOBILE_APP: IN_APP, A2A_ONLINE_BANKING: ONLINE_BANKING,
+                                                 A2A_API: ONLINE_BANKING, A2A_BRANCH: POS } }
+    entry_mode: { const: BANK_APP }
+    lat: initiation.lat
+    lon: initiation.lon
+    device_id: device.device_id
+    ip_v4: device.ip_v4
+    ip_country: device.ip_country
+    ip_asn: device.ip_asn
+stages:
+  authenticated: { message: authentication, when: "event.passed" }
+  sca_failed:    { message: authentication, when: "!event.passed" }
+  submitted:
+    message: submission
+    scored: true
+    fields:
+      event_id: submission.event_id
+      event_time_us: submission.event_time_us
+      payee_id: submission.payee_id
+      amount_minor: submission.amount_minor
+      amount_usd_minor: submission.amount_usd_minor
+  settled:  { message: status, when: "event.code == 'PAYMENT_SETTLED'", terminal: true }
+  rejected: { message: status, when: "event.code == 'PAYMENT_REJECTED'", terminal: true }
+  returned: { message: status, when: "event.code == 'PAYMENT_RETURNED' || event.code == 'PAYMENT_RECALLED'", terminal: true }
+context:
+  payee_check:         { from: payee_check.result }
+  payee_type_mismatch: { from: payee_check.account_type_mismatch }
+  new_payee:           { from: initiation.new_payee }
+  remote_access:       { from: device.remote_access }
+  on_call:             { from: device.on_call }
+  session_age_s:       { from: device.session_age_s }
+  sca_attempts:        { count: authentication }
+  sca_passed:          { from: authentication.passed }
+  payee_changed:       { changed: payee_id, between: [initiation, submission] }
+  amount_changed:      { changed: amount_usd_minor, between: [initiation, submission] }
+  secs_to_submit:      { elapsed: [initiation, submission] }

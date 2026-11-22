@@ -1,0 +1,9 @@
+# One message of the account-to-account transfer (contracts/transactions/a2a_transfer.yaml).
+name: payee_check
+message: realy.flows.v1.PayeeCheck
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  payee: payee_id
+  txn: payment_id

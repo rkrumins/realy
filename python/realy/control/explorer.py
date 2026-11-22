@@ -47,8 +47,15 @@ VIEWS_PATH = Path(os.environ.get("REALY_EXPLORER", REPO_ROOT / "contracts" / "ex
 
 # ---------------------------------------------------------------------------------------- the index
 # event columns held per measured event (dtype, default for runs recorded before the column existed)
-ID_COLS = ["event_id", "customer_id", "account_id", "card_id", "device_id", "ip_v4", "merchant_id", "terminal_id",
-           "payee_id", "campaign_id"]
+def _entity_fields() -> dict[str, str]:
+    """Entity -> event field of the payment binding (contracts/events/payment.yaml), in registry order."""
+    from ..bindings import event_type, registry
+    ents = event_type("payment").entities
+    return {e: ents[e] for e in registry().names if e in ents}
+
+
+ENTITY_FIELDS = _entity_fields()
+ID_COLS = ["event_id", *ENTITY_FIELDS.values(), "campaign_id"]
 NUM_COLS: dict[str, tuple[Any, Any]] = {
     **{c: (np.uint64, 0) for c in ID_COLS}, "ip_v4": (np.uint32, 0),
     "event_time_us": (np.int64, 0), "amount_usd_minor": (np.int64, 0), "payment_type": (np.int8, 0),
@@ -57,9 +64,7 @@ NUM_COLS: dict[str, tuple[Any, Any]] = {
     "label_delay_us": (np.int64, -1), "label_is_fraud": (np.bool_, False)}
 STR_COLS = ["merchant_country", "ip_country"]
 # id search kinds -> event column; the entity kinds are the same names
-ID_KINDS = {"event": "event_id", "customer": "customer_id", "account": "account_id", "card": "card_id",
-            "device": "device_id", "ip": "ip_v4", "merchant": "merchant_id", "terminal": "terminal_id",
-            "payee": "payee_id", "campaign": "campaign_id"}
+ID_KINDS = {"event": "event_id", **ENTITY_FIELDS, "campaign": "campaign_id"}
 ENUM_KINDS = {"type": ("payment_type", PAYMENT_TYPE), "channel": ("channel", CHANNEL), "entry": ("entry_mode", ENTRY_MODE)}
 OTHER_KINDS = ["fraud", "outcome", "path", "rule", "country", "ipcountry", "role", "label"]
 KINDS = list(ID_KINDS) + list(ENUM_KINDS) + OTHER_KINDS

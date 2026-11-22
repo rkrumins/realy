@@ -627,6 +627,10 @@ class _Run:
         # ... and the exact rule set pushed to the pipeline: explanations, verify and what-ifs replay it,
         # not whatever rules/<name>.yaml says later
         (self.run_dir / "rules.yaml").write_text(sc.scoring_config()["rule_set_yaml"])
+        # ... and what its events mean (entity registry, event type bindings, fields): run directories
+        # without one were payments-only
+        from ..bindings import pipeline
+        (self.run_dir / "pipeline.json").write_text(json.dumps(pipeline().snapshot(), indent=1))
         self.check("prepare")
         st.start("topics")
         created = ensure_topics()

@@ -1,0 +1,10 @@
+# One message of the account-to-account transfer (contracts/transactions/a2a_transfer.yaml).
+name: device_context
+message: realy.flows.v1.DeviceContext
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  device: device_id
+  ip: ip_v4
+  txn: payment_id

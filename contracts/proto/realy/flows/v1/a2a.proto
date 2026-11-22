@@ -1,0 +1,126 @@
+// An account-to-account payment as the messages a payment hub really exchanges, linked by `payment_id`:
+// the customer's initiation (pain.001-like), the device / session context the app sends beside it, the
+// confirmation-of-payee check, strong customer authentication, the submission to the scheme
+// (pacs.008-like) and its status from the scheme (pacs.002 / pacs.004-like: settled, rejected, returned).
+// Every message carries the customer (the partition key) and its own event id and time; together they
+// form one transaction (contracts/transactions/a2a_transfer.yaml).
+syntax = "proto3";
+
+package realy.flows.v1;
+
+option java_package = "io.realy.contracts.flows.v1";
+option java_multiple_files = true;
+
+enum A2aChannel {
+  A2A_CHANNEL_UNSPECIFIED = 0;
+  A2A_MOBILE_APP = 1;
+  A2A_ONLINE_BANKING = 2;
+  A2A_BRANCH = 3;
+  A2A_API = 4;            // open banking / third-party initiation
+}
+
+message PaymentInitiation {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 payment_id = 3;          // the transaction: every message of this payment carries it
+  uint64 customer_id = 4;
+  uint64 account_id = 5;
+  uint64 payee_id = 6;
+  int64 amount_minor = 7;
+  string currency = 8;
+  int64 amount_usd_minor = 9;
+  A2aChannel channel = 10;
+  bool new_payee = 11;             // the payee was added in this session
+  string reference = 12;           // payment reference the customer typed
+  double lat = 13;
+  double lon = 14;
+}
+
+message DeviceContext {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 payment_id = 3;
+  uint64 customer_id = 4;
+  uint64 device_id = 5;
+  uint32 ip_v4 = 6;
+  string ip_country = 7;
+  uint32 ip_asn = 8;
+  uint32 session_age_s = 9;        // seconds since the app session started
+  bool remote_access = 10;         // a remote-access tool is running (screen sharing, remote control)
+  bool emulator = 11;
+  bool on_call = 12;               // the customer is on a phone call while paying (a scam signal)
+}
+
+enum PayeeCheckResult {
+  PAYEE_CHECK_UNSPECIFIED = 0;
+  PAYEE_MATCH = 1;
+  PAYEE_CLOSE_MATCH = 2;
+  PAYEE_NO_MATCH = 3;
+  PAYEE_NOT_CHECKED = 4;           // the payee's bank does not take part
+}
+
+message PayeeCheck {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 payment_id = 3;
+  uint64 customer_id = 4;
+  uint64 payee_id = 5;
+  PayeeCheckResult result = 6;
+  bool account_type_mismatch = 7;  // personal vs business account
+}
+
+enum ScaMethod {
+  SCA_METHOD_UNSPECIFIED = 0;
+  SCA_BIOMETRIC = 1;
+  SCA_APP_PUSH = 2;
+  SCA_SMS_OTP = 3;
+  SCA_CARD_READER = 4;
+}
+
+message ScaResult {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 payment_id = 3;
+  uint64 customer_id = 4;
+  ScaMethod method = 5;
+  bool passed = 6;
+  uint32 attempt = 7;              // 1 for the first attempt
+}
+
+enum A2aScheme {
+  A2A_SCHEME_UNSPECIFIED = 0;
+  A2A_INSTANT = 1;                 // faster payments / SEPA instant / RTP
+  A2A_BATCH = 2;                   // bacs / SEPA credit transfer
+  A2A_HIGH_VALUE = 3;              // CHAPS / RTGS
+}
+
+message PaymentSubmission {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 payment_id = 3;
+  uint64 customer_id = 4;
+  uint64 account_id = 5;
+  uint64 payee_id = 6;             // may differ from the initiation's: a payee changed mid-flow
+  int64 amount_minor = 7;
+  string currency = 8;
+  int64 amount_usd_minor = 9;
+  A2aScheme scheme = 10;
+}
+
+enum PaymentStatusCode {
+  PAYMENT_STATUS_UNSPECIFIED = 0;
+  PAYMENT_ACCEPTED = 1;            // the scheme accepted it
+  PAYMENT_SETTLED = 2;
+  PAYMENT_REJECTED = 3;
+  PAYMENT_RETURNED = 4;            // the payee's bank sent it back
+  PAYMENT_RECALLED = 5;            // recalled by the sender's bank (scam reported)
+}
+
+message PaymentStatus {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 payment_id = 3;
+  uint64 customer_id = 4;
+  PaymentStatusCode code = 5;
+  string reason = 6;
+}

@@ -75,6 +75,7 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `MODEL_TARGET` | `localhost:8001` | Flink job, gateway | flink-taskmanager, gateway | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `MODEL_WEIGHTS` |  | model server, verifier | mock-model | `python/realy/verify/verify.py`<br>`java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
 | `PARALLELISM` | `4` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
+| `PIPELINE` | `payments` | gateway + Flink (scoring core), python (shared) |  | `python/realy/bindings/pipeline.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/binding/PipelineBinding.java` |
 | `PORT` | `8080` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `PROMETHEUS_URL` |  | console | console | `python/realy/control/env.py` |
 | `REALY_ABORT_DRAIN_S` | `20` | runner |  | `python/realy/runner/run.py` |
@@ -84,9 +85,12 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `REALY_CONFIG_SETTLE_S` | `2` | runner |  | `python/realy/runner/run.py` |
 | `REALY_CONSOLE_TOKEN` |  | console, python (shared) | console | `python/realy/acceptance/live.py`<br>`python/realy/control/auth.py`<br>`python/realy/control/env.py` |
 | `REALY_CONSOLE_URL` | `http://localhost:8090` | python (shared) |  | `python/realy/cli.py` |
+| `REALY_CONTRACTS` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/binding/Contracts.java` |
 | `REALY_DATA` |  | python (shared) |  | `python/realy/scenario.py` |
 | `REALY_EMITTER_FINISH_S` | `120` | runner |  | `python/realy/runner/run.py` |
+| `REALY_ENTITIES` |  | python (shared) |  | `python/realy/bindings/registry.py` |
 | `REALY_ENV_TIMEOUT_S` | `2.5` | console |  | `python/realy/control/env.py` |
+| `REALY_EVENTS_DIR` |  | python (shared) |  | `python/realy/bindings/events.py` |
 | `REALY_EXPLORER` | `REPO_ROOT / "contracts" / "explorer.yaml` | console |  | `python/realy/control/explorer.py` |
 | `REALY_EXPLORER_CACHE_MB` | `768` | console |  | `python/realy/control/explorer.py` |
 | `REALY_EXPLORER_FEATURES_MB` | `256` | console |  | `python/realy/control/explorer.py` |
@@ -99,6 +103,7 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `REALY_MODELS` |  | trainer | console | `python/realy/train/proxy.py` |
 | `REALY_OWNER` |  | runner | console | `python/realy/runner/lifecycle.py` |
 | `REALY_PIPELINE` | `default` | runner |  | `python/realy/runner/lifecycle.py` |
+| `REALY_PIPELINES_DIR` |  | python (shared) |  | `python/realy/bindings/pipeline.py` |
 | `REALY_PRIME_S` | `30` | runner |  | `python/realy/runner/run.py` |
 | `REALY_RUNS` | `/runs` / `REPO_ROOT / "runs` | python (shared), runner |  | `python/realy/acceptance/live.py`<br>`python/realy/runner/run.py` |
 | `REALY_RUN_HISTORY` | `1` | report |  | `python/realy/report/history.py` |
@@ -126,4 +131,4 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `STORE_MAX_IN_FLIGHT` | `1000` | Flink job | flink-taskmanager | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java` |
 | `STORE_STATE` | `customer,card` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
 
-119 variables.
+124 variables.

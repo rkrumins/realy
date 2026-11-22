@@ -17,8 +17,8 @@ import java.util.regex.Pattern;
 
 /** Java mirror of python/realy/features/schema.py (same file, same validation). */
 public final class FeatureSchema {
-    public static final List<String> ENTITY_ORDER =
-            List.of("customer", "card", "device", "ip", "merchant", "terminal", "payee");
+    /** The entity registry's order (contracts/entities.yaml): the keyed-stage order. */
+    public static final List<String> ENTITY_ORDER = io.realy.scoring.binding.EntityRegistry.load().names();
     private static final Pattern DUR = Pattern.compile("^(\\d+)(s|m|h|d)$");
 
     public final int version;
@@ -90,7 +90,7 @@ public final class FeatureSchema {
             i++;
         }
         features = List.copyOf(fs);
-        for (String e : ENTITY_ORDER) {
+        for (String e : io.realy.scoring.binding.EntityRegistry.load().names()) {
             List<FeatureSpec> s = features.stream().filter(x -> x.isStream() && e.equals(x.entity())).toList();
             if (!s.isEmpty()) streamByEntity.put(e, s);
             List<FeatureSpec> p = features.stream().filter(x -> x.isProfile() && e.equals(x.entity())).toList();

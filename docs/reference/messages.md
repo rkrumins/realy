@@ -316,6 +316,163 @@ The feature vector exactly as served to the model. Order is defined by contracts
 | 4 | `computed_at_us` | `sfixed64` |  |
 | 5 | `freshness` | `repeated EntityFreshness` |  |
 
+## `realy.flows.v1` (a2a.proto)
+
+Source: `contracts/proto/realy/flows/v1/a2a.proto`
+
+### `A2aChannel` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `A2A_CHANNEL_UNSPECIFIED` | 0 |  |
+| `A2A_MOBILE_APP` | 1 |  |
+| `A2A_ONLINE_BANKING` | 2 |  |
+| `A2A_BRANCH` | 3 |  |
+| `A2A_API` | 4 | open banking / third-party initiation |
+
+### `PaymentInitiation`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `payment_id` | `fixed64` | the transaction: every message of this payment carries it |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `account_id` | `uint64` |  |
+| 6 | `payee_id` | `uint64` |  |
+| 7 | `amount_minor` | `int64` |  |
+| 8 | `currency` | `string` |  |
+| 9 | `amount_usd_minor` | `int64` |  |
+| 10 | `channel` | `A2aChannel` |  |
+| 11 | `new_payee` | `bool` | the payee was added in this session |
+| 12 | `reference` | `string` | payment reference the customer typed |
+| 13 | `lat` | `double` |  |
+| 14 | `lon` | `double` |  |
+
+### `DeviceContext`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `payment_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `device_id` | `uint64` |  |
+| 6 | `ip_v4` | `uint32` |  |
+| 7 | `ip_country` | `string` |  |
+| 8 | `ip_asn` | `uint32` |  |
+| 9 | `session_age_s` | `uint32` | seconds since the app session started |
+| 10 | `remote_access` | `bool` | a remote-access tool is running (screen sharing, remote control) |
+| 11 | `emulator` | `bool` |  |
+| 12 | `on_call` | `bool` | the customer is on a phone call while paying (a scam signal) |
+
+### `PayeeCheckResult` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `PAYEE_CHECK_UNSPECIFIED` | 0 |  |
+| `PAYEE_MATCH` | 1 |  |
+| `PAYEE_CLOSE_MATCH` | 2 |  |
+| `PAYEE_NO_MATCH` | 3 |  |
+| `PAYEE_NOT_CHECKED` | 4 | the payee's bank does not take part |
+
+### `PayeeCheck`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `payment_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `payee_id` | `uint64` |  |
+| 6 | `result` | `PayeeCheckResult` |  |
+| 7 | `account_type_mismatch` | `bool` | personal vs business account |
+
+### `ScaMethod` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `SCA_METHOD_UNSPECIFIED` | 0 |  |
+| `SCA_BIOMETRIC` | 1 |  |
+| `SCA_APP_PUSH` | 2 |  |
+| `SCA_SMS_OTP` | 3 |  |
+| `SCA_CARD_READER` | 4 |  |
+
+### `ScaResult`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `payment_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `method` | `ScaMethod` |  |
+| 6 | `passed` | `bool` |  |
+| 7 | `attempt` | `uint32` | 1 for the first attempt |
+
+### `A2aScheme` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `A2A_SCHEME_UNSPECIFIED` | 0 |  |
+| `A2A_INSTANT` | 1 | faster payments / SEPA instant / RTP |
+| `A2A_BATCH` | 2 | bacs / SEPA credit transfer |
+| `A2A_HIGH_VALUE` | 3 | CHAPS / RTGS |
+
+### `PaymentSubmission`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `payment_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `account_id` | `uint64` |  |
+| 6 | `payee_id` | `uint64` | may differ from the initiation's: a payee changed mid-flow |
+| 7 | `amount_minor` | `int64` |  |
+| 8 | `currency` | `string` |  |
+| 9 | `amount_usd_minor` | `int64` |  |
+| 10 | `scheme` | `A2aScheme` |  |
+
+### `PaymentStatusCode` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `PAYMENT_STATUS_UNSPECIFIED` | 0 |  |
+| `PAYMENT_ACCEPTED` | 1 | the scheme accepted it |
+| `PAYMENT_SETTLED` | 2 |  |
+| `PAYMENT_REJECTED` | 3 |  |
+| `PAYMENT_RETURNED` | 4 | the payee's bank sent it back |
+| `PAYMENT_RECALLED` | 5 | recalled by the sender's bank (scam reported) |
+
+### `PaymentStatus`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `payment_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `code` | `PaymentStatusCode` |  |
+| 6 | `reason` | `string` |  |
+
+## `realy.flows.v1` (txn.proto)
+
+Source: `contracts/proto/realy/flows/v1/txn.proto`
+
+### `TxnContext`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `transaction` | `string` | contract name, e.g. a2a_transfer ("" = a one-message transaction) |
+| 2 | `txn_id` | `fixed64` | the link field's value (payment_id) |
+| 3 | `stage` | `string` | "assembled", or the scored stage it was decided again at |
+| 4 | `parts_present` | `uint32` | bit i = the contract's i-th message role had arrived |
+| 5 | `partial` | `bool` | assembled at the wait deadline without a required part |
+| 6 | `strings` | `map<string, string>` | context values: enums by name, strings |
+| 7 | `numbers` | `map<string, double>` | context values: numbers, bools (1/0), counts, seconds |
+| 8 | `assembled_at_us` | `sfixed64` | wall time it was assembled (the assembly wait is measured from the trigger's ingest) |
+
 ## `realy.payments.v1` (label.proto)
 
 Source: `contracts/proto/realy/payments/v1/label.proto`
@@ -541,6 +698,7 @@ System-of-record for a decision: everything needed to reproduce, audit, or train
 | 16 | `features` | `realy.features.v1.FeatureVector` |  |
 | 17 | `trace` | `realy.bench.v1.BenchTrace` |  |
 | 18 | `feature_schema_version` | `uint32` |  |
+| 19 | `txn` | `realy.flows.v1.TxnContext` | a transaction formed by several linked messages: which one, at which stage, which parts it was assembled from (unset for a one-message transaction) |
 
 ## `realy.scoring.v1` (scoring_service.proto)
 

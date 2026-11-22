@@ -549,9 +549,44 @@ def scenarios() -> str:
     return "".join(parts)
 
 
+def bindings() -> str:
+    """The entity registry, every bound event type with its fields, and the pipelines."""
+    from .bindings import event_types, registry
+    from .bindings.pipeline import PIPELINES_DIR, pipeline
+    reg = registry()
+    out = [HEADER.format(src="contracts/entities.yaml, contracts/events/*.yaml, contracts/pipelines/*.yaml"),
+           "# Bindings: entities, event types and pipelines\n",
+           "What the pipeline's messages mean, loaded the same way by Java (`io.realy.scoring.binding`) and Python "
+           "(`realy.bindings`). How to add an event type or a field: [dev/schemas.md](../dev/schemas.md).\n",
+           "## Entities\n", "Order is the Flink job's keyed-stage order (append only).\n",
+           "| # | Entity | Id | Owned by | Entity enum |", "|---|---|---|---|---|"]
+    for e in reg.entities.values():
+        out.append(f"| {e.ordinal} | `{e.name}` | {e.id} | {e.owned_by or ''} | {e.enum or ''} |")
+    out.append("\n## Pipelines\n")
+    out.append("| Pipeline | Namespace | Partition key | Event types | Exact entities | Topics |")
+    out.append("|---|---|---|---|---|---|")
+    for f in sorted(PIPELINES_DIR.glob("*.yaml")):
+        p = pipeline(str(f))
+        types = ", ".join(f"`{n}`{' (scored)' if n in p.scored() else ' (fold)'}" for n in p.event_types)
+        topics = ", ".join(f"{k}: `{v}`" for k, v in p.topics.items())
+        out.append(f"| `{p.name}` | {p.namespace or '(default)'} | {p.partition_key} | {types} | "
+                   f"{', '.join(p.exact_entities())} | {topics} |")
+    for name, t in event_types().items():
+        out.append(f"\n## Event type `{name}`\n")
+        out.append(f"Message `{t.message}`; id `{t.id}`{' (hashed)' if t.id_hash else ''}; time `{t.time}` "
+                   f"({t.time_unit}); amount `{t.amount or ''}`.\n")
+        out.append("| # | Field | Kind | ClickHouse | Entity |")
+        out.append("|---|---|---|---|---|")
+        ent_of = {v: k for k, v in t.entities.items()}
+        for f in t.codec.fields:
+            kind = f.kind if f.kind != "enum" else f"enum {f.enum_type.rsplit('.', 1)[-1]}"
+            out.append(f"| {f.number} | `{f.name}` | {kind} | {f.ch_type} | {ent_of.get(f.name, '')} |")
+    return "\n".join(out) + "\n"
+
+
 PAGES = {"scenario-schema.md": scenario_schema, "config.md": config, "cli.md": cli, "http-api.md": http_api,
          "features.md": features, "rules.md": rules, "topics.md": topics, "scenarios.md": scenarios,
-         "messages.md": messages, "environment.md": environment}
+         "messages.md": messages, "environment.md": environment, "bindings.md": bindings}
 
 
 def write() -> list[Path]:

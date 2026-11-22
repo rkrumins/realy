@@ -215,17 +215,11 @@ public final class FeatureAssembler {
         return b.build();
     }
 
+    /** The entity's value in realy.features.v1.Entity (contracts/entities.yaml `enum`), or UNSPECIFIED. */
     public static Entity entityEnum(String e) {
-        return switch (e) {
-            case "customer" -> Entity.CUSTOMER;
-            case "card" -> Entity.CARD;
-            case "device" -> Entity.DEVICE;
-            case "ip" -> Entity.IP;
-            case "merchant" -> Entity.MERCHANT;
-            case "terminal" -> Entity.TERMINAL;
-            case "payee" -> Entity.PAYEE;
-            default -> Entity.ENTITY_UNSPECIFIED;
-        };
+        var reg = io.realy.scoring.binding.EntityRegistry.load();
+        String n = reg.contains(e) ? reg.get(e).enumName() : null;
+        return n == null ? Entity.ENTITY_UNSPECIFIED : Entity.valueOf(n);
     }
 
     static void setBit(byte[] bm, int i) {

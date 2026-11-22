@@ -65,7 +65,14 @@ public final class EventView {
             case "merchant" -> e.getMerchantId();
             case "terminal" -> e.getTerminalId();
             case "payee" -> e.getPayeeId();
-            default -> throw new IllegalArgumentException("unknown entity " + entity);
+            case "account" -> e.getAccountId();
+            // a registry entity the payment event does not carry (txn): absent; anything else is a mistake
+            default -> {
+                if (!io.realy.scoring.binding.EntityRegistry.load().contains(entity)) {
+                    throw new IllegalArgumentException("unknown entity " + entity);
+                }
+                yield 0L;
+            }
         };
     }
 

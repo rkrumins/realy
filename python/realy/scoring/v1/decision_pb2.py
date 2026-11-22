@@ -25,9 +25,10 @@ _sym_db = _symbol_database.Default()
 from realy.payments.v1 import transaction_pb2 as realy_dot_payments_dot_v1_dot_transaction__pb2
 from realy.features.v1 import features_pb2 as realy_dot_features_dot_v1_dot_features__pb2
 from realy.bench.v1 import trace_pb2 as realy_dot_bench_dot_v1_dot_trace__pb2
+from realy.flows.v1 import txn_pb2 as realy_dot_flows_dot_v1_dot_txn__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1frealy/scoring/v1/decision.proto\x12\x10realy.scoring.v1\x1a#realy/payments/v1/transaction.proto\x1a realy/features/v1/features.proto\x1a\x1arealy/bench/v1/trace.proto\"U\n\x07RuleHit\x12\x0f\n\x07rule_id\x18\x01 \x01(\t\x12)\n\x06\x61\x63tion\x18\x02 \x01(\x0e\x32\x19.realy.scoring.v1.Outcome\x12\x0e\n\x06reason\x18\x03 \x01(\t\"\xbc\x01\n\x0bModelResult\x12\x12\n\nmodel_name\x18\x01 \x01(\t\x12\x15\n\rmodel_version\x18\x02 \x01(\t\x12\x12\n\ndeployment\x18\x03 \x01(\t\x12\r\n\x05score\x18\x04 \x01(\x02\x12\x13\n\x0braw_outputs\x18\x05 \x03(\x02\x12\x12\n\ninput_hash\x18\x06 \x01(\x06\x12\x11\n\ttimed_out\x18\x07 \x01(\x08\x12\x0f\n\x07\x65rrored\x18\x08 \x01(\x08\x12\x12\n\nbatch_size\x18\t \x01(\r\"\xe7\x04\n\x0e\x44\x65\x63isionRecord\x12\x10\n\x08\x65vent_id\x18\x01 \x01(\x06\x12*\n\x07outcome\x18\x02 \x01(\x0e\x32\x19.realy.scoring.v1.Outcome\x12\r\n\x05score\x18\x03 \x01(\x02\x12\x14\n\x0creason_codes\x18\x04 \x03(\t\x12,\n\trule_hits\x18\x05 \x03(\x0b\x32\x19.realy.scoring.v1.RuleHit\x12,\n\x05model\x18\x06 \x01(\x0b\x32\x1d.realy.scoring.v1.ModelResult\x12\x16\n\x0epolicy_version\x18\x07 \x01(\t\x12\x18\n\x10rule_set_version\x18\x08 \x01(\t\x12,\n\x04path\x18\t \x01(\x0e\x32\x1e.realy.scoring.v1.DecisionPath\x12\x10\n\x08\x64\x65graded\x18\n \x01(\x08\x12\x33\n\x0cingress_mode\x18\x0b \x01(\x0e\x32\x1d.realy.scoring.v1.IngressMode\x12\x13\n\x0binstance_id\x18\x0c \x01(\t\x12\x15\n\rdecided_at_us\x18\r \x01(\x10\x12\x10\n\x08revision\x18\x0e \x01(\r\x12\x32\n\x05\x65vent\x18\x0f \x01(\x0b\x32#.realy.payments.v1.TransactionEvent\x12\x32\n\x08\x66\x65\x61tures\x18\x10 \x01(\x0b\x32 .realy.features.v1.FeatureVector\x12)\n\x05trace\x18\x11 \x01(\x0b\x32\x1a.realy.bench.v1.BenchTrace\x12\x1e\n\x16\x66\x65\x61ture_schema_version\x18\x12 \x01(\r*W\n\x07Outcome\x12\x17\n\x13OUTCOME_UNSPECIFIED\x10\x00\x12\x0b\n\x07\x41PPROVE\x10\x01\x12\n\n\x06REVIEW\x10\x02\x12\x0b\n\x07\x44\x45\x43LINE\x10\x03\x12\r\n\tCHALLENGE\x10\x04*z\n\x0bIngressMode\x12\x1c\n\x18INGRESS_MODE_UNSPECIFIED\x10\x00\x12\r\n\tSYNC_GRPC\x10\x01\x12\r\n\tSYNC_HTTP\x10\x02\x12\x17\n\x13\x41SYNC_KAFKA_GATEWAY\x10\x03\x12\x16\n\x12\x41SYNC_FLINK_INLINE\x10\x04*\x82\x01\n\x0c\x44\x65\x63isionPath\x12\r\n\tPATH_FULL\x10\x00\x12\x1c\n\x18PATH_RULES_ONLY_FALLBACK\x10\x01\x12\x14\n\x10PATH_PROVISIONAL\x10\x02\x12 \n\x1cPATH_FINAL_AFTER_PROVISIONAL\x10\x03\x12\r\n\tPATH_ECHO\x10\x04\x42!\n\x1dio.realy.contracts.scoring.v1P\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1frealy/scoring/v1/decision.proto\x12\x10realy.scoring.v1\x1a#realy/payments/v1/transaction.proto\x1a realy/features/v1/features.proto\x1a\x1arealy/bench/v1/trace.proto\x1a\x18realy/flows/v1/txn.proto\"U\n\x07RuleHit\x12\x0f\n\x07rule_id\x18\x01 \x01(\t\x12)\n\x06\x61\x63tion\x18\x02 \x01(\x0e\x32\x19.realy.scoring.v1.Outcome\x12\x0e\n\x06reason\x18\x03 \x01(\t\"\xbc\x01\n\x0bModelResult\x12\x12\n\nmodel_name\x18\x01 \x01(\t\x12\x15\n\rmodel_version\x18\x02 \x01(\t\x12\x12\n\ndeployment\x18\x03 \x01(\t\x12\r\n\x05score\x18\x04 \x01(\x02\x12\x13\n\x0braw_outputs\x18\x05 \x03(\x02\x12\x12\n\ninput_hash\x18\x06 \x01(\x06\x12\x11\n\ttimed_out\x18\x07 \x01(\x08\x12\x0f\n\x07\x65rrored\x18\x08 \x01(\x08\x12\x12\n\nbatch_size\x18\t \x01(\r\"\x90\x05\n\x0e\x44\x65\x63isionRecord\x12\x10\n\x08\x65vent_id\x18\x01 \x01(\x06\x12*\n\x07outcome\x18\x02 \x01(\x0e\x32\x19.realy.scoring.v1.Outcome\x12\r\n\x05score\x18\x03 \x01(\x02\x12\x14\n\x0creason_codes\x18\x04 \x03(\t\x12,\n\trule_hits\x18\x05 \x03(\x0b\x32\x19.realy.scoring.v1.RuleHit\x12,\n\x05model\x18\x06 \x01(\x0b\x32\x1d.realy.scoring.v1.ModelResult\x12\x16\n\x0epolicy_version\x18\x07 \x01(\t\x12\x18\n\x10rule_set_version\x18\x08 \x01(\t\x12,\n\x04path\x18\t \x01(\x0e\x32\x1e.realy.scoring.v1.DecisionPath\x12\x10\n\x08\x64\x65graded\x18\n \x01(\x08\x12\x33\n\x0cingress_mode\x18\x0b \x01(\x0e\x32\x1d.realy.scoring.v1.IngressMode\x12\x13\n\x0binstance_id\x18\x0c \x01(\t\x12\x15\n\rdecided_at_us\x18\r \x01(\x10\x12\x10\n\x08revision\x18\x0e \x01(\r\x12\x32\n\x05\x65vent\x18\x0f \x01(\x0b\x32#.realy.payments.v1.TransactionEvent\x12\x32\n\x08\x66\x65\x61tures\x18\x10 \x01(\x0b\x32 .realy.features.v1.FeatureVector\x12)\n\x05trace\x18\x11 \x01(\x0b\x32\x1a.realy.bench.v1.BenchTrace\x12\x1e\n\x16\x66\x65\x61ture_schema_version\x18\x12 \x01(\r\x12\'\n\x03txn\x18\x13 \x01(\x0b\x32\x1a.realy.flows.v1.TxnContext*W\n\x07Outcome\x12\x17\n\x13OUTCOME_UNSPECIFIED\x10\x00\x12\x0b\n\x07\x41PPROVE\x10\x01\x12\n\n\x06REVIEW\x10\x02\x12\x0b\n\x07\x44\x45\x43LINE\x10\x03\x12\r\n\tCHALLENGE\x10\x04*z\n\x0bIngressMode\x12\x1c\n\x18INGRESS_MODE_UNSPECIFIED\x10\x00\x12\r\n\tSYNC_GRPC\x10\x01\x12\r\n\tSYNC_HTTP\x10\x02\x12\x17\n\x13\x41SYNC_KAFKA_GATEWAY\x10\x03\x12\x16\n\x12\x41SYNC_FLINK_INLINE\x10\x04*\x82\x01\n\x0c\x44\x65\x63isionPath\x12\r\n\tPATH_FULL\x10\x00\x12\x1c\n\x18PATH_RULES_ONLY_FALLBACK\x10\x01\x12\x14\n\x10PATH_PROVISIONAL\x10\x02\x12 \n\x1cPATH_FINAL_AFTER_PROVISIONAL\x10\x03\x12\r\n\tPATH_ECHO\x10\x04\x42!\n\x1dio.realy.contracts.scoring.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,16 +36,16 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'realy.scoring.v1.decision_p
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\035io.realy.contracts.scoring.v1P\001'
-  _globals['_OUTCOME']._serialized_start=1048
-  _globals['_OUTCOME']._serialized_end=1135
-  _globals['_INGRESSMODE']._serialized_start=1137
-  _globals['_INGRESSMODE']._serialized_end=1259
-  _globals['_DECISIONPATH']._serialized_start=1262
-  _globals['_DECISIONPATH']._serialized_end=1392
-  _globals['_RULEHIT']._serialized_start=152
-  _globals['_RULEHIT']._serialized_end=237
-  _globals['_MODELRESULT']._serialized_start=240
-  _globals['_MODELRESULT']._serialized_end=428
-  _globals['_DECISIONRECORD']._serialized_start=431
-  _globals['_DECISIONRECORD']._serialized_end=1046
+  _globals['_OUTCOME']._serialized_start=1115
+  _globals['_OUTCOME']._serialized_end=1202
+  _globals['_INGRESSMODE']._serialized_start=1204
+  _globals['_INGRESSMODE']._serialized_end=1326
+  _globals['_DECISIONPATH']._serialized_start=1329
+  _globals['_DECISIONPATH']._serialized_end=1459
+  _globals['_RULEHIT']._serialized_start=178
+  _globals['_RULEHIT']._serialized_end=263
+  _globals['_MODELRESULT']._serialized_start=266
+  _globals['_MODELRESULT']._serialized_end=454
+  _globals['_DECISIONRECORD']._serialized_start=457
+  _globals['_DECISIONRECORD']._serialized_end=1113
 # @@protoc_insertion_point(module_scope)

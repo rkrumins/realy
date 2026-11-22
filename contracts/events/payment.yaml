@@ -1,0 +1,29 @@
+# Event type binding: what a protobuf message means to the pipeline. Any message can be bound; the
+# unified payment event is the first one.
+#
+#   message    full protobuf name (contracts/proto)
+#   id         the event id field (u64), or {field, hash: fnv1a64} for a string id
+#   time       the event-time field in microseconds, or {field, unit: ms|us|s}
+#   entities   registry entity -> the field holding its id (0 / empty = the event does not carry it)
+#   location   lat / lon fields (geo features)
+#   amount     the field reports and labels use for money ($ figures), in minor units
+#   labels     how fraud labels refer to an event of this type
+#   warehouse  ClickHouse: table name and column type overrides (enum columns stored as Int8 here)
+name: payment
+message: realy.payments.v1.TransactionEvent
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  account:  account_id
+  card:     card_id
+  device:   device_id
+  ip:       ip_v4
+  merchant: merchant_id
+  terminal: terminal_id
+  payee:    payee_id
+location: { lat: lat, lon: lon }
+amount: amount_usd_minor
+labels: { join: event_id }
+warehouse:
+  table: events_raw

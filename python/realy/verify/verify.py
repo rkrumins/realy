@@ -30,7 +30,16 @@ from ..features.engine import ReferenceEngine
 from ..scenario import REPO_ROOT, Scenario
 
 from ..policy import NAMES as OUTCOME  # noqa: E402  (APPROVE, REVIEW, DECLINE, CHALLENGE)
-EXACT_ENTITIES = ("customer", "card")
+
+
+def _exact_entities() -> tuple[str, ...]:
+    """Entities verified exactly: the pipeline's partition entity and what it owns (contracts/entities.yaml);
+    the rest are shared across partitions and reported as an agreement rate."""
+    from ..bindings import pipeline
+    return tuple(pipeline().exact_entities())
+
+
+EXACT_ENTITIES = _exact_entities()
 
 
 def _read(run_dir: Path, pattern: str) -> pa.Table | None:
@@ -146,7 +155,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     order = np.lexsort((cols["event_id"], cols["event_time_us"]))
     n_all = order.size
     mod = max(1, int(math.ceil(n_all / max_events)))
-    entities = schema.stream_entities() if mod == 1 else list(EXACT_ENTITIES)
+    entities = schema.stream_entities() if mod == 1 else [e for e in schema.stream_entities() if e in EXACT_ENTITIES]
     if mod > 1:
         keep = (cols["customer_id"][order] % np.uint64(mod)) == 0
         order = order[keep]

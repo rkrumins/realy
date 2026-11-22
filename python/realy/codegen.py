@@ -57,17 +57,15 @@ def _fraud_type_enum() -> list[str]:
     from .usecases import registry
     names = registry().fraud_type_names()
     return [("NONE" if i == 0 else names[i].upper()) if i in names else f"TYPE_{i}" for i in range(max(names) + 1)]
-EVENT_COLS = [  # (proto field, ClickHouse type)
-    ("event_id", "UInt64"), ("event_time_us", "Int64"), ("payment_type", "Int8"), ("customer_id", "UInt64"),
-    ("account_id", "UInt64"), ("card_id", "UInt64"), ("card_type", "Int8"), ("amount_minor", "Int64"),
-    ("currency", "String"), ("amount_usd_minor", "Int64"), ("merchant_id", "UInt64"), ("mcc", "UInt32"),
-    ("merchant_country", "String"), ("terminal_id", "UInt64"), ("channel", "Int8"), ("entry_mode", "Int8"),
-    ("card_present", "UInt8"), ("lat", "Float64"), ("lon", "Float64"), ("device_id", "UInt64"), ("ip_v4", "UInt32"),
-    ("ip_country", "String"), ("ip_asn", "UInt32"), ("payee_id", "UInt64"), ("cvv_match", "UInt8"),
-    ("avs_match", "UInt8"), ("recurring", "UInt8"), ("credit_limit_usd", "UInt32"),
-    # authorisation signals (TransactionEvent fields 29-32)
-    ("three_ds", "Int8"), ("pin_verified", "UInt8"), ("cryptogram_valid", "UInt8"), ("scheme_score", "UInt32"),
-]
+def _event_cols() -> list[tuple[str, str]]:
+    """(proto field, ClickHouse type) of the payment event, from its protobuf descriptor and binding
+    (contracts/events/payment.yaml): a field appended to TransactionEvent becomes a column here."""
+    from .bindings import event_type
+    t = event_type("payment")
+    return t.codec.columns(t.warehouse.get("column_types"))
+
+
+EVENT_COLS = _event_cols()
 KAFKA = "SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = '{topic}', kafka_group_name = '{group}',\n" \
         "         kafka_format = 'ProtobufSingle', kafka_schema = '{schema}', kafka_num_consumers = {consumers},\n" \
         "         kafka_flush_interval_ms = 1000, kafka_max_block_size = 65536, kafka_thread_per_consumer = 1,\n" \

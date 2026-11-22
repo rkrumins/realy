@@ -1,0 +1,18 @@
+# A pipeline: which event types flow through it, how they are partitioned, which features, datasets and
+# model it runs. The runner, the Flink job, the gateway, the generator, ClickHouse and the verifier all
+# read the same file (PIPELINE selects one; default payments).
+#
+#   namespace       "" keeps today's Redis keys and ClickHouse tables; another pipeline prefixes both
+#   partition_key   every record on the events topic is keyed by this entity's id: one entity's events
+#                   are totally ordered (its features, and those of entities it owns, are exact)
+#   default_type    the type of records without an `x-event-type` header
+#   event_types     scored: the gateway / Flink decides each event; fold: it only updates state
+name: payments
+namespace: ""
+partition_key: customer
+topics: { events: payments.events.raw, decisions: payments.decisions, labels: payments.labels }
+default_type: payment
+event_types:
+  payment: { scored: true }
+features: contracts/features/feature_schema.yaml
+model: { client: kserve-v2, name: fraud_mlp, input: input__0, output: output__0 }
