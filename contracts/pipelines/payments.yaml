@@ -24,6 +24,13 @@ event_types:
   sca_result: {}
   payment_submission: {}
   payment_status: {}
-transactions: [a2a_transfer]
+  # the messages of a card payment (contracts/transactions/card_payment.yaml)
+  card_authentication: {}
+  card_authorization: {}
+  card_capture: {}
+  card_reversal: {}
+  card_refund: {}
+  chargeback: {}
+transactions: [a2a_transfer, card_payment]
 features: contracts/features/feature_schema.yaml
 model: { client: kserve-v2, name: fraud_mlp, input: input__0, output: output__0 }

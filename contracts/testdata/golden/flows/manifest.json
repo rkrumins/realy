@@ -1,12 +1,20 @@
 {
  "closed_at_end": 0,
  "kinds": {
-  "assembled": 584,
-  "passthrough": 5416,
-  "stage": 581
+  "assembled": 5779,
+  "passthrough": 221,
+  "stage": 508
  },
- "outputs": 6581,
+ "outputs": 6508,
+ "outputs_by_transaction": {
+  "a2a_transfer": 1022,
+  "card_payment": 5265
+ },
  "partial": 10,
- "records": 8918,
- "records_sha256": "943c7e5101129b14a54d4b29594f3965224f98ab667f7ff8e7de2ecb156fecd0"
+ "records": 15053,
+ "records_sha256": "9ded055927a684716ffc6c11b343903f1f634533d53f05450a423011575080d0",
+ "transactions": [
+  "a2a_transfer",
+  "card_payment"
+ ]
 }

@@ -635,6 +635,329 @@
    "name": "A2A_HIGH_VALUE"
   }
  },
+ "realy.flows.v1.CardAuthentication": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "10": {
+   "name": "ip_v4",
+   "type": "uint32"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "auth_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "card_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "status",
+   "type": "ThreeDsStatus"
+  },
+  "7": {
+   "name": "challenged",
+   "type": "bool"
+  },
+  "8": {
+   "name": "acs_risk_score",
+   "type": "uint32"
+  },
+  "9": {
+   "name": "device_id",
+   "type": "uint64"
+  }
+ },
+ "realy.flows.v1.CardAuthorization": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "10": {
+   "name": "amount_usd_minor",
+   "type": "int64"
+  },
+  "11": {
+   "name": "merchant_id",
+   "type": "uint64"
+  },
+  "12": {
+   "name": "mcc",
+   "type": "uint32"
+  },
+  "13": {
+   "name": "merchant_country",
+   "type": "string"
+  },
+  "14": {
+   "name": "terminal_id",
+   "type": "uint64"
+  },
+  "15": {
+   "name": "channel",
+   "type": "realy.payments.v1.Channel"
+  },
+  "16": {
+   "name": "entry_mode",
+   "type": "realy.payments.v1.EntryMode"
+  },
+  "17": {
+   "name": "card_present",
+   "type": "bool"
+  },
+  "18": {
+   "name": "lat",
+   "type": "double"
+  },
+  "19": {
+   "name": "lon",
+   "type": "double"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "20": {
+   "name": "device_id",
+   "type": "uint64"
+  },
+  "21": {
+   "name": "ip_v4",
+   "type": "uint32"
+  },
+  "22": {
+   "name": "ip_country",
+   "type": "string"
+  },
+  "23": {
+   "name": "ip_asn",
+   "type": "uint32"
+  },
+  "24": {
+   "name": "cvv_match",
+   "type": "bool"
+  },
+  "25": {
+   "name": "avs_match",
+   "type": "bool"
+  },
+  "26": {
+   "name": "recurring",
+   "type": "bool"
+  },
+  "27": {
+   "name": "credit_limit_usd",
+   "type": "uint32"
+  },
+  "28": {
+   "name": "pin_verified",
+   "type": "bool"
+  },
+  "29": {
+   "name": "cryptogram_valid",
+   "type": "bool"
+  },
+  "3": {
+   "name": "auth_id",
+   "type": "fixed64"
+  },
+  "30": {
+   "name": "scheme_score",
+   "type": "uint32"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "account_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "card_id",
+   "type": "uint64"
+  },
+  "7": {
+   "name": "card_type",
+   "type": "realy.payments.v1.CardType"
+  },
+  "8": {
+   "name": "amount_minor",
+   "type": "int64"
+  },
+  "9": {
+   "name": "currency",
+   "type": "string"
+  }
+ },
+ "realy.flows.v1.CardCapture": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "auth_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "card_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "merchant_id",
+   "type": "uint64"
+  },
+  "7": {
+   "name": "amount_minor",
+   "type": "int64"
+  },
+  "8": {
+   "name": "currency",
+   "type": "string"
+  },
+  "9": {
+   "name": "amount_usd_minor",
+   "type": "int64"
+  }
+ },
+ "realy.flows.v1.CardRefund": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "auth_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "card_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "merchant_id",
+   "type": "uint64"
+  },
+  "7": {
+   "name": "amount_minor",
+   "type": "int64"
+  },
+  "8": {
+   "name": "currency",
+   "type": "string"
+  },
+  "9": {
+   "name": "amount_usd_minor",
+   "type": "int64"
+  }
+ },
+ "realy.flows.v1.CardReversal": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "auth_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "card_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "reason",
+   "type": "ReversalReason"
+  }
+ },
+ "realy.flows.v1.Chargeback": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "auth_id",
+   "type": "fixed64"
+  },
+  "4": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "card_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "merchant_id",
+   "type": "uint64"
+  },
+  "7": {
+   "name": "reason",
+   "type": "ChargebackReason"
+  },
+  "8": {
+   "name": "amount_usd_minor",
+   "type": "int64"
+  }
+ },
+ "realy.flows.v1.ChargebackReason": {
+  "0": {
+   "name": "CHARGEBACK_REASON_UNSPECIFIED"
+  },
+  "1": {
+   "name": "CB_FRAUD_CARD_ABSENT"
+  },
+  "2": {
+   "name": "CB_FRAUD_CARD_PRESENT"
+  },
+  "3": {
+   "name": "CB_NOT_RECEIVED"
+  },
+  "4": {
+   "name": "CB_NOT_AS_DESCRIBED"
+  },
+  "5": {
+   "name": "CB_CANCELLED_RECURRING"
+  },
+  "6": {
+   "name": "CB_DUPLICATE"
+  }
+ },
  "realy.flows.v1.DeviceContext": {
   "1": {
    "name": "event_id",
@@ -878,6 +1201,20 @@
    "type": "int64"
   }
  },
+ "realy.flows.v1.ReversalReason": {
+  "0": {
+   "name": "REVERSAL_REASON_UNSPECIFIED"
+  },
+  "1": {
+   "name": "REVERSAL_MERCHANT_CANCEL"
+  },
+  "2": {
+   "name": "REVERSAL_EXPIRED"
+  },
+  "3": {
+   "name": "REVERSAL_TIMEOUT"
+  }
+ },
  "realy.flows.v1.ScaMethod": {
   "0": {
    "name": "SCA_METHOD_UNSPECIFIED"
@@ -923,6 +1260,26 @@
   "7": {
    "name": "attempt",
    "type": "uint32"
+  }
+ },
+ "realy.flows.v1.ThreeDsStatus": {
+  "0": {
+   "name": "THREE_DS_STATUS_UNSPECIFIED"
+  },
+  "1": {
+   "name": "TDS_AUTHENTICATED"
+  },
+  "2": {
+   "name": "TDS_ATTEMPTED"
+  },
+  "3": {
+   "name": "TDS_NOT_AUTHENTICATED"
+  },
+  "4": {
+   "name": "TDS_REJECTED"
+  },
+  "5": {
+   "name": "TDS_UNAVAILABLE"
   }
  },
  "realy.flows.v1.TxnContext": {

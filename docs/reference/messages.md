@@ -459,6 +459,148 @@ Source: `contracts/proto/realy/flows/v1/a2a.proto`
 | 5 | `code` | `PaymentStatusCode` |  |
 | 6 | `reason` | `string` |  |
 
+## `realy.flows.v1` (card.proto)
+
+Source: `contracts/proto/realy/flows/v1/card.proto`
+
+### `ThreeDsStatus` (enum)
+
+EMV 3DS transaction status (ARes / RReq transStatus)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `THREE_DS_STATUS_UNSPECIFIED` | 0 |  |
+| `TDS_AUTHENTICATED` | 1 | Y: authenticated (frictionless or after a challenge) |
+| `TDS_ATTEMPTED` | 2 | A: attempted, the issuer or cardholder not enrolled |
+| `TDS_NOT_AUTHENTICATED` | 3 | N |
+| `TDS_REJECTED` | 4 | R: the issuer rejected it |
+| `TDS_UNAVAILABLE` | 5 | U: technical problem |
+
+### `CardAuthentication`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `auth_id` | `fixed64` | the transaction: every message of this card payment carries it |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `card_id` | `uint64` |  |
+| 6 | `status` | `ThreeDsStatus` |  |
+| 7 | `challenged` | `bool` | the cardholder was challenged (OTP, app) rather than frictionless |
+| 8 | `acs_risk_score` | `uint32` | the access control server's risk score, 0-99 |
+| 9 | `device_id` | `uint64` | the browser / app the 3DS data came from |
+| 10 | `ip_v4` | `uint32` |  |
+
+### `CardAuthorization`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `auth_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `account_id` | `uint64` |  |
+| 6 | `card_id` | `uint64` |  |
+| 7 | `card_type` | `realy.payments.v1.CardType` |  |
+| 8 | `amount_minor` | `int64` |  |
+| 9 | `currency` | `string` |  |
+| 10 | `amount_usd_minor` | `int64` |  |
+| 11 | `merchant_id` | `uint64` |  |
+| 12 | `mcc` | `uint32` |  |
+| 13 | `merchant_country` | `string` |  |
+| 14 | `terminal_id` | `uint64` |  |
+| 15 | `channel` | `realy.payments.v1.Channel` |  |
+| 16 | `entry_mode` | `realy.payments.v1.EntryMode` |  |
+| 17 | `card_present` | `bool` |  |
+| 18 | `lat` | `double` |  |
+| 19 | `lon` | `double` |  |
+| 20 | `device_id` | `uint64` | merchant-supplied device data (online) |
+| 21 | `ip_v4` | `uint32` |  |
+| 22 | `ip_country` | `string` |  |
+| 23 | `ip_asn` | `uint32` |  |
+| 24 | `cvv_match` | `bool` |  |
+| 25 | `avs_match` | `bool` |  |
+| 26 | `recurring` | `bool` |  |
+| 27 | `credit_limit_usd` | `uint32` |  |
+| 28 | `pin_verified` | `bool` |  |
+| 29 | `cryptogram_valid` | `bool` |  |
+| 30 | `scheme_score` | `uint32` | the card network's risk score in the request, 0-99 |
+
+### `CardCapture`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `auth_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `card_id` | `uint64` |  |
+| 6 | `merchant_id` | `uint64` |  |
+| 7 | `amount_minor` | `int64` | may differ from the authorisation (tips, partial shipment) |
+| 8 | `currency` | `string` |  |
+| 9 | `amount_usd_minor` | `int64` |  |
+
+### `ReversalReason` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `REVERSAL_REASON_UNSPECIFIED` | 0 |  |
+| `REVERSAL_MERCHANT_CANCEL` | 1 |  |
+| `REVERSAL_EXPIRED` | 2 | the authorisation hold expired uncaptured |
+| `REVERSAL_TIMEOUT` | 3 | the acquirer never received the response |
+
+### `CardReversal`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `auth_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `card_id` | `uint64` |  |
+| 6 | `reason` | `ReversalReason` |  |
+
+### `CardRefund`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `auth_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `card_id` | `uint64` |  |
+| 6 | `merchant_id` | `uint64` |  |
+| 7 | `amount_minor` | `int64` |  |
+| 8 | `currency` | `string` |  |
+| 9 | `amount_usd_minor` | `int64` |  |
+
+### `ChargebackReason` (enum)
+
+dispute categories (scheme reason codes differ; these are the common groups)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `CHARGEBACK_REASON_UNSPECIFIED` | 0 |  |
+| `CB_FRAUD_CARD_ABSENT` | 1 | "I did not make this online payment" |
+| `CB_FRAUD_CARD_PRESENT` | 2 | counterfeit / lost or stolen card used in person |
+| `CB_NOT_RECEIVED` | 3 |  |
+| `CB_NOT_AS_DESCRIBED` | 4 |  |
+| `CB_CANCELLED_RECURRING` | 5 |  |
+| `CB_DUPLICATE` | 6 |  |
+
+### `Chargeback`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `auth_id` | `fixed64` |  |
+| 4 | `customer_id` | `uint64` |  |
+| 5 | `card_id` | `uint64` |  |
+| 6 | `merchant_id` | `uint64` |  |
+| 7 | `reason` | `ChargebackReason` |  |
+| 8 | `amount_usd_minor` | `int64` |  |
+
 ## `realy.flows.v1` (txn.proto)
 
 Source: `contracts/proto/realy/flows/v1/txn.proto`

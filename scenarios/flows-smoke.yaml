@@ -1,12 +1,12 @@
 name: flows-smoke
-description: Transfers arrive as their six linked messages (initiation, device context, payee check, SCA, submission, status) and Flink assembles each into the unified event before the gateway scores it; card payments as usual. 500 TPS, verified exactly, with rules over the transaction context.
+description: Transfers arrive as their six linked messages (initiation, device context, payee check, SCA, submission, status) and card purchases as theirs (3-D Secure result, authorisation, capture, reversal, refund, chargeback); Flink assembles each into the unified event before the gateway scores it. 500 TPS, verified exactly, with rules over the transaction context.
 seed: 42
 world: { customers: 200000, merchants: 20000, payees: 40000 }
 traffic:
   profile: { kind: constant, tps: 500 }
   duration_s: 60
   warmup_s: 10
-  flows: [a2a_transfer]
+  flows: [a2a_transfer, card_payment]
 topology: gateway-kafka
 rules: baseline-flows
 fraud: { background_per_1k: 3.0, mix: { app_scam_mule: 2.0, account_takeover: 1.0, investment_scam: 1.0, card_testing: 1.0 } }

@@ -1,0 +1,11 @@
+# One message of a card payment (contracts/transactions/card_payment.yaml): the 3-D Secure result.
+name: card_authentication
+message: realy.flows.v1.CardAuthentication
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  card: card_id
+  device: device_id
+  ip: ip_v4
+  txn: auth_id

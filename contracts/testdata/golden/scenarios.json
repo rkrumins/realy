@@ -44,6 +44,14 @@
    "file_sha256": "066aff2001c51c63bc08c1df45543795cd265f99aad0a42d78ecf63ff0fcd105",
    "fingerprint": "3f8926b71581f4f4"
   },
+  "flows-inline": {
+   "file_sha256": "f1054c26c7a3f799823336885dfabc388d32f2fa3755aae69cc37d872e3aa6bc",
+   "fingerprint": "07f037077a2d7157"
+  },
+  "flows-smoke": {
+   "file_sha256": "83d97f5abbe5ea557d5a969788f47f9ec0847cee79a9a53de581b5a747736074",
+   "fingerprint": "1924144ff1b09d7f"
+  },
   "fraud-eval": {
    "file_sha256": "9d0ac5891b6aa848e2fba9ef37323ba160d4580ddba4d3db3fcc19e03a8e621f",
    "fingerprint": "8d47618b8923370f"
@@ -139,6 +147,7 @@
   "traffic.arrivals",
   "traffic.backfill_days",
   "traffic.duration_s",
+  "traffic.flows",
   "traffic.generators",
   "traffic.profile.end_tps",
   "traffic.profile.kind",

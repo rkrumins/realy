@@ -79,31 +79,64 @@ context:
   amount_changed:      { changed: amount_usd_minor, between: [initiation, submission] }
   secs_to_submit:      { elapsed: [initiation, submission] }
 
-# How the synthetic generator expands each of its transfers into these messages (realy/gen/flows.py):
-# the unified transfer it already draws is exactly what the parts assemble back into. Delays are uniform
-# [min, max] ms from the initiation (authentication from the payee check, submission from the
-# authentication, status from the submission). Rates are probabilities; `fraud.<typology>` overrides them.
+report: { by: [payee_check] }   # the run report breaks the decisions down by these context values
+
+# How the synthetic generator expands its transfers into these messages (realy/gen/flows.py, declarative):
+# the unified transfer it already draws is exactly what the parts assemble back into (every field the
+# assembly maps is filled from it). Steps run in order; delays are uniform [min, max] ms after the step
+# named by `after`; rates are probabilities or distributions; `fraud.<typology>` overrides them by name.
 generate:
-  payment_type: TRANSFER
+  expands: { payment_type: [TRANSFER] }
   delays_ms:
     device: [-60, 40]
     payee_check: [20, 80]
     authentication: [3000, 30000]
     submission: [500, 5000]
     status: [1000, 10000]
+  steps:
+    - role: initiation
+      set: { new_payee: { p: new_payee } }
+    - role: device
+      after: initiation
+      delay_ms: device
+      p: device                    # the app sends its device / session context at all
+      set: { session_age_s: { uniform: session_age_s }, remote_access: { p: remote_access },
+             emulator: { p: emulator }, on_call: { p: on_call } }
+    - role: payee_check
+      after: initiation
+      delay_ms: payee_check
+      p: payee_check               # the rest never answer: assembled partial at the wait
+      set: { payee_id: { col: payee_id }, result: { pick: payee_result },
+             account_type_mismatch: { p: account_type_mismatch } }
+      stop: { field: result, p: abandon }   # warned of a mismatch, the customer gives up
+    - role: authentication
+      after: payee_check
+      delay_ms: authentication
+      set: { method: { pick: sca_method } }
+      repeat: { p: sca_fail, max: 2, gap_ms: [5000, 40000], counter: attempt,
+                earlier: { passed: false }, last: { passed: true } }   # a failed first attempt, retried
+    - role: submission
+      after: authentication
+      delay_ms: submission
+      set: { scheme: A2A_INSTANT, payee_id: { alter: payee_changed } }   # malware rewriting the payee
+    - role: status
+      after: submission
+      delay_ms: status
+      set: { code: { pick: status } }
   rates:
-    device: 0.97                   # the app sends its device / session context at all
-    payee_check: 0.995             # the rest never answer: assembled partial at the wait
+    device: 0.97
+    payee_check: 0.995
     payee_result: { PAYEE_MATCH: 0.93, PAYEE_CLOSE_MATCH: 0.04, PAYEE_NO_MATCH: 0.015, PAYEE_NOT_CHECKED: 0.015 }
     account_type_mismatch: 0.02
-    abandon: { PAYEE_NO_MATCH: 0.4, PAYEE_CLOSE_MATCH: 0.15 }   # warned of a mismatch, the customer gives up
+    abandon: { PAYEE_NO_MATCH: 0.4, PAYEE_CLOSE_MATCH: 0.15 }
     new_payee: 0.08
     remote_access: 0.002
     on_call: 0.01
     emulator: 0.0005
     session_age_s: [20, 900]
-    sca_fail: 0.02                 # a failed first attempt (then retried once)
-    payee_changed: 0.0             # the submission names another payee (malware rewriting it)
+    sca_method: { SCA_APP_PUSH: 0.7, SCA_SMS_OTP: 0.3 }
+    sca_fail: 0.02
+    payee_changed: 0.0
     status: { PAYMENT_SETTLED: 0.995, PAYMENT_REJECTED: 0.005 }
   fraud:
     app_scam_mule:

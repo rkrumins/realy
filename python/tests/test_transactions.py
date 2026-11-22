@@ -215,6 +215,13 @@ def test_report_summarises_transactions(tmp_path):
     (tmp_path / "emit-0.json").write_text(json.dumps({"parts_sent": 17}))
     s = transactions_summary(tmp_path)
     assert s["assembled"] == 4 and s["partial"] == 1 and s["parts_sent"] == 17
-    assert s["by_payee_check"]["PAYEE_NO_MATCH"] == {"decided": 1, "fraud": 1, "stopped": 1, "fraud_stopped": 1}
-    assert s["by_payee_check"]["PAYEE_CHECK_UNSPECIFIED"]["fraud_stopped"] == 1      # the partial one, declined
+    by = s["by_contract"]["a2a_transfer"]["by"]["payee_check"]          # the contract's report.by
+    assert by["PAYEE_NO_MATCH"] == {"decided": 1, "fraud": 1, "stopped": 1, "fraud_stopped": 1}
+    assert by["PAYEE_CHECK_UNSPECIFIED"]["fraud_stopped"] == 1      # the partial one, declined
     assert s["assembly_wait_ms"]["p50"] > 20
+    from realy.report.report import _render_transactions
+    text = "\n".join(_render_transactions(s))
+    assert "transactions (a2a_transfer): 4 assembled from 17 more messages" in text and "payee check PAYEE_NO_MATCH" in text
+    # a report written before per-contract breakdowns still renders
+    old = {k: v for k, v in s.items() if k != "by_contract"} | {"by_payee_check": by}
+    assert "payee check PAYEE_NO_MATCH" in "\n".join(_render_transactions(old))

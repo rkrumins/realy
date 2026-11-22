@@ -142,6 +142,11 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     n_run_events = int(events.num_rows)
     if "backfill" in events.column_names:
         n_run_events = int(events.num_rows - pa.compute.sum(events["backfill"]).as_py())
+    emitted = _read(run_dir, "emit-*.parquet")
+    if emitted is not None and emitted.num_rows > n_run_events:
+        # every traced record the emitter sent expects a decision: the unified events, and a re-scored
+        # lifecycle stage of a multi-message transaction (a decision of its own, not an event row)
+        n_run_events = int(emitted.num_rows)
     dec = dec.filter(pa.compute.equal(dec["revision"], 0))
     d_ids = dec["event_id"].to_numpy()
     _, first = np.unique(d_ids, return_index=True)

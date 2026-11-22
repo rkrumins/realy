@@ -1,12 +1,12 @@
 name: flows-inline
-description: "The flows-smoke traffic (transfers as their six linked messages, assembled by Flink) with Flink scoring inline (topology A), so there is no extra hop between assembly and decision. 500 TPS, verified exactly."
+description: "The flows-smoke traffic (transfers and card payments as their linked messages, assembled by Flink) with Flink scoring inline (topology A), so there is no extra hop between assembly and decision. 500 TPS, verified exactly."
 seed: 42
 world: { customers: 200000, merchants: 20000, payees: 40000 }
 traffic:
   profile: { kind: constant, tps: 500 }
   duration_s: 90
   warmup_s: 20
-  flows: [a2a_transfer]
+  flows: [a2a_transfer, card_payment]
 topology: flink-inline
 rules: baseline-flows
 fraud: { background_per_1k: 3.0, mix: { app_scam_mule: 2.0, account_takeover: 1.0, investment_scam: 1.0, card_testing: 1.0 } }

@@ -77,11 +77,19 @@ class AssemblyTest {
         }
     }
 
+    /** The transaction contracts the golden stream was generated with (its manifest). */
+    static List<String> contracts(Path d) throws Exception {
+        List<String> out = new ArrayList<>();
+        new ObjectMapper().readTree(Files.readString(d.resolve("manifest.json"))).path("transactions")
+                .forEach(x -> out.add(x.asText()));
+        return out.isEmpty() ? List.of("a2a_transfer") : out;
+    }
+
     @Test
     void javaAssemblerEqualsThePythonTwinOnTheGoldenStream() throws Exception {
         Path d = GoldenPaymentsTest.dir().getParent().resolve("flows");
         var pipeline = PipelineBinding.current();
-        AssemblerCore core = new AssemblerCore(List.of("a2a_transfer"), MATCHER);
+        AssemblerCore core = new AssemblerCore(contracts(d), MATCHER);
         Map<Long, MapStore> stores = new LinkedHashMap<>();
         List<Map<String, Object>> got = new ArrayList<>();
         for (Rec r : records(d)) {

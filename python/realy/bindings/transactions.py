@@ -70,6 +70,7 @@ class Transaction:
     context: tuple[ContextSpec, ...]
     source: str | None = None
     generate: dict[str, Any] = field(default_factory=dict)   # synthetic expansion parameters (gen/flows.py)
+    report_by: tuple[str, ...] = ()  # context names the run report breaks its decisions down by
 
     @property
     def role_names(self) -> list[str]:
@@ -135,6 +136,9 @@ class Transaction:
             for r in [c.role] if c.role else list(c.between or ()):
                 if r not in self.roles:
                     p.append(f"{self.name}: context {c.name} names unknown role {r!r}")
+        for b in self.report_by:
+            if b not in {c.name for c in self.context}:
+                p.append(f"{self.name}: report.by names {b!r}, which is not a context name")
         if self.on_timeout not in ("score_partial", "rules_only"):
             p.append(f"{self.name}: on_timeout must be score_partial or rules_only")
         return p
@@ -150,7 +154,7 @@ def _field_maps(raw: dict[str, Any]) -> tuple[FieldMap, ...]:
             out.append(FieldMap(target, const=spec["const"]))
         else:
             role, f = spec["from"].split(".", 1)
-            out.append(FieldMap(target, role, f, enum_map=tuple(sorted((spec.get("map") or {}).items()))))
+            out.append(FieldMap(target, role, f, enum_map=tuple((spec.get("map") or {}).items())))
     return tuple(out)
 
 
@@ -183,7 +187,8 @@ def parse(raw: dict[str, Any], source: str | None = None) -> Transaction:
                        trigger=a["trigger"], require=tuple(a.get("require") or ()), optional=tuple(a.get("optional") or ()),
                        wait_ms=int(a.get("wait_ms", 150)), on_timeout=a.get("on_timeout", "score_partial"),
                        fields=_field_maps(a.get("fields") or {}), stages=tuple(stages), context=_context(raw.get("context")),
-                       source=source, generate=dict(raw.get("generate") or {}))
+                       source=source, generate=dict(raw.get("generate") or {}),
+                       report_by=tuple((raw.get("report") or {}).get("by") or ()))
 
 
 @functools.lru_cache(maxsize=4)
@@ -261,7 +266,9 @@ class Assembler:
                 self.by_type.setdefault(ty, []).append((t, t.role_of(ty)))
         self.open: dict[tuple[str, int], Open] = {}
         self.into = event_type(into).codec
-        self.default_ctx = default_context(txns)
+        # every known contract's names, as the Java side (TxnContexts.defaults) has them: an expression over
+        # another contract's context reads its default, whichever contracts this run assembles
+        self.default_ctx = default_context()
         self.wait_ms_override = wait_ms_override
         self._when: dict[str, Any] = {}
         self.forced: dict[tuple[str, int], int] = {}   # (txn, id) -> parts_present recorded by the pipeline

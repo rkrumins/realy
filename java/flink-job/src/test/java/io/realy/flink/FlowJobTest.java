@@ -59,6 +59,14 @@ class FlowJobTest {
         }
     }
 
+    /** The transaction contracts the golden stream was generated with (its manifest). */
+    static List<String> contracts(Path d) throws Exception {
+        List<String> out = new ArrayList<>();
+        new ObjectMapper().readTree(Files.readString(d.resolve("manifest.json"))).path("transactions")
+                .forEach(x -> out.add(x.asText()));
+        return out.isEmpty() ? List.of("a2a_transfer") : out;
+    }
+
     @Test
     void assemblesTheGoldenStreamAndComputesFeaturesInItsOrder() throws Exception {
         run(false);
@@ -101,7 +109,7 @@ class FlowJobTest {
         int custOrd = schema.rowPlan().entityOrdinal("customer");
         var assembled = env.fromData(input).setParallelism(1)
                 .keyBy(new FraudJob.EntityKey(custOrd))
-                .process(new AssembleFunction(List.of("a2a_transfer"), null, scoreStages)).uid("assemble");
+                .process(new AssembleFunction(contracts(d), null, scoreStages)).uid("assemble");
         var out = FraudJob.features(assembled, List.of("customer", "card"), false, List.of(), false, null, "customer")
                 .executeAndCollect(100_000);
 
@@ -136,6 +144,6 @@ class FlowJobTest {
                 }
             }
         }
-        assertThat(transfers).isGreaterThan(scoreStages ? 1000 : 500);
+        assertThat(transfers).isGreaterThan(scoreStages ? 5000 : 4500);
     }
 }

@@ -127,14 +127,20 @@ def write(out: Path = OUT, n_events: int = N_EVENTS) -> dict[str, Any]:
 FLOWS = REPO_ROOT / "contracts" / "testdata" / "golden" / "flows"
 
 
+FLOW_CONTRACTS = ["a2a_transfer", "card_payment"]
+
+
 def generate_flows(n_batches: int = 30):
-    """A stream of card payments and account-to-account transfers sent as their messages (a2a_transfer),
-    with APP scams and account takeover in it: every record in the order the pipeline receives it."""
+    """A stream of payments sent as their messages: transfers (a2a_transfer) and card purchases
+    (card_payment: 3DS, authorisation, capture, reversal, refund, chargeback), with APP scams, account
+    takeover and card testing in it, the rest one-message payments: every record in the order the pipeline
+    receives it."""
     from .gen.generator import Generator, sim_start_us
     from .world import build_world
-    sc = Scenario(name="golden-flows", seed=SEED, world=SPEC, traffic={"flows": ["a2a_transfer"]},
-                  fraud={"background_per_1k": 8.0, "mix": {"app_scam_mule": 1.0, "account_takeover": 1.0,
-                                                           "investment_scam": 0.5}})
+    sc = Scenario(name="golden-flows", seed=SEED, world=SPEC, traffic={"flows": FLOW_CONTRACTS},
+                  fraud={"background_per_1k": 8.0, "friendly_fraud_per_1k": 5.0,
+                         "mix": {"app_scam_mule": 1.0, "account_takeover": 1.0, "investment_scam": 0.5,
+                                 "card_testing": 1.0}})
     g = Generator(build_world(SPEC, SEED, None), sc, 0, 1)
     t = sim_start_us(sc)
     dt = int(200 / g.natural_rate_per_sim_s() * 1e6)
@@ -158,7 +164,7 @@ def write_flows(out: Path = FLOWS) -> dict[str, Any]:
     from .features.derived import event_view
     from .features.engine import ReferenceEngine
     records = generate_flows()
-    a = Assembler([transaction("a2a_transfer")])
+    a = Assembler([transaction(n) for n in FLOW_CONTRACTS])
     pay = event_type("payment").codec
     pay_cls = message_class(pay.full_name)
     expected = []
@@ -198,7 +204,12 @@ def write_flows(out: Path = FLOWS) -> dict[str, Any]:
     kinds = {}
     for e in expected:
         kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
-    man = {"records": len(records), "outputs": len(expected), "kinds": kinds,
+    by_txn: dict[str, int] = {}
+    for e in expected:
+        if e["transaction"]:
+            by_txn[e["transaction"]] = by_txn.get(e["transaction"], 0) + 1
+    man = {"records": len(records), "outputs": len(expected), "kinds": kinds, "transactions": FLOW_CONTRACTS,
+           "outputs_by_transaction": by_txn,
            "closed_at_end": len(expected) - n_before_close,   # still waiting when the stream ended
            "partial": sum(1 for e in expected if e["partial"]),
            "records_sha256": hashlib.sha256(b"".join(r.payload for r in records)).hexdigest()}

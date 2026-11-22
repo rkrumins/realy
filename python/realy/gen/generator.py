@@ -70,15 +70,13 @@ class Generator:
         self.flows = None
         if scenario.traffic.flows:
             from ..bindings.transactions import transaction
-            from .flows import FlowExpander
-            if len(scenario.traffic.flows) != 1:
-                raise ValueError("one flow per run for now (traffic.flows)")
-            # a stream of its own (spawned children are index-keyed: the three above are unchanged)
+            from .flows import Flows
+            # a stream of its own (spawned children are index-keyed: the three above are unchanged); each
+            # payment becomes the flow of the first contract that expands it. A scored lifecycle stage
+            # (a transfer's submission) is a decision of its own: traced, expected by the collector
             r_flow = np.random.Generator(np.random.PCG64(ss.spawn(1)[0]))
-            tx = transaction(scenario.traffic.flows[0])
-            # a scored lifecycle stage (the submission) is a decision of its own: traced, expected
-            self.flows = FlowExpander(tx, r_flow, self.reg.fraud_type_names(), shard,
-                                      score_stages=any(st.scored for st in tx.stages))
+            self.flows = Flows([transaction(n) for n in scenario.traffic.flows], r_flow,
+                               self.reg.fraud_type_names(), shard)
         self.pending = make_chunk(0)
         self.seq = 0
         self.order = 1 << 40

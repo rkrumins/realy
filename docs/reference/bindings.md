@@ -25,7 +25,7 @@ Order is the Flink job's keyed-stage order (append only).
 
 | Pipeline | Namespace | Partition key | Event types | Exact entities | Topics |
 |---|---|---|---|---|---|
-| `payments` | (default) | customer | `payment` (scored), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled` |
+| `payments` | (default) | customer | `payment` (scored), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold), `card_authentication` (fold), `card_authorization` (fold), `card_capture` (fold), `card_reversal` (fold), `card_refund` (fold), `chargeback` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled` |
 
 ## Transaction `a2a_transfer`
 
@@ -53,6 +53,146 @@ Linked by `payment_id`; assembled into `payment` when `initiation` and `payee_ch
 | `payee_changed` | `payee_id` changed `initiation` -> `submission` | `False` |
 | `amount_changed` | `amount_usd_minor` changed `initiation` -> `submission` | `False` |
 | `secs_to_submit` | seconds `initiation` -> `submission` | `0.0` |
+
+## Transaction `card_payment`
+
+Linked by `auth_id`; assembled into `payment` when `authorization` have arrived (wait 0 ms, then score partial); optional: `three_ds`. Guide: [transactions](../dev/transactions.md).
+
+| Bit | Role | Event type | Part of |
+|---|---|---|---|
+| 1 | `three_ds` | `card_authentication` | optional |
+| 2 | `authorization` | `card_authorization` | trigger |
+| 4 | `capture` | `card_capture` | stage captured |
+| 8 | `reversal` | `card_reversal` | stage reversed |
+| 16 | `refund` | `card_refund` | stage refunded |
+| 32 | `chargeback` | `chargeback` | stage charged_back |
+
+| Context (`event.txn.*`) | Kind | Default |
+|---|---|---|
+| `three_ds_status` | `three_ds.status` | `'THREE_DS_STATUS_UNSPECIFIED'` |
+| `three_ds_challenged` | `three_ds.challenged` | `False` |
+| `acs_risk_score` | `three_ds.acs_risk_score` | `0` |
+| `three_ds_device_changed` | `device_id` changed `three_ds` -> `authorization` | `False` |
+| `secs_from_3ds` | seconds `three_ds` -> `authorization` | `0.0` |
+| `captures` | count of `capture` | `0` |
+| `capture_amount_changed` | `amount_usd_minor` changed `authorization` -> `capture` | `False` |
+| `secs_to_capture` | seconds `authorization` -> `capture` | `0.0` |
+| `refunds` | count of `refund` | `0` |
+| `chargeback_reason` | `chargeback.reason` | `'CHARGEBACK_REASON_UNSPECIFIED'` |
+
+## Event type `card_authentication`
+
+Message `realy.flows.v1.CardAuthentication`; id `event_id`; time `event_time_us` (us); amount ``.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `auth_id` | u64 | UInt64 | txn |
+| 4 | `customer_id` | u64 | UInt64 | customer |
+| 5 | `card_id` | u64 | UInt64 | card |
+| 6 | `status` | enum ThreeDsStatus | Int8 |  |
+| 7 | `challenged` | bool | UInt8 |  |
+| 8 | `acs_risk_score` | u32 | UInt32 |  |
+| 9 | `device_id` | u64 | UInt64 | device |
+| 10 | `ip_v4` | u32 | UInt32 | ip |
+
+## Event type `card_authorization`
+
+Message `realy.flows.v1.CardAuthorization`; id `event_id`; time `event_time_us` (us); amount `amount_usd_minor`.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `auth_id` | u64 | UInt64 | txn |
+| 4 | `customer_id` | u64 | UInt64 | customer |
+| 5 | `account_id` | u64 | UInt64 | account |
+| 6 | `card_id` | u64 | UInt64 | card |
+| 7 | `card_type` | enum CardType | Int8 |  |
+| 8 | `amount_minor` | int | Int64 |  |
+| 9 | `currency` | string | String |  |
+| 10 | `amount_usd_minor` | int | Int64 |  |
+| 11 | `merchant_id` | u64 | UInt64 | merchant |
+| 12 | `mcc` | u32 | UInt32 |  |
+| 13 | `merchant_country` | string | String |  |
+| 14 | `terminal_id` | u64 | UInt64 | terminal |
+| 15 | `channel` | enum Channel | Int8 |  |
+| 16 | `entry_mode` | enum EntryMode | Int8 |  |
+| 17 | `card_present` | bool | UInt8 |  |
+| 18 | `lat` | float | Float64 |  |
+| 19 | `lon` | float | Float64 |  |
+| 20 | `device_id` | u64 | UInt64 | device |
+| 21 | `ip_v4` | u32 | UInt32 | ip |
+| 22 | `ip_country` | string | String |  |
+| 23 | `ip_asn` | u32 | UInt32 |  |
+| 24 | `cvv_match` | bool | UInt8 |  |
+| 25 | `avs_match` | bool | UInt8 |  |
+| 26 | `recurring` | bool | UInt8 |  |
+| 27 | `credit_limit_usd` | u32 | UInt32 |  |
+| 28 | `pin_verified` | bool | UInt8 |  |
+| 29 | `cryptogram_valid` | bool | UInt8 |  |
+| 30 | `scheme_score` | u32 | UInt32 |  |
+
+## Event type `card_capture`
+
+Message `realy.flows.v1.CardCapture`; id `event_id`; time `event_time_us` (us); amount `amount_usd_minor`.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `auth_id` | u64 | UInt64 | txn |
+| 4 | `customer_id` | u64 | UInt64 | customer |
+| 5 | `card_id` | u64 | UInt64 | card |
+| 6 | `merchant_id` | u64 | UInt64 | merchant |
+| 7 | `amount_minor` | int | Int64 |  |
+| 8 | `currency` | string | String |  |
+| 9 | `amount_usd_minor` | int | Int64 |  |
+
+## Event type `card_refund`
+
+Message `realy.flows.v1.CardRefund`; id `event_id`; time `event_time_us` (us); amount `amount_usd_minor`.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `auth_id` | u64 | UInt64 | txn |
+| 4 | `customer_id` | u64 | UInt64 | customer |
+| 5 | `card_id` | u64 | UInt64 | card |
+| 6 | `merchant_id` | u64 | UInt64 | merchant |
+| 7 | `amount_minor` | int | Int64 |  |
+| 8 | `currency` | string | String |  |
+| 9 | `amount_usd_minor` | int | Int64 |  |
+
+## Event type `card_reversal`
+
+Message `realy.flows.v1.CardReversal`; id `event_id`; time `event_time_us` (us); amount ``.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `auth_id` | u64 | UInt64 | txn |
+| 4 | `customer_id` | u64 | UInt64 | customer |
+| 5 | `card_id` | u64 | UInt64 | card |
+| 6 | `reason` | enum ReversalReason | Int8 |  |
+
+## Event type `chargeback`
+
+Message `realy.flows.v1.Chargeback`; id `event_id`; time `event_time_us` (us); amount `amount_usd_minor`.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `auth_id` | u64 | UInt64 | txn |
+| 4 | `customer_id` | u64 | UInt64 | customer |
+| 5 | `card_id` | u64 | UInt64 | card |
+| 6 | `merchant_id` | u64 | UInt64 | merchant |
+| 7 | `reason` | enum ChargebackReason | Int8 |  |
+| 8 | `amount_usd_minor` | int | Int64 |  |
 
 ## Event type `device_context`
 

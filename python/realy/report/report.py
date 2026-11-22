@@ -55,56 +55,78 @@ def _ms(us: np.ndarray) -> np.ndarray:
 
 
 def transactions_summary(run_dir: Path) -> dict[str, Any] | None:
-    """Multi-message transactions of a run (decisions carrying a TxnContext): how many were assembled,
-    how many without a required part, how long they waited for their parts, and how they were decided
-    by their flow signals (e.g. the payee check result), with ground truth."""
+    """Multi-message transactions of a run: per contract, how many were assembled, how many without a
+    required part, the assembly wait, the decisions taken again at scored stages, and the decisions broken
+    down by the context values the contract names (`report.by`: a transfer's payee check, a card payment's
+    3DS status), with ground truth."""
     import json as _json
     dec = _read(run_dir, "decisions-*.parquet")
     if dec is None or "txn" not in dec.column_names:
         return None
     dec = dec.filter(pa.compute.equal(dec["revision"], 0))
     names = dec["txn"].to_pylist()
-    idx = [i for i, n in enumerate(names) if n]
-    if not idx:
+    if not any(names):
         return None
-    stages: dict[str, int] = {}
-    for i in idx:
-        st = names[i].split("/", 1)[1] if "/" in names[i] else ""
-        stages[st] = stages.get(st, 0) + 1
-    # the transaction's own decision (at assembly); re-scored stages are counted under `stages`
-    idx = [i for i in idx if names[i].endswith("/assembled")] or idx
-    sub = dec.take(pa.array(idx))
-    ctx = [(_json.loads(x) if x else {}) for x in sub["txn_context"].to_pylist()]
-    partial = sub["txn_partial"].to_numpy(zero_copy_only=False)
-    wait = sub["st_txn_assembly"].to_numpy() if "st_txn_assembly" in sub.column_names else np.zeros(0)
-    wait = wait[wait >= 0]
-    oc = sub["outcome"].to_numpy()
     fraud = {}
     ev = _read(run_dir, "events-*.parquet")
     if ev is not None and "is_fraud" in ev.column_names:
         fraud = dict(zip(ev["event_id"].to_numpy().tolist(), ev["is_fraud"].to_numpy(zero_copy_only=False).tolist()))
-    eids = sub["event_id"].to_numpy().tolist()
-    by_check: dict[str, dict[str, int]] = {}
-    for c, o, e in zip(ctx, oc.tolist(), eids):
-        k = str(c.get("payee_check", "PAYEE_CHECK_UNSPECIFIED"))
-        b = by_check.setdefault(k, {"decided": 0, "fraud": 0, "stopped": 0, "fraud_stopped": 0})
-        b["decided"] += 1
-        stopped = OUTCOME.get(int(o)) in ("DECLINE", "REVIEW", "CHALLENGE")
-        b["stopped"] += int(stopped)
-        if fraud.get(int(e)):
-            b["fraud"] += 1
-            b["fraud_stopped"] += int(stopped)
+    from ..bindings.transactions import transactions as _contracts
+    known = _contracts()
+    has_wait = "st_txn_assembly" in dec.column_names
+    by_contract: dict[str, Any] = {}
+    all_waits = []
+    for cname in sorted({n.split("/", 1)[0] for n in names if n}):
+        idx_all = [i for i, n in enumerate(names) if n and n.split("/", 1)[0] == cname]
+        stages: dict[str, int] = {}
+        for i in idx_all:
+            st = names[i].split("/", 1)[1] if "/" in names[i] else ""
+            stages[st] = stages.get(st, 0) + 1
+        # the transaction's own decision (at assembly); re-scored stages are counted under `stages`
+        idx = [i for i in idx_all if names[i].endswith("/assembled")] or idx_all
+        sub = dec.take(pa.array(idx))
+        partial = sub["txn_partial"].to_numpy(zero_copy_only=False)
+        wait = sub["st_txn_assembly"].to_numpy() if has_wait else np.zeros(0)
+        wait = wait[wait >= 0]
+        all_waits.append(wait)
+        ctx = [(_json.loads(x) if x else {}) for x in sub["txn_context"].to_pylist()]
+        oc = sub["outcome"].to_numpy().tolist()
+        eids = sub["event_id"].to_numpy().tolist()
+        breakdown: dict[str, dict[str, dict[str, int]]] = {}
+        contract = known.get(cname)
+        for key in (contract.report_by if contract else ()):
+            spec = next(c for c in contract.context if c.name == key)
+            dflt = contract.context_default(spec)        # a context recorded without it (its part never came)
+            b_: dict[str, dict[str, int]] = {}
+            for c, o, e in zip(ctx, oc, eids):
+                b = b_.setdefault(str(c.get(key, dflt)), {"decided": 0, "fraud": 0, "stopped": 0, "fraud_stopped": 0})
+                b["decided"] += 1
+                stopped = OUTCOME.get(int(o)) in ("DECLINE", "REVIEW", "CHALLENGE")
+                b["stopped"] += int(stopped)
+                if fraud.get(int(e)):
+                    b["fraud"] += 1
+                    b["fraud_stopped"] += int(stopped)
+            breakdown[key] = dict(sorted(b_.items()))
+        by_contract[cname] = {"assembled": len(idx), "stages": stages, "partial": int(partial.sum()),
+                              "partial_fraction": float(partial.mean()) if partial.size else 0.0,
+                              "assembly_wait_ms": _pct(_ms(wait)) if wait.size else None, "by": breakdown}
     parts_sent = 0
     for f in glob.glob(str(run_dir / "emit-*.json")):
         try:
             parts_sent += int(_json.loads(Path(f).read_text()).get("parts_sent") or 0)
         except (OSError, ValueError):
             pass
-    return {"contracts": sorted({n.split("/", 1)[0] for n in names if n}), "assembled": len(idx), "stages": stages,
-            "partial": int(partial.sum()), "partial_fraction": float(partial.mean()) if partial.size else 0.0,
-            "parts_sent": parts_sent,
-            "assembly_wait_ms": _pct(_ms(wait)) if wait.size else None,
-            "by_payee_check": dict(sorted(by_check.items()))}
+    wait = np.concatenate(all_waits) if all_waits else np.zeros(0)
+    stages_all: dict[str, int] = {}
+    for c in by_contract.values():
+        for k, v in c["stages"].items():
+            stages_all[k] = stages_all.get(k, 0) + v
+    assembled = sum(c["assembled"] for c in by_contract.values())
+    partial_n = sum(c["partial"] for c in by_contract.values())
+    return {"contracts": sorted(by_contract), "assembled": assembled, "stages": stages_all,
+            "partial": partial_n, "partial_fraction": partial_n / assembled if assembled else 0.0,
+            "parts_sent": parts_sent, "assembly_wait_ms": _pct(_ms(wait)) if wait.size else None,
+            "by_contract": by_contract}
 
 
 def build_report(run_dir: Path | str) -> dict[str, Any]:
@@ -790,6 +812,34 @@ def _startup_item(x: dict[str, Any]) -> str:
     return f"{x['label'].lower()} {took}{flag}"
 
 
+
+def _render_transactions(tx: dict[str, Any]) -> list[str]:
+    """Text lines for the transactions section (one block per contract; old reports' single block too)."""
+    def one(name: str, t: dict[str, Any], parts: str) -> list[str]:
+        w = t.get("assembly_wait_ms") or {}
+        again = [f"{k} {v:,}" for k, v in (t.get("stages") or {}).items() if k != "assembled"]
+        out = [f"transactions ({name}): {t['assembled']:,} assembled{parts}; {t['partial']:,} without a required part "
+               f"({t['partial_fraction']:.2%}); assembly wait p50 {_f(w.get('p50'))} ms p99 {_f(w.get('p99'))} ms"
+               + (f"; decided again at {', '.join(again)}" if again else "")]
+        by = dict(t.get("by") or {})
+        if "by_payee_check" in t:                       # reports written before per-contract breakdowns
+            by["payee_check"] = t["by_payee_check"]
+        for key, vals in by.items():
+            for k, b in vals.items():
+                out.append(f"  {key.replace('_', ' ')} {k:24s} {b['decided']:6,} decided, {b['stopped']:5,} stopped; "
+                           f"fraud {b['fraud']:4,} ({b['fraud_stopped']:,} stopped)")
+        return out
+    sent = f" from {tx['parts_sent']:,} more messages"
+    per = tx.get("by_contract")
+    if not per:
+        return one(", ".join(tx["contracts"]), tx, sent)
+    lines = []
+    for name, t in per.items():
+        lines += one(name, t, sent if len(per) == 1 else "")
+    if len(per) > 1:
+        lines.append(f"  {tx['parts_sent']:,} messages sent besides the payments' triggers")
+    return lines
+
 def render_text(rep: dict[str, Any]) -> str:
     s = rep["summary"]
     lines = [f"=== {rep['run_id']} ({rep['topology']}) : {s['verdict']} ===",
@@ -831,15 +881,7 @@ def render_text(rep: dict[str, Any]) -> str:
     lines.extend(_render_resources(rep.get("resources") or {}))
     tx = rep.get("transactions")
     if tx:
-        w = tx.get("assembly_wait_ms") or {}
-        lines.append(f"transactions ({', '.join(tx['contracts'])}): {tx['assembled']:,} assembled from {tx['parts_sent']:,} more "
-                     f"messages; {tx['partial']:,} without a required part ({tx['partial_fraction']:.2%}); "
-                     f"assembly wait p50 {_f(w.get('p50'))} ms p99 {_f(w.get('p99'))} ms"
-                     + (f"; decided again at {', '.join(f'{k} {v:,}' for k, v in tx['stages'].items() if k != 'assembled')}"
-                        if any(k != "assembled" for k in tx.get("stages", {})) else ""))
-        for k, b in (tx.get("by_payee_check") or {}).items():
-            lines.append(f"  payee check {k:24s} {b['decided']:6,} decided, {b['stopped']:5,} stopped; "
-                         f"fraud {b['fraud']:4,} ({b['fraud_stopped']:,} stopped)")
+        lines.extend(_render_transactions(tx))
     det = rep.get("detection")
     if det and det.get("fraud_events"):
         lines.append(f"detection: recall(flagged) {_f(det['recall_flagged'])}  precision {_f(det['precision_flagged'])}  "
