@@ -1,0 +1,30 @@
+{
+ "events": 6000,
+ "events_sha256": "d75ffbb79625f9d963cc0b6a32589ee1a33fb7c92191a90793cdc052378172e3",
+ "fraud_events": 964,
+ "fraud_types": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  11
+ ],
+ "profiles": 3628,
+ "scenario_fingerprint": "d900f69df8af6425",
+ "schema_version": 2,
+ "seed": 11,
+ "state_layout": "aad7b02aba40",
+ "world": {
+  "customers": 3000,
+  "dir": null,
+  "merchants": 400,
+  "mule_fraction": 0.002,
+  "payees": 1500
+ },
+ "world_hash": "d0d5d5676e69399109e6d437a09881541b13e8ffc6bf81ac893c0d77ccc4b1cd"
+}

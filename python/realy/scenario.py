@@ -204,6 +204,22 @@ class SyncSpec(_Model):
     target: str | None = None      # default: GATEWAY_GRPC env or localhost:8080
 
 
+# Scenario settings added after the fingerprints were pinned (contracts/testdata/golden/scenarios.json):
+# dotted paths left out of `Scenario.fingerprint()` while they equal their default. Every new setting is
+# added here (tests/test_golden_payments.py fails otherwise), so existing runs keep their policy_version.
+FINGERPRINT_OPTIONAL: tuple[str, ...] = ()
+
+
+def _drop_if_default(d: dict[str, Any], base: dict[str, Any], path: str) -> None:
+    *parents, leaf = path.split(".")
+    for k in parents:
+        d, base = d.get(k), (base or {}).get(k)
+        if not isinstance(d, dict):
+            return
+    if leaf in d and d[leaf] == (base or {}).get(leaf):
+        del d[leaf]
+
+
 class Scenario(_Model):
     name: str
     description: str = ""
@@ -241,7 +257,15 @@ class Scenario(_Model):
         return DATA_DIR / f"world-{self.world.customers}-{self.seed}"
 
     def fingerprint(self) -> str:
-        return hashlib.sha256(json.dumps(self.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:16]
+        """Identity of everything this scenario configures. It is the ScoringConfig version, so it becomes
+        every decision's `policy_version`: settings added later are left out while they hold their
+        default (FINGERPRINT_OPTIONAL), so adding a setting never changes existing scenarios' decisions."""
+        d = self.model_dump(mode="json")
+        if FINGERPRINT_OPTIONAL:
+            base = type(self)(name=self.name).model_dump(mode="json")
+            for path in FINGERPRINT_OPTIONAL:
+                _drop_if_default(d, base, path)
+        return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
     def scoring_config(self) -> dict[str, Any]:
         """COMPLETE ScoringConfig JSON (service defaults + this scenario), rule set inlined.

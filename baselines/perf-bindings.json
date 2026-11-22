@@ -1,0 +1,43 @@
+{
+ "what": "Per-event CPU of the hot path on the golden payments set (contracts/testdata/golden/payments), single thread, in-process store and model. Before Part S (generic bindings); compare after each S phase on the same host.",
+ "how": {
+  "java": "cd java && ./gradlew :scoring-core:test --tests '*HotPathBench*' :flink-job:test --tests '*EnvelopeBench*' -Dbench=true -Dbench.out=<file>",
+  "python": "cd python && REALY_BENCH=1 pytest -q -s tests/test_bench_hotpath.py"
+ },
+ "host": "4 vCPU / 15 GB, compose stack up and idle",
+ "date": "2026-11-22",
+ "before_part_s": {
+  "java_hot_path_us": {
+   "parse_us": 2.373,
+   "event_view_us": 1.462,
+   "filter_mask_us": 7.388,
+   "agg_customer_us": 2.56,
+   "agg_card_us": 8.004,
+   "agg_device_us": 0.563,
+   "agg_ip_us": 0.323,
+   "agg_merchant_us": 0.82,
+   "agg_terminal_us": 0.346,
+   "agg_payee_us": 0.059,
+   "gateway_score_us": 43.502
+  },
+  "flink_envelope": {
+   "bytes": 588,
+   "round_trip_us": 0.84
+  },
+  "python_rows_per_s": {
+   "event_view": 416769,
+   "reference_loop": 7750
+  },
+  "notes": [
+   "Flink parses the protobuf once in the deserializer, again in each of the 7 keyed stages and again in scoring: ~8 x parse_us per event.",
+   "filter_mask_us is the 8 CEL filters evaluated once per event at the source."
+  ]
+ },
+ "budgets": {
+  "gateway_score_us": "<= before +5%",
+  "flink_per_event": "below before (re-parses removed)",
+  "login_in_flink": "<= 40% of a payment",
+  "python_codec_rows_s": ">= 200000",
+  "verify_wall_time": "<= before +10%"
+ }
+}
