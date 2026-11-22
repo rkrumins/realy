@@ -181,10 +181,12 @@ class ScoringConfig(_message.Message):
     def __init__(self, version: _Optional[str] = ..., budget_ms: _Optional[int] = ..., feature_deadline_ms: _Optional[int] = ..., model_deadline_ms: _Optional[int] = ..., on_deadline: _Optional[_Union[OnDeadline, str]] = ..., feature_lookup_delay: _Optional[_Union[LatencyDist, _Mapping]] = ..., model_extra_delay: _Optional[_Union[LatencyDist, _Mapping]] = ..., feature_source: _Optional[str] = ..., review_threshold: _Optional[float] = ..., decline_threshold: _Optional[float] = ..., microbatch_window_us: _Optional[int] = ..., microbatch_max: _Optional[int] = ..., hedge_after_ms: _Optional[int] = ..., feature_sample_permille: _Optional[int] = ..., rule_set_yaml: _Optional[str] = ..., audit_on_failure: _Optional[_Union[AuditFailure, str]] = ..., self_inclusion: _Optional[bool] = ..., echo: _Optional[bool] = ..., challenge_threshold: _Optional[float] = ...) -> None: ...
 
 class IngressCommand(_message.Message):
-    __slots__ = ("kafka_enabled",)
+    __slots__ = ("kafka_enabled", "topic")
     KAFKA_ENABLED_FIELD_NUMBER: _ClassVar[int]
+    TOPIC_FIELD_NUMBER: _ClassVar[int]
     kafka_enabled: bool
-    def __init__(self, kafka_enabled: _Optional[bool] = ...) -> None: ...
+    topic: str
+    def __init__(self, kafka_enabled: _Optional[bool] = ..., topic: _Optional[str] = ...) -> None: ...
 
 class RateCommand(_message.Message):
     __slots__ = ("tps", "multiplier")

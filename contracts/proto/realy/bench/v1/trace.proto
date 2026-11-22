@@ -17,6 +17,7 @@ enum Stage {
   SHUFFLE = 20;             // previous operator emit -> this keyed operator (attr = Entity)
   STATE_FEATURES = 21;      // keyed state read/update/compute (attr = Entity)
   FEATURE_STORE_WRITE = 22; // features -> online store (Redis)
+  TXN_ASSEMBLY = 23;        // a multi-message transaction: its trigger's ingest -> assembled (the wait for its parts)
   // --- scoring orchestrator ---------------------------------------------------
   FEATURE_LOOKUP = 30;      // online-store lookup incl. injected delay (attr = lookup index)
   FEATURE_ASSEMBLE = 31;

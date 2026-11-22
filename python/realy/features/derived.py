@@ -66,8 +66,10 @@ def _compiled(expr: str) -> Any:
     return p
 
 
-def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.ndarray) -> None:
-    """Fill derived features of float32 vector v in place (other features already filled)."""
+def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.ndarray,
+                    txn: dict | None = None) -> None:
+    """Fill derived features of float32 vector v in place (other features already filled); `txn` is the
+    event's multi-message transaction context (event.txn), None for a one-message payment."""
     def idx(name: str) -> int:
         try:
             return schema.index_of(name)
@@ -83,7 +85,7 @@ def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.n
             import cel
             if ctx is None:
                 ctx = cel.Context()
-                ctx.add_variable("event", event_view(ev))
+                ctx.add_variable("event", event_view(ev, txn))
             ctx.add_variable("f", {o.name: float(v[o.index]) for o in schema.features})
             v[s.index] = np.float32(float(_compiled(s.expr).execute(ctx)))
             continue

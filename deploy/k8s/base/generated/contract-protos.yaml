@@ -211,23 +211,25 @@ data:
     }\n\n// Enable/disable a service's Kafka ingress (topology switching without restarts).\
     \ On enable the\n// consumer seeks to the end of the topic, so a new run never\
     \ processes an old backlog.\nmessage IngressCommand {\n  bool kafka_enabled =\
-    \ 1;\n}\n\nmessage RateCommand {\n  double tps = 1;          // absolute target\
-    \ (0 = keep)\n  double multiplier = 2;   // relative change (0 = keep)\n}\n\n\
-    enum RunPhase {\n  RUN_PHASE_UNSPECIFIED = 0;\n  PREPARE = 1;\n  WARMUP = 2;\n\
-    \  MEASURE = 3;\n  DRAIN = 4;\n  COMPLETE = 5;\n  ABORTED = 6;\n}\n\nmessage ControlMessage\
-    \ {\n  string run_id = 1;\n  sfixed64 issued_at_us = 2;\n  uint64 version = 3;\n\
-    \  string target = 4;       // \"*\" | \"gateway\" | \"flink\" | \"model\" | \"\
-    emitter\"\n  oneof cmd {\n    ScoringConfig scoring = 10;\n    ModelServerConfig\
-    \ model_server = 11;\n    RateCommand rate = 12;\n    RunPhase phase = 13;\n \
-    \   IngressCommand ingress = 14;\n  }\n}\n\n// ---------------- live telemetry\
-    \ (`bench.metrics`, 1 s windows) ----------------\nmessage StageStat {\n  string\
-    \ name = 1;\n  uint64 count = 2;\n  double p50_ms = 3;\n  double p90_ms = 4;\n\
-    \  double p99_ms = 5;\n  double p999_ms = 6;\n  double max_ms = 7;\n}\n\nmessage\
-    \ MetricsSnapshot {\n  string run_id = 1;\n  string source = 2;       // \"emitter\"\
-    \ | \"collector\" | \"gateway\" | \"model\" | \"flink\"\n  string instance = 3;\n\
-    \  sfixed64 ts_us = 4;      // window end\n  uint32 window_ms = 5;\n  map<string,\
-    \ double> counters = 6;\n  repeated StageStat stages = 7;\n  RunPhase phase =\
-    \ 8;\n}\n"
+    \ 1;\n  // the topic the Kafka ingress consumes (\"\" = EVENTS_TOPIC, the raw\
+    \ events): a run with multi-message\n  // transactions scores the assembled ones\
+    \ (payments.events.assembled)\n  string topic = 2;\n}\n\nmessage RateCommand {\n\
+    \  double tps = 1;          // absolute target (0 = keep)\n  double multiplier\
+    \ = 2;   // relative change (0 = keep)\n}\n\nenum RunPhase {\n  RUN_PHASE_UNSPECIFIED\
+    \ = 0;\n  PREPARE = 1;\n  WARMUP = 2;\n  MEASURE = 3;\n  DRAIN = 4;\n  COMPLETE\
+    \ = 5;\n  ABORTED = 6;\n}\n\nmessage ControlMessage {\n  string run_id = 1;\n\
+    \  sfixed64 issued_at_us = 2;\n  uint64 version = 3;\n  string target = 4;   \
+    \    // \"*\" | \"gateway\" | \"flink\" | \"model\" | \"emitter\"\n  oneof cmd\
+    \ {\n    ScoringConfig scoring = 10;\n    ModelServerConfig model_server = 11;\n\
+    \    RateCommand rate = 12;\n    RunPhase phase = 13;\n    IngressCommand ingress\
+    \ = 14;\n  }\n}\n\n// ---------------- live telemetry (`bench.metrics`, 1 s windows)\
+    \ ----------------\nmessage StageStat {\n  string name = 1;\n  uint64 count =\
+    \ 2;\n  double p50_ms = 3;\n  double p90_ms = 4;\n  double p99_ms = 5;\n  double\
+    \ p999_ms = 6;\n  double max_ms = 7;\n}\n\nmessage MetricsSnapshot {\n  string\
+    \ run_id = 1;\n  string source = 2;       // \"emitter\" | \"collector\" | \"\
+    gateway\" | \"model\" | \"flink\"\n  string instance = 3;\n  sfixed64 ts_us =\
+    \ 4;      // window end\n  uint32 window_ms = 5;\n  map<string, double> counters\
+    \ = 6;\n  repeated StageStat stages = 7;\n  RunPhase phase = 8;\n}\n"
   realy__bench__v1__trace.proto: "// In-band per-event benchmark telemetry. Travels\
     \ as the `x-bench-trace` Kafka header\n// (or ScoreRequest.trace on gRPC) and\
     \ is returned inside DecisionRecord.trace.\nsyntax = \"proto3\";\n\npackage realy.bench.v1;\n\
@@ -240,7 +242,8 @@ data:
     \  SHUFFLE = 20;             // previous operator emit -> this keyed operator\
     \ (attr = Entity)\n  STATE_FEATURES = 21;      // keyed state read/update/compute\
     \ (attr = Entity)\n  FEATURE_STORE_WRITE = 22; // features -> online store (Redis)\n\
-    \  // --- scoring orchestrator ---------------------------------------------------\n\
+    \  TXN_ASSEMBLY = 23;        // a multi-message transaction: its trigger's ingest\
+    \ -> assembled (the wait for its parts)\n  // --- scoring orchestrator ---------------------------------------------------\n\
     \  FEATURE_LOOKUP = 30;      // online-store lookup incl. injected delay (attr\
     \ = lookup index)\n  FEATURE_ASSEMBLE = 31;\n  MODEL_CALL = 40;          // client-observed\
     \ model latency\n  MODEL_BATCH_WAIT = 41;    // client-side micro-batch formation\n\

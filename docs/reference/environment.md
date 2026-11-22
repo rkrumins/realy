@@ -131,5 +131,6 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `STORE_FLUSH_TIMEOUT_MS` | `60_000` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java` |
 | `STORE_MAX_IN_FLIGHT` | `1000` | Flink job | flink-taskmanager | `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java` |
 | `STORE_STATE` | `customer,card` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
+| `TXN_TTL_DAYS` | `2` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/AssembleFunction.java` |
 
-125 variables.
+126 variables.

@@ -10,9 +10,20 @@
 name: payments
 namespace: ""
 partition_key: customer
-topics: { events: payments.events.raw, decisions: payments.decisions, labels: payments.labels }
+#   transactions    multi-message transactions (contracts/transactions) whose parts arrive on the events
+#                   topic; a run with traffic.flows assembles them (the Flink assembler) into `payment`
+topics: { events: payments.events.raw, decisions: payments.decisions, labels: payments.labels,
+          assembled: payments.events.assembled }
 default_type: payment
 event_types:
   payment: { scored: true }
+  # the messages of an account-to-account transfer (contracts/transactions/a2a_transfer.yaml)
+  payment_initiation: {}
+  device_context: {}
+  payee_check: {}
+  sca_result: {}
+  payment_submission: {}
+  payment_status: {}
+transactions: [a2a_transfer]
 features: contracts/features/feature_schema.yaml
 model: { client: kserve-v2, name: fraud_mlp, input: input__0, output: output__0 }

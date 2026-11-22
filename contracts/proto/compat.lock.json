@@ -128,6 +128,10 @@
   "1": {
    "name": "kafka_enabled",
    "type": "bool"
+  },
+  "2": {
+   "name": "topic",
+   "type": "string"
   }
  },
  "realy.bench.v1.LatencyDist": {
@@ -429,6 +433,9 @@
   },
   "22": {
    "name": "FEATURE_STORE_WRITE"
+  },
+  "23": {
+   "name": "TXN_ASSEMBLY"
   },
   "30": {
    "name": "FEATURE_LOOKUP"

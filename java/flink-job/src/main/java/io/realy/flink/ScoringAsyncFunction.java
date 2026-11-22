@@ -96,8 +96,9 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
         BenchTrace.Builder t = trace(env);
         long budgetUs = orchestrator.config().get().cfg().getBudgetMs() * 1000L;
         long remaining = Math.max(1000, budgetUs - (start - env.ingestUs));
+        var txn = env.txn == null ? null : io.realy.contracts.flows.v1.TxnContext.parseFrom(env.txn);
         var req = new ScoringOrchestrator.Request(e, t, 0, IngressMode.ASYNC_FLINK_INLINE, env.features, env.filterMask,
-                remaining, null);
+                remaining, null, txn);
         orchestrator.score(req).whenComplete((rec, err) -> {
             DecisionRecord out = err == null ? rec : errorRecord(e, t, "PIPELINE_ERROR");
             metrics.inc("decisions");

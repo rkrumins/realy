@@ -19,12 +19,13 @@ import pyarrow.parquet as pq
 PCTS = (50, 90, 99, 99.9)
 from ..policy import NAMES as OUTCOME  # noqa: E402  (APPROVE, REVIEW, DECLINE, CHALLENGE)
 # typology names come from the run's use-case snapshot (python/realy/usecases.py), not a fixed table
-STEP_ORDER = ["schedule_lag", "produce_ack", "ingress", "queue_wait", "deserialize", "shuffle", "state_features",
+STEP_ORDER = ["schedule_lag", "produce_ack", "ingress", "queue_wait", "deserialize", "txn_assembly", "shuffle", "state_features",
               "async_wait", "feature_lookup", "feature_assemble", "model_call", "model_batch_wait",
               "model_server_queue", "model_server_compute", "rules", "policy", "audit_ack", "hot_path", "egress", "e2e"]
 STEP_LABEL = {
     "schedule_lag": "1 on-time publish (sent - intended)", "produce_ack": "2 produce ack (broker write)",
     "ingress": "3 ingress transit + pickup", "queue_wait": "  service queue wait", "deserialize": "  deserialize",
+    "txn_assembly": "4 transaction assembly (wait for its parts)",
     "shuffle": "4 Flink keyBy shuffles (sum)", "state_features": "4 Flink keyed state (sum)",
     "async_wait": "4 Flink async I/O wait", "feature_lookup": "5 feature lookup", "feature_assemble": "5 feature assemble",
     "model_call": "5 model call (client)", "model_batch_wait": "6 model micro-batch wait",

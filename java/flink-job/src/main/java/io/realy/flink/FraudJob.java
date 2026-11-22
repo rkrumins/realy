@@ -62,7 +62,7 @@ public final class FraudJob {
                 .setTopics(p.get("events-topic", "payments.events.raw"))
                 .setGroupId(p.get("group", "realy-flink-" + mode))
                 .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.LATEST))
-                .setDeserializer(new EventDeserializer(schemaYaml, !"features".equals(mode)))
+                .setDeserializer(new EventDeserializer(schemaYaml, !"features".equals(mode), !p.get("assemble", "").isBlank()))
                 .setProperty("fetch.max.wait.ms", "100")
                 .setProperty("fetch.min.bytes", "1")
                 .setProperty("max.poll.records", "2000")
@@ -76,7 +76,9 @@ public final class FraudJob {
         if (decisions != null) {
             decisions.sinkTo(sink(bootstrap, p)).uid("decisions-sink").name("payments.decisions");
         }
-        env.execute("realy-" + mode);
+        // the runner tells jobs apart by name: one assembling multi-message transactions is another job
+        String assemble = p.get("assemble", "").trim();
+        env.execute("realy-" + mode + (assemble.isEmpty() ? "" : "+" + assemble));
     }
 
     /**
@@ -135,8 +137,28 @@ public final class FraudJob {
         // the rest store values only. Customer/card: low per-entity rates -> small blobs, must be exact.
         List<String> stateEntities = Arrays.stream(p.get("store-state", Env.str("STORE_STATE", "customer,card")).split(","))
                 .map(String::trim).filter(x -> !x.isEmpty()).toList();
+        // multi-message transactions (--assemble <contract,...>): assembled into the unified event before the
+        // feature stages, keyed by the pipeline's partition entity; that entity's stage reuses the keying
+        List<String> assemble = Arrays.stream(p.get("assemble", "").split(",")).map(String::trim)
+                .filter(x -> !x.isEmpty()).toList();
+        String preKeyed = null;
+        if (!assemble.isEmpty()) {
+            String part = io.realy.scoring.binding.PipelineBinding.current().partitionKey;
+            s = s.keyBy(new EntityKey(schema.rowPlan().entityOrdinal(part)))
+                    .process(new AssembleFunction(assemble, schemaYaml, p.getBoolean("score-stages", false)))
+                    .uid("assemble").name("assemble:" + String.join(",", assemble));
+            preKeyed = part;
+            String topic = p.get("assembled-topic", "");
+            if (!topic.isBlank()) {
+                // the gateway topologies score from here: every scoreable event, assembled or passed through
+                s.filter(e -> !e.backfill && !e.mirrored).name("skip-history")
+                        .sinkTo(assembledSink(p.get("bootstrap", Env.str("KAFKA_BOOTSTRAP", "localhost:9092")), topic,
+                                schema.rowPlan().entityOrdinal(part)))
+                        .uid("assembled-sink").name(topic);
+            }
+        }
         // spans travel with the envelope only when a decision will carry them (inline / both)
-        s = features(s, entities, writeStore, stateEntities, !"features".equals(mode), schemaYaml);
+        s = features(s, entities, writeStore, stateEntities, !"features".equals(mode), schemaYaml, preKeyed);
         if (!"features".equals(mode)) s = s.filter(e -> !e.backfill).name("skip-backfill");
         if ("features".equals(mode)) {
             s.addSink(new org.apache.flink.streaming.api.functions.sink.legacy.DiscardingSink<>()).name("discard");
@@ -164,14 +186,65 @@ public final class FraudJob {
 
     public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore,
                                                 List<String> stateEntities, boolean spans, String schemaYaml) {
+        return features(in, entities, writeStore, stateEntities, spans, schemaYaml, null);
+    }
+
+    /**
+     * @param preKeyed the entity {@code in} is already partitioned by (the assembler's key): its stage, when
+     *                 first, reuses that partitioning instead of shuffling again
+     */
+    public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore,
+                                                List<String> stateEntities, boolean spans, String schemaYaml,
+                                                String preKeyed) {
         var plan = FeatureSchema.of(schemaYaml).rowPlan();
         DataStream<Envelope> s = in;
-        for (String entity : entities) {
-            s = s.keyBy(new EntityKey(plan.entityOrdinal(entity)))
-                    .process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity), spans, schemaYaml))
+        for (int i = 0; i < entities.size(); i++) {
+            String entity = entities.get(i);
+            EntityKey key = new EntityKey(plan.entityOrdinal(entity));
+            var keyed = i == 0 && entity.equals(preKeyed)
+                    ? org.apache.flink.streaming.api.datastream.DataStreamUtils.reinterpretAsKeyedStream(s, key,
+                            org.apache.flink.api.common.typeinfo.Types.LONG)
+                    : s.keyBy(key);
+            s = keyed.process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity), spans, schemaYaml))
                     .uid("features-" + entity).name("features:" + entity);
         }
         return s;
+    }
+
+    /**
+     * The assembled transactions topic: each event as the unified TransactionEvent keyed by the partition
+     * entity, with its trigger's x-bench-trace, x-run-id and its TxnContext (x-txn).
+     */
+    static KafkaSink<Envelope> assembledSink(String bootstrap, String topic, int keyOrdinal) {
+        Properties props = new Properties();
+        for (var kv : Map.of("linger.ms", "1", "batch.size", "131072", "compression.type", "lz4", "acks", "all",
+                "enable.idempotence", "true").entrySet()) {
+            props.setProperty(kv.getKey(), kv.getValue());
+        }
+        props.putAll(io.realy.common.KafkaProps.security());
+        return KafkaSink.<Envelope>builder()
+                .setBootstrapServers(bootstrap)
+                .setKafkaProducerConfig(props)
+                .setRecordSerializer((KafkaRecordSerializationSchema<Envelope>) (e, ctx, ts) -> {
+                    var rec = new ProducerRecord<byte[], byte[]>(topic, null, null,
+                            Long.toUnsignedString(e.row.keys[keyOrdinal]).getBytes(java.nio.charset.StandardCharsets.UTF_8), e.event);
+                    if (e.trace != null) rec.headers().add("x-bench-trace", withAssemblySpan(e));
+                    byte[] run = e.runId;
+                    if (run == null && e.trace != null) {
+                        try {
+                            run = io.realy.contracts.bench.v1.BenchTrace.parseFrom(e.trace).getRunId()
+                                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        } catch (Exception ignored) {
+                            run = null;
+                        }
+                    }
+                    if (run != null) rec.headers().add("x-run-id", run);
+                    if (e.txn != null) rec.headers().add("x-txn", e.txn);
+                    if (e.readOnly) rec.headers().add("x-read-only", new byte[]{1});
+                    return rec;
+                })
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .build();
     }
 
     /** Entity key; events lacking the entity are spread by event id (no hot zero key). */
@@ -186,6 +259,22 @@ public final class FraudJob {
         public Long getKey(Envelope e) {
             long k = e.row.keys[ordinal];
             return k != 0 ? k : -1L - (e.eventId & 0xffff);
+        }
+    }
+
+    /** The trigger's trace plus the assembly wait (the TXN_ASSEMBLY span), for the gateway's decision. */
+    static byte[] withAssemblySpan(Envelope e) {
+        try {
+            var t = io.realy.contracts.bench.v1.BenchTrace.parseFrom(e.trace).toBuilder();
+            for (int i = 0; i + 2 < e.spans.length; i += 3) {
+                long h = e.spans[i];
+                if ((int) (h >>> 40) != Stage.TXN_ASSEMBLY_VALUE) continue;
+                t.addSpans(io.realy.contracts.bench.v1.Span.newBuilder().setStage(Stage.TXN_ASSEMBLY)
+                        .setDomain((int) h).setStartUs(e.spans[i + 1]).setDurUs((int) e.spans[i + 2]));
+            }
+            return t.build().toByteArray();
+        } catch (Exception ex) {
+            return e.trace;
         }
     }
 

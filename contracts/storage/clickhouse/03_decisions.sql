@@ -74,7 +74,11 @@ CREATE TABLE realy.decisions_queue (
   `trace.t_sent_us` Int64,
   `trace.spans.stage` Array(Int32),
   `trace.spans.start_us` Array(Int64),
-  `trace.spans.dur_us` Array(Int32)
+  `trace.spans.dur_us` Array(Int32),
+  `txn.transaction` String,
+  `txn.stage` String,
+  `txn.parts_present` UInt32,
+  `txn.partial` UInt8
 ) ENGINE = Kafka
 SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = 'payments.decisions', kafka_group_name = 'clickhouse-decisions',
          kafka_format = 'ProtobufSingle', kafka_schema = 'realy/scoring/v1/decision.proto:DecisionRecord', kafka_num_consumers = 2,
@@ -217,6 +221,10 @@ ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `rule_actions` Array(LowCar
 ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_entity` Array(LowCardinality(String));
 ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_age_us` Array(Int64);
 ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `fresh_found` Array(UInt8);
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `txn_transaction` LowCardinality(String);
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `txn_stage` LowCardinality(String);
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `txn_parts` UInt32;
+ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `txn_partial` UInt8;
 ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `event.event_time_us` Int64;
 ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `event.payment_type` Int8;
 ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `event.customer_id` UInt64;
@@ -416,5 +424,7 @@ SELECT
   arrayMap(a -> arrayElement(['OUTCOME_UNSPECIFIED', 'APPROVE', 'REVIEW', 'DECLINE', 'CHALLENGE'], toInt32(a) + 1), `rule_hits.action`) AS rule_actions,
   arrayMap(e -> arrayElement(['UNSPECIFIED', 'CUSTOMER', 'CARD', 'DEVICE', 'IP', 'MERCHANT', 'TERMINAL', 'PAYEE'], toInt32(e) + 1), `features.freshness.entity`) AS fresh_entity,
   arrayMap(u -> if(u > 0, decided_at_us - u, -1), `features.freshness.updated_at_us`) AS fresh_age_us,
-  `features.freshness.found` AS fresh_found
+  `features.freshness.found` AS fresh_found,
+  `txn.transaction` AS txn_transaction, `txn.stage` AS txn_stage, `txn.parts_present` AS txn_parts,
+  `txn.partial` AS txn_partial
 FROM realy.decisions_queue WHERE length(_error) = 0;

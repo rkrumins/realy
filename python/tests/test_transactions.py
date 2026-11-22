@@ -1,6 +1,8 @@
 """Transactions formed by linked messages: the a2a_transfer contract and the reference assembler."""
 from __future__ import annotations
 
+import numpy as np
+
 from realy.bindings import event_type
 from realy.bindings.transactions import Assembler, default_context, transaction, transactions
 
@@ -147,3 +149,35 @@ def test_generated_parts_assemble_back_into_the_unified_transfers():
     assert scams and legit
     share = lambda xs, k: sum(1 for o in xs if o.context[k]) / len(xs)   # noqa: E731
     assert share(scams, "new_payee") > 0.6 > 0.2 > share(legit, "new_payee")
+
+
+def test_verifier_replays_the_assembly_order_and_contexts(tmp_path):
+    """verify on a flows run: the unified event log plus the parts log, through the twin, give every event
+    once, transfers at their assembly with their context, and a recorded partial replayed as recorded."""
+    import pyarrow as pa
+    from realy.verify.verify import flow_order
+    unified, records = _flow_stream(12)
+    cols = {}
+    rows = sorted(unified.values(), key=lambda r: (int(r["event_time_us"]), int(r["event_id"])))
+    for k in rows[0]:
+        cols[k] = np.asarray([r[k] for r in rows])
+    parts = pa.table({"type": [r.type for r in records if r.type],
+                      "event_time_us": [r.t_us for r in records if r.type],
+                      "payload": [r.payload for r in records if r.type]})
+    transfers = [int(r["event_id"]) for r in rows if int(r["payment_type"]) == 3]
+    forced_id = transfers[0]
+    dec = pa.table({"event_id": np.asarray([forced_id], np.uint64), "txn_partial": [True], "txn_parts": [1],
+                    "txn": ["a2a_transfer/assembled"]})
+    order, ctx, info = flow_order(cols, parts, dec)
+    assert sorted(order.tolist()) == list(range(len(rows)))           # every event exactly once
+    assert set(ctx) == set(transfers) and info["assembled"] == len(transfers)
+    assert ctx[forced_id]["partial"] is True and ctx[forced_id]["parts"] & 0b101 == 0b001   # no payee check
+    assert info["partial_replayed_from_decisions"] == 1
+    # a card payment keeps its place relative to its own customer's other events
+    pos = {int(cols["event_id"][i]): p for p, i in enumerate(order.tolist())}
+    by_cust: dict = {}
+    for r in rows:
+        by_cust.setdefault(int(r["customer_id"]), []).append(int(r["event_id"]))
+    for evs in by_cust.values():
+        non_tr = [e for e in evs if e not in ctx]
+        assert [pos[e] for e in non_tr] == sorted(pos[e] for e in non_tr)

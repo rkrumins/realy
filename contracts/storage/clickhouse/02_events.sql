@@ -114,6 +114,7 @@ ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `pin_verified` UInt8;
 ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `cryptogram_valid` UInt8;
 ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `scheme_score` UInt32;
 
+-- the raw topic also carries the parts of multi-message transactions (x-event-type): not unified events
 CREATE MATERIALIZED VIEW realy.events_mv TO realy.events_raw AS
 SELECT
   arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
@@ -149,4 +150,84 @@ SELECT
   `pin_verified`,
   `cryptogram_valid`,
   `scheme_score`
-FROM realy.events_queue WHERE length(_error) = 0;
+FROM realy.events_queue WHERE length(_error) = 0 AND indexOf(_headers.name, 'x-event-type') = 0;
+
+-- multi-message transactions: the Flink assembler publishes them, assembled into the unified event
+-- (x-txn); the events it passes through are in the raw topic already
+DROP VIEW IF EXISTS realy.events_assembled_mv;
+DROP TABLE IF EXISTS realy.events_assembled_queue;
+CREATE TABLE realy.events_assembled_queue (
+  `event_id` UInt64,
+  `event_time_us` Int64,
+  `payment_type` Int8,
+  `customer_id` UInt64,
+  `account_id` UInt64,
+  `card_id` UInt64,
+  `card_type` Int8,
+  `amount_minor` Int64,
+  `currency` String,
+  `amount_usd_minor` Int64,
+  `merchant_id` UInt64,
+  `mcc` UInt32,
+  `merchant_country` String,
+  `terminal_id` UInt64,
+  `channel` Int8,
+  `entry_mode` Int8,
+  `card_present` UInt8,
+  `lat` Float64,
+  `lon` Float64,
+  `device_id` UInt64,
+  `ip_v4` UInt32,
+  `ip_country` String,
+  `ip_asn` UInt32,
+  `payee_id` UInt64,
+  `cvv_match` UInt8,
+  `avs_match` UInt8,
+  `recurring` UInt8,
+  `credit_limit_usd` UInt32,
+  `three_ds` Int8,
+  `pin_verified` UInt8,
+  `cryptogram_valid` UInt8,
+  `scheme_score` UInt32
+) ENGINE = Kafka
+SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = 'payments.events.assembled', kafka_group_name = 'clickhouse-events-assembled',
+         kafka_format = 'ProtobufSingle', kafka_schema = 'realy/payments/v1/transaction.proto:TransactionEvent', kafka_num_consumers = 1,
+         kafka_flush_interval_ms = 1000, kafka_max_block_size = 65536, kafka_thread_per_consumer = 1,
+         kafka_handle_error_mode = 'stream';
+
+CREATE MATERIALIZED VIEW realy.events_assembled_mv TO realy.events_raw AS
+SELECT
+  arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
+  `event_id`,
+  `event_time_us`,
+  arrayElement(['UNSPECIFIED', 'CARD_PURCHASE', 'ATM_WITHDRAWAL', 'TRANSFER', 'CARD_REFUND'], toInt32(payment_type) + 1) AS `payment_type`,
+  `customer_id`,
+  `account_id`,
+  `card_id`,
+  toString(card_type) AS `card_type`,
+  `amount_minor`,
+  `currency`,
+  `amount_usd_minor`,
+  `merchant_id`,
+  `mcc`,
+  `merchant_country`,
+  `terminal_id`,
+  arrayElement(['UNSPECIFIED', 'POS', 'ECOM', 'ATM', 'MOTO', 'IN_APP', 'ONLINE_BANKING'], toInt32(channel) + 1) AS `channel`,
+  arrayElement(['UNSPECIFIED', 'CHIP', 'CONTACTLESS', 'MAGSTRIPE', 'MANUAL', 'WALLET_TOKEN', 'ECOM_3DS', 'ECOM_NON_3DS', 'CREDENTIAL_ON_FILE', 'BANK_APP'], toInt32(entry_mode) + 1) AS `entry_mode`,
+  `card_present`,
+  `lat`,
+  `lon`,
+  `device_id`,
+  `ip_v4`,
+  `ip_country`,
+  `ip_asn`,
+  `payee_id`,
+  `cvv_match`,
+  `avs_match`,
+  `recurring`,
+  `credit_limit_usd`,
+  `three_ds`,
+  `pin_verified`,
+  `cryptogram_valid`,
+  `scheme_score`
+FROM realy.events_assembled_queue WHERE length(_error) = 0 AND indexOf(_headers.name, 'x-txn') > 0;

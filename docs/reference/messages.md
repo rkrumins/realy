@@ -8,7 +8,8 @@ Every message that goes in or out of the pipeline. The protobuf files are the co
 
 | Topic | Value | Key | Headers | Partitions | Produced by | Consumed by |
 |---|---|---|---|---|---|---|
-| `payments.events.raw` | `realy.payments.v1.TransactionEvent` | customer_id (decimal string) | `x-bench-trace`, `x-run-id`, `x-backfill`, `x-mirrored` | 48 | emitter (`emit/driver.py`, Java load-emitter), gateway mirror of sync decisions | Flink feature job (`FraudJob` source), gateway Kafka ingress (`KafkaIngress`), ClickHouse `events_raw` (Kafka engine) |
+| `payments.events.raw` | `realy.payments.v1.TransactionEvent` | customer_id (decimal string) | `x-bench-trace`, `x-run-id`, `x-backfill`, `x-mirrored`, `x-event-type` | 48 | emitter (`emit/driver.py`, Java load-emitter), gateway mirror of sync decisions | Flink feature job (`FraudJob` source), gateway Kafka ingress (`KafkaIngress`), ClickHouse `events_raw` (Kafka engine) |
+| `payments.events.assembled` | `realy.payments.v1.TransactionEvent` | customer_id (decimal string) | `x-bench-trace`, `x-run-id`, `x-txn`, `x-read-only` | 48 |  |  |
 | `payments.decisions` | `realy.scoring.v1.DecisionRecord` | customer_id (decimal string) |  | 48 | gateway (`DecisionSink`), Flink inline job (`decisions-sink`) | collector (`collect/collector.py`), ClickHouse `decisions` (Kafka engine), console live feed |
 | `payments.labels` | `realy.payments.v1.FraudLabel` | customer_id (decimal string) |  | 12 | emitter, at each label's simulated time (needs the `x-run-id` header) | ClickHouse `labels` (Kafka engine) for training and reports |
 | `bench.control` | `realy.bench.v1.ControlMessage (proto3 JSON)` | <target> |  | 1 | runner (`common/control.py`), console control drawer (`/api/live/*`) | gateway, model server, Flink jobs, emitters (`<target>:<cmd>` keys; `*` = every service) |
@@ -155,6 +156,7 @@ Enable/disable a service's Kafka ingress (topology switching without restarts). 
 | # | Field | Type | Description |
 |---|---|---|---|
 | 1 | `kafka_enabled` | `bool` |  |
+| 2 | `topic` | `string` | the topic the Kafka ingress consumes ("" = EVENTS_TOPIC, the raw events): a run with multi-message transactions scores the assembled ones (payments.events.assembled) |
 
 ### `RateCommand`
 
@@ -229,6 +231,7 @@ Source: `contracts/proto/realy/bench/v1/trace.proto`
 | `SHUFFLE` | 20 | --- Flink stream features -------------------------------------------------- previous operator emit -> this keyed operator (attr = Entity) |
 | `STATE_FEATURES` | 21 | keyed state read/update/compute (attr = Entity) |
 | `FEATURE_STORE_WRITE` | 22 | features -> online store (Redis) |
+| `TXN_ASSEMBLY` | 23 | a multi-message transaction: its trigger's ingest -> assembled (the wait for its parts) |
 | `FEATURE_LOOKUP` | 30 | --- scoring orchestrator --------------------------------------------------- online-store lookup incl. injected delay (attr = lookup index) |
 | `FEATURE_ASSEMBLE` | 31 |  |
 | `MODEL_CALL` | 40 | client-observed model latency |

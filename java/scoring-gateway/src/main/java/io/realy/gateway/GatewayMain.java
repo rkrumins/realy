@@ -80,7 +80,10 @@ public final class GatewayMain {
         new ControlSubscriber("gateway", (msg, raw) -> {
             if (msg.hasScoring()) holder.update(raw.get("scoring").toString());
             // messages issued before this process started are its restored state, not a live switch
-            if (msg.hasIngress()) ingress.setEnabled(msg.getIngress().getKafkaEnabled(), msg.getIssuedAtUs() >= startedUs);
+            if (msg.hasIngress()) {
+                ingress.setTopic(msg.getIngress().getTopic());
+                ingress.setEnabled(msg.getIngress().getKafkaEnabled(), msg.getIssuedAtUs() >= startedUs);
+            }
             if (!msg.getRunId().isEmpty()) metrics.setRunId(msg.getRunId());
         });
         LOG.info("gateway {} up on :{} (kafka ingress: {}, store: {}, model: {})", instance, server.activeLocalPort(),

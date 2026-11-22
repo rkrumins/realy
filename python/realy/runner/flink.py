@@ -267,7 +267,9 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
     scoring = json.dumps(sc.scoring_config(), separators=(",", ":"))
     with httpx.Client(base_url=rest, timeout=30) as c:
         running = _running(c)
-        want = f"realy-{mode}"
+        # multi-message transactions: the job assembles them (and, for the gateway, publishes them)
+        flows = list(sc.traffic.flows)
+        want = f"realy-{mode}" + (f"+{','.join(flows)}" if flows else "")
         jar, new_code = _jar_id(c)
         fresh = sc.flink_state == "fresh"
         if (any(j["name"] == want for j in running) and mode == "features" and not new_code and not force and not fresh
@@ -314,6 +316,11 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 "--group", group, "--scoring-config", scoring,
                 "--checkpoint-ms", str(int(os.environ.get("FLINK_CHECKPOINT_MS", "10000"))),
                 "--exactly-once", "true" if sc.exactly_once else "false"]
+        if flows:
+            from ..bindings import pipeline
+            args += ["--assemble", ",".join(flows)]
+            if mode == "features":
+                args += ["--assembled-topic", pipeline().topics["assembled"]]
         # online-store blobs carrying aggregator state (exact gateway features); "none" = values only
         if os.environ.get("FLINK_STORE_STATE"):
             args += ["--store-state", os.environ["FLINK_STORE_STATE"]]

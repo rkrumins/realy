@@ -102,7 +102,10 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
     scoring = sc.scoring_config()
     model_cfg = sc.model_server_config()
     msgs = [
-        control.control_message(run_id, "gateway", ingress={"kafka_enabled": sc.topology in ("gateway-kafka", "echo-kafka")}),
+        control.control_message(run_id, "gateway", ingress={
+            "kafka_enabled": sc.topology in ("gateway-kafka", "echo-kafka"),
+            # multi-message transactions: the gateway scores what the Flink assembler publishes
+            "topic": _assembled_topic() if sc.traffic.flows and sc.topology == "gateway-kafka" else ""}),
         control.control_message(run_id, "*", scoring=scoring),
     ]
     msgs.append(control.control_message(run_id, "model", model_server=model_cfg))
@@ -192,6 +195,11 @@ def _metrics_monitor(handle: RunHandle, sc: Scenario, stop_evt: threading.Event,
     finally:
         out.close()
         cons.close()
+
+
+def _assembled_topic() -> str:
+    from ..bindings import pipeline
+    return pipeline().topics["assembled"]
 
 
 def normalize_snapshot(s: dict) -> dict:

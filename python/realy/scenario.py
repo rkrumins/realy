@@ -249,6 +249,9 @@ class Scenario(_Model):
     @model_validator(mode="after")
     def _wire(self) -> "Scenario":
         self.traffic.profile._duration = self.traffic.duration_s
+        if self.traffic.flows and self.topology not in ("gateway-kafka", "flink-inline"):
+            raise ValueError(f"traffic.flows (multi-message transactions) need an async topology with Flink "
+                             f"(gateway-kafka or flink-inline), not {self.topology}: the Flink job assembles them")
         return self
 
     # ------------------------------------------------------------------ helpers
@@ -279,8 +282,7 @@ class Scenario(_Model):
         cfg.update({"version": self.fingerprint(), "budget_ms": int(self.budget.hot_path_p99_ms),
                     "feature_sample_permille": self.feature_sample_permille})
         cfg.update(self.scoring)
-        rules_path = REPO_ROOT / "rules" / f"{self.rules}.yaml"
-        text = rules_path.read_text()
+        text = resolve_rule_set(self.rules)
         cfg.setdefault("rule_set_yaml", text)
         if self.topology.startswith("echo"):
             cfg["echo"] = True
@@ -291,6 +293,27 @@ class Scenario(_Model):
         cfg = dict(MODEL_SERVER_DEFAULTS)
         cfg.update(self.model_server)
         return cfg
+
+
+def resolve_rule_set(name: str) -> str:
+    """The YAML of rules/<name>.yaml as the services receive it. A rule set may `extends: <base>`: the
+    base's rules first (a rule of the same id replaced), then its own; its thresholds and step-up
+    settings override the base's; its version is its own. Without `extends` the file is sent as written."""
+    text = (REPO_ROOT / "rules" / f"{name}.yaml").read_text()
+    doc = yaml.safe_load(text) or {}
+    base_name = doc.get("extends")
+    if not base_name:
+        return text
+    base = yaml.safe_load(resolve_rule_set(str(base_name))) or {}
+    own_ids = {r.get("id") for r in doc.get("rules") or []}
+    merged = dict(base)
+    for k, v in doc.items():
+        if k in ("rules", "extends"):
+            continue
+        merged[k] = {**(base.get(k) or {}), **v} if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    merged["rules"] = [r for r in base.get("rules") or [] if r.get("id") not in own_ids] + list(doc.get("rules") or [])
+    head = f"# rules/{name}.yaml resolved: extends {base_name} (python -m realy.scenario resolves it)\n"
+    return head + yaml.safe_dump(merged, sort_keys=False, allow_unicode=True)
 
 
 # Explicit values for every ScoringConfig / ModelServerConfig field a scenario may leave out

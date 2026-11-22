@@ -39,6 +39,9 @@ ADDED_COLUMNS = [
     ("appended_at", "DateTime64(3)"), ("lat_audit_append_us", "Int32"),
     ("rule_ids", "Array(LowCardinality(String))"), ("rule_actions", "Array(LowCardinality(String))"),
     ("fresh_entity", "Array(LowCardinality(String))"), ("fresh_age_us", "Array(Int64)"), ("fresh_found", "Array(UInt8)"),
+    # multi-message transactions (DecisionRecord.txn): which contract, stage, parts present, partial
+    ("txn_transaction", "LowCardinality(String)"), ("txn_stage", "LowCardinality(String)"), ("txn_parts", "UInt32"),
+    ("txn_partial", "UInt8"),
 ]
 ENUM = {
     "outcome": ["OUTCOME_UNSPECIFIED", "APPROVE", "REVIEW", "DECLINE", "CHALLENGE"],
@@ -118,11 +121,27 @@ ORDER BY (customer_id, run_id, event_id)
 TTL toDateTime(ingested_at) + INTERVAL 30 DAY;
 {ev_alter}
 
+-- the raw topic also carries the parts of multi-message transactions (x-event-type): not unified events
 CREATE MATERIALIZED VIEW realy.events_mv TO realy.events_raw AS
 SELECT
   arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
   {ev_sel}
-FROM realy.events_queue WHERE length(_error) = 0;
+FROM realy.events_queue WHERE length(_error) = 0 AND indexOf(_headers.name, 'x-event-type') = 0;
+
+-- multi-message transactions: the Flink assembler publishes them, assembled into the unified event
+-- (x-txn); the events it passes through are in the raw topic already
+DROP VIEW IF EXISTS realy.events_assembled_mv;
+DROP TABLE IF EXISTS realy.events_assembled_queue;
+CREATE TABLE realy.events_assembled_queue (
+  {ev_q}
+) ENGINE = Kafka
+{KAFKA.format(topic='payments.events.assembled', group='clickhouse-events-assembled', schema='realy/payments/v1/transaction.proto:TransactionEvent', consumers=1)};
+
+CREATE MATERIALIZED VIEW realy.events_assembled_mv TO realy.events_raw AS
+SELECT
+  arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
+  {ev_sel}
+FROM realy.events_assembled_queue WHERE length(_error) = 0 AND indexOf(_headers.name, 'x-txn') > 0;
 """
 
     # ------------------------------------------------------------------ decisions
@@ -186,7 +205,11 @@ CREATE TABLE realy.decisions_queue (
   `trace.t_sent_us` Int64,
   `trace.spans.stage` Array(Int32),
   `trace.spans.start_us` Array(Int64),
-  `trace.spans.dur_us` Array(Int32)
+  `trace.spans.dur_us` Array(Int32),
+  `txn.transaction` String,
+  `txn.stage` String,
+  `txn.parts_present` UInt32,
+  `txn.partial` UInt8
 ) ENGINE = Kafka
 {KAFKA.format(topic='payments.decisions', group='clickhouse-decisions', schema='realy/scoring/v1/decision.proto:DecisionRecord', consumers=consumers)};
 
@@ -277,7 +300,9 @@ SELECT
   arrayMap(a -> {_enum('outcome', 'a')}, `rule_hits.action`) AS rule_actions,
   arrayMap(e -> {_enum('entity', 'e')}, `features.freshness.entity`) AS fresh_entity,
   arrayMap(u -> if(u > 0, decided_at_us - u, -1), `features.freshness.updated_at_us`) AS fresh_age_us,
-  `features.freshness.found` AS fresh_found
+  `features.freshness.found` AS fresh_found,
+  `txn.transaction` AS txn_transaction, `txn.stage` AS txn_stage, `txn.parts_present` AS txn_parts,
+  `txn.partial` AS txn_partial
 FROM realy.decisions_queue WHERE length(_error) = 0;
 """
 

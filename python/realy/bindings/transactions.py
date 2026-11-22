@@ -338,8 +338,11 @@ class Assembler:
         if role == txn.trigger:
             o.trigger_time_us = int(row.get("event_time_us") or 0)
         forced = self.forced.get((txn.name, o.txn_id))
-        need = (txn.bit(txn.trigger) | sum(txn.bit(r) for r in txn.require)) if forced is None else forced
+        full = txn.bit(txn.trigger) | sum(txn.bit(r) for r in txn.require)
+        need = full if forced is None else forced
         if o.trigger_time_us is not None and (o.arrived & need) == need:
+            if forced is not None and (forced & full) != full:
+                o.partial = True                 # the pipeline's wall-clock wait expired before a required part
             out += self._assemble(o)
         return out
 

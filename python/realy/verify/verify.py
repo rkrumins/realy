@@ -153,6 +153,13 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     cols = {c: events[c].to_numpy(zero_copy_only=False) for c in events.column_names
             if c not in ("t_intended_us", "t_intended_offset_us")}
     order = np.lexsort((cols["event_id"], cols["event_time_us"]))
+    # multi-message transactions: the pipeline saw parts, assembled in its partition order (the twin
+    # replays that, forcing the partial assemblies the decisions recorded); rules see each one's context
+    txn_ctx: dict[int, dict] = {}
+    parts = _read(run_dir, "parts-*.parquet")
+    if parts is not None and parts.num_rows:
+        order, txn_ctx, flow_info = flow_order(cols, parts, dec)
+        out["transactions"] = flow_info
     n_all = order.size
     mod = max(1, int(math.ceil(n_all / max_events)))
     entities = schema.stream_entities() if mod == 1 else [e for e in schema.stream_entities() if e in EXACT_ENTITIES]
@@ -183,7 +190,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     buf = [0.0] * nf
     for i in order.tolist():
         ev = {k: lists[k][i] for k in names}
-        view = event_view(ev)
+        view = event_view(ev, txn_ctx.get(int(ev["event_id"])))
         ctx = cel.Context()
         ctx.add_variable("event", view)
         ctx.add_variable("f", {})
@@ -206,7 +213,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
                 v[s.index] = np.float32(arr[s.field][r]) if r >= 0 else np.float32(s.default)
             if ent == "customer" and r >= 0:
                 attrs = {a: np.float32(arr[a][r]) for a in schema.profile_attributes.get("customer", [])}
-        compute_derived(schema, ev, attrs, v)
+        compute_derived(schema, ev, attrs, v, txn_ctx.get(eid))
         ref[eid] = v
     common = sorted(set(ref) & set(served))
     per_feature: dict[str, dict] = {}
@@ -261,7 +268,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         j = d_pos[eid]
         ev = {c: lists[c][ev_idx[eid]] for c in names}
         fmap = {f.name: float(served[eid][f.index]) for f in schema.features}
-        view = event_view(ev)
+        view = event_view(ev, txn_ctx.get(eid))
         hits = rules.evaluate(fmap, view)
         got = set(x for x in (dd["rule_hits"][j] or "").split(",") if x)
         if {h for h, _ in hits} == got:
@@ -309,6 +316,76 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     out["inconclusive"] = not comparable and out["passed"] is False and out["reasons"] == [NOT_COMPARABLE]
     (run_dir / "verify.json").write_text(json.dumps(out, indent=1, default=float))
     return out
+
+
+def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table) -> tuple[np.ndarray, dict[int, dict], dict]:
+    """The order the pipeline processed a run's events in when some of them arrived as parts of
+    multi-message transactions (parts-*.parquet): every unified event and part in emission order (one
+    customer's messages stay ordered on its partition), through the reference assembler. Returns the
+    event-log indices in that order (assembled transactions at their assembly), each assembled
+    transaction's context (event.txn) by event id, and a summary."""
+    from ..bindings import event_type
+    from ..bindings.codec import message_class
+    from ..bindings.transactions import Assembler, transaction, transactions
+    ptypes = parts["type"].to_pylist()
+    txns = sorted({t.name for ty in set(ptypes) for t in transactions().values() if ty in t.roles.values()})
+    a = Assembler([transaction(n) for n in txns])
+    # partial assemblies the pipeline recorded (a wall-clock wait expired): replay them as they were
+    forced = 0
+    if "txn_partial" in dec.column_names:
+        tp = dec["txn_partial"].to_numpy(zero_copy_only=False)
+        tparts = dec["txn_parts"].to_numpy(zero_copy_only=False)
+        tname = dec["txn"].to_pylist() if "txn" in dec.column_names else [""] * dec.num_rows
+        for eid, partial, n, tx in zip(dec["event_id"].to_numpy().tolist(), tp.tolist(), tparts.tolist(), tname):
+            if partial and tx:
+                a.force(tx.split("/", 1)[0], int(eid), int(n))
+                forced += 1
+    idx_of = {int(e): i for i, e in enumerate(cols["event_id"].tolist())}
+    # transfers sent as parts are not unified records on the wire: their initiation stands for them
+    initiations = set()
+    payloads = parts["payload"].to_pylist()
+    ptime = parts["event_time_us"].to_numpy()
+    for ty, pl in zip(ptypes, payloads):
+        for t in txns:
+            tx = transaction(t)
+            if ty == tx.roles[tx.trigger]:
+                c = event_type(ty).codec
+                initiations.add(int(getattr(message_class(c.full_name).FromString(pl), tx.link)))
+    stream = [(int(cols["event_time_us"][i]), 0, i, None) for i in range(cols["event_id"].shape[0])
+              if int(cols["event_id"][i]) not in initiations]
+    stream += [(int(ptime[j]), 1, j, ptypes[j]) for j in range(len(ptypes))]
+    stream.sort(key=lambda x: (x[0], x[1], x[2]))
+    names = list(cols)
+    out_idx: list[int] = []
+    ctx: dict[int, dict] = {}
+    n_asm = n_partial = 0
+
+    def take(outs):
+        nonlocal n_asm, n_partial
+        for o in outs:
+            eid = int(o.row["event_id"])
+            if o.kind == "stage":
+                continue                        # re-scored stages: decisions of their own (not in the event log)
+            i = idx_of.get(eid)
+            if i is None:
+                continue
+            out_idx.append(i)
+            if o.kind == "assembled":
+                ctx[eid] = o.context
+                n_asm += 1
+                n_partial += int(o.partial)
+    for _, kind, i, ty in stream:
+        if kind == 0:
+            take(a.process("payment", {k: cols[k][i] for k in names}))
+        else:
+            c = event_type(ty).codec
+            take(a.process(ty, c.row(message_class(c.full_name).FromString(payloads[i]))))
+    take(a.close())
+    seen = set(out_idx)
+    rest = [i for i in np.lexsort((cols["event_id"], cols["event_time_us"])).tolist() if i not in seen]
+    info = {"contracts": txns, "parts": len(ptypes), "assembled": n_asm, "partial": n_partial,
+            "partial_replayed_from_decisions": forced, "not_assembled": len(rest)}
+    return np.asarray(out_idx + rest, np.int64), ctx, info
 
 
 class ClickHouseError(RuntimeError):

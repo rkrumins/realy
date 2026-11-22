@@ -172,6 +172,7 @@ def write_flows(out: Path = FLOWS) -> dict[str, Any]:
             f.write(struct.pack("<H", len(t)) + t + struct.pack("<I", len(r.payload)) + r.payload)
             c = event_type(r.type or "payment").codec
             emit(a.process(r.type or "payment", c.row(message_class(c.full_name).FromString(r.payload))))
+    n_before_close = len(expected)
     emit(a.close())
     with gzip.GzipFile(out / "expected.jsonl.gz", "wb", mtime=0) as f:
         for e in expected:
@@ -180,6 +181,7 @@ def write_flows(out: Path = FLOWS) -> dict[str, Any]:
     for e in expected:
         kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
     man = {"records": len(records), "outputs": len(expected), "kinds": kinds,
+           "closed_at_end": len(expected) - n_before_close,   # still waiting when the stream ended
            "partial": sum(1 for e in expected if e["partial"]),
            "records_sha256": hashlib.sha256(b"".join(r.payload for r in records)).hexdigest()}
     (out / "manifest.json").write_text(json.dumps(man, indent=1, sort_keys=True) + "\n")

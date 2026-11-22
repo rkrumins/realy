@@ -1,0 +1,24 @@
+# baseline-v5 + rules over the context of multi-message transactions (event.txn: an account-to-account
+# transfer assembled from its initiation, device context, payee check and authentication,
+# contracts/transactions/a2a_transfer.yaml). A one-message payment reads the default context, so these
+# never fire on it. Everything else (thresholds, step-up, the other rules) comes from `extends`.
+#
+# The signals are what a payment hub sees and a unified event cannot carry:
+#   payee check (confirmation of payee)  the name does not match the account, and the customer went ahead
+#   device / session                     a remote-access tool, or a phone call during the payment
+#   the payee                            added in this session
+extends: baseline
+version: baseline-v5-flows1
+rules:
+  - id: APP_SCAM_PAYEE_MISMATCH
+    when: "event.txn.payee_check == 'PAYEE_NO_MATCH' && event.txn.new_payee"
+    action: REVIEW
+    reason: "a new payee whose name does not match the account (payee check), and the customer went ahead"
+  - id: APP_SCAM_COACHED
+    when: "event.txn.on_call && event.txn.new_payee && event.amount_usd_minor >= 50000"
+    action: REVIEW
+    reason: "500+ to a new payee while the customer is on a phone call"
+  - id: ATO_REMOTE_ACCESS
+    when: "event.txn.remote_access && event.txn.new_payee"
+    action: DECLINE
+    reason: "a remote-access tool is running while a new payee is paid"

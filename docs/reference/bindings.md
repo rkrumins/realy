@@ -25,7 +25,7 @@ Order is the Flink job's keyed-stage order (append only).
 
 | Pipeline | Namespace | Partition key | Event types | Exact entities | Topics |
 |---|---|---|---|---|---|
-| `payments` | (default) | customer | `payment` (scored) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels` |
+| `payments` | (default) | customer | `payment` (scored), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled` |
 
 ## Event type `device_context`
 

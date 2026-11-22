@@ -67,6 +67,18 @@ public final class KafkaIngress implements AutoCloseable {
         return enabled;
     }
 
+    private final String defaultTopic = Env.str("EVENTS_TOPIC", "payments.events.raw");
+    private volatile String topic = defaultTopic;
+
+    /** Consume another topic from the next poll ("" = EVENTS_TOPIC): the assembled transactions in flows runs. */
+    public void setTopic(String t) {
+        String want = t == null || t.isBlank() ? defaultTopic : t;
+        if (!want.equals(topic)) {
+            LOG.info("kafka ingress: {} -> {}", topic, want);
+            topic = want;
+        }
+    }
+
     public KafkaIngress(Pipeline pipeline, StageMetrics metrics) {
         this.pipeline = pipeline;
         this.metrics = metrics;
@@ -82,12 +94,13 @@ public final class KafkaIngress implements AutoCloseable {
     }
 
     private void loop(int id) {
-        String topic = Env.str("EVENTS_TOPIC", "payments.events.raw");
+        String subscribed = topic;
+        boolean[] seekEndOnAssign = {false};
         var props = KafkaProps.consumer(Env.str("GATEWAY_GROUP", "realy-gateway"), "gateway-ingress-" + id);
         Map<TopicPartition, ConcurrentSkipListSet<Long>> pending = new ConcurrentHashMap<>();
         Map<TopicPartition, Long> nextOffset = new ConcurrentHashMap<>();
         try (var consumer = new KafkaConsumer<byte[], byte[]>(props)) {
-            consumer.subscribe(List.of(topic), new ConsumerRebalanceListener() {
+            ConsumerRebalanceListener listener = new ConsumerRebalanceListener() {
                 @Override
                 public void onPartitionsRevoked(Collection<TopicPartition> parts) {
                     commit(consumer, pending, nextOffset, true);
@@ -95,12 +108,29 @@ public final class KafkaIngress implements AutoCloseable {
                 }
 
                 @Override
-                public void onPartitionsAssigned(Collection<TopicPartition> parts) { }
-            });
+                public void onPartitionsAssigned(Collection<TopicPartition> parts) {
+                    if (seekEndOnAssign[0]) {
+                        consumer.seekToEnd(parts);   // a switched topic: this run's records only
+                        seekEndOnAssign[0] = false;
+                    }
+                }
+            };
+            consumer.subscribe(List.of(subscribed), listener);
             long lastCommit = System.currentTimeMillis();
             long seenEpoch = enableEpoch.get();
             boolean paused = false;
             while (running) {
+                if (!topic.equals(subscribed)) {
+                    // another topic for this run (flows): commit what was scored, then start at its end
+                    commit(consumer, pending, nextOffset, true);
+                    consumer.unsubscribe();
+                    pending.clear();
+                    nextOffset.clear();
+                    subscribed = topic;
+                    seekEndOnAssign[0] = true;
+                    consumer.subscribe(List.of(subscribed), listener);
+                    paused = false;
+                }
                 if (!enabled) {
                     if (!paused && !consumer.assignment().isEmpty()) {
                         consumer.pause(consumer.assignment());
@@ -131,6 +161,7 @@ public final class KafkaIngress implements AutoCloseable {
                 for (ConsumerRecord<byte[], byte[]> r : records) {
                     if (header(r, "x-mirrored") != null) continue; // sync-path mirror, already decided
                     if (header(r, "x-backfill") != null) continue; // warm-start history: features only
+                    if (header(r, "x-event-type") != null) continue; // a part of a multi-message transaction: Flink assembles it
                     inflight.acquireUninterruptibly();
                     TopicPartition tp = new TopicPartition(r.topic(), r.partition());
                     pending.computeIfAbsent(tp, k -> new ConcurrentSkipListSet<>()).add(r.offset());
@@ -166,8 +197,17 @@ public final class KafkaIngress implements AutoCloseable {
             inflight.release();
             return;
         }
+        io.realy.contracts.flows.v1.TxnContext txn = null;
+        byte[] tx = header(r, "x-txn");
+        if (tx != null) {
+            try {
+                txn = io.realy.contracts.flows.v1.TxnContext.parseFrom(tx);
+            } catch (Exception e) {
+                metrics.inc("poison_txn_context");
+            }
+        }
         var req = new ScoringOrchestrator.Request(ev, trace, ingest, IngressMode.ASYNC_KAFKA_GATEWAY, null, -1, 0,
-                pipeline::publishFinal);
+                pipeline::publishFinal, txn);
         pipeline.process(req).whenComplete((d, err) -> {
             if (err != null) metrics.inc("pipeline_errors");
             pending.get(tp).remove(r.offset());

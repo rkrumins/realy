@@ -27,6 +27,7 @@ class Pipeline:
     event_types: dict[str, dict[str, Any]] = field(default_factory=dict)
     features: str | None = None
     model: dict[str, Any] = field(default_factory=dict)
+    transactions: list[str] = field(default_factory=list)
     source: str | None = None
 
     def types(self) -> dict[str, EventType]:
@@ -55,7 +56,7 @@ class Pipeline:
         return {"name": self.name, "namespace": self.namespace, "partition_key": self.partition_key,
                 "default_type": self.default_type, "topics": self.topics, "features": self.features,
                 "entities": {e.name: {"id": e.id, "owned_by": e.owned_by, "enum": e.enum} for e in reg.entities.values()},
-                "exact_entities": self.exact_entities(), "event_types": types}
+                "exact_entities": self.exact_entities(), "event_types": types, "transactions": self.transactions}
 
     def validate(self) -> list[str]:
         problems = []
@@ -74,6 +75,17 @@ class Pipeline:
             if self.partition_key not in t.entities:
                 problems.append(f"pipeline {self.name}: event type {n} does not carry the partition key "
                                 f"({self.partition_key}): its records cannot be keyed")
+        from .transactions import transaction
+        for n in self.transactions:
+            try:
+                tx = transaction(n)
+            except KeyError as e:
+                problems.append(str(e))
+                continue
+            problems += tx.validate()
+            for role, ty in tx.roles.items():
+                if ty not in self.event_types:
+                    problems.append(f"pipeline {self.name}: transaction {n} role {role} ({ty}) is not one of its event types")
         return problems
 
 
@@ -83,7 +95,8 @@ def _load(path: str) -> Pipeline:
     return Pipeline(name=raw["name"], namespace=raw.get("namespace") or "", partition_key=raw.get("partition_key", "customer"),
                     topics=dict(raw.get("topics") or {}), default_type=raw.get("default_type", "payment"),
                     event_types={k: dict(v or {}) for k, v in (raw.get("event_types") or {}).items()},
-                    features=raw.get("features"), model=dict(raw.get("model") or {}), source=path)
+                    features=raw.get("features"), model=dict(raw.get("model") or {}),
+                    transactions=list(raw.get("transactions") or []), source=path)
 
 
 def pipeline(name: str | None = None) -> Pipeline:

@@ -22,6 +22,14 @@ public class Envelope {
     public long[] spans = new long[0];
     public boolean mirrored;
     public boolean backfill;       // warm-start history: update features, never score
+    /** A part of a multi-message transaction before assembly: its event type (null = the unified event). */
+    public String type;
+    /** The TxnContext of an assembled transaction (serialized; null = a one-message payment). */
+    public byte[] txn;
+    /** A re-scored lifecycle stage: the features read it, nothing folds it into state again. */
+    public boolean readOnly;
+    /** The x-run-id header, carried to what the job publishes (the assembled transactions topic). */
+    public byte[] runId;
 
     public Envelope() {}
 

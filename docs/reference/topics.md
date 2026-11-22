@@ -7,6 +7,7 @@ Production defaults: replication factor 3, min.insync.replicas 2 (the single-bro
 | Topic | Partitions | Key | Value | Timestamp | Config |
 |---|---|---|---|---|---|
 | `payments.events.raw` | 48 | `customer_id (decimal string)` | `realy.payments.v1.TransactionEvent` | CreateTime (event time, ms) | compression.type=lz4, message.timestamp.type=CreateTime, retention=6h |
+| `payments.events.assembled` | 48 | `customer_id (decimal string)` | `realy.payments.v1.TransactionEvent` | CreateTime | compression.type=lz4, retention=6h |
 | `payments.decisions` | 48 | `customer_id (decimal string)` | `realy.scoring.v1.DecisionRecord` | LogAppendTime | compression.type=lz4, message.timestamp.type=LogAppendTime, retention=24h |
 | `payments.labels` | 12 | `customer_id (decimal string)` | `realy.payments.v1.FraudLabel` |  | retention=7d |
 | `bench.control` | 1 | `<target>` | `realy.bench.v1.ControlMessage (proto3 JSON)` |  | cleanup.policy=compact |

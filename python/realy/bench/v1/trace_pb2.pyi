@@ -16,6 +16,7 @@ class Stage(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SHUFFLE: _ClassVar[Stage]
     STATE_FEATURES: _ClassVar[Stage]
     FEATURE_STORE_WRITE: _ClassVar[Stage]
+    TXN_ASSEMBLY: _ClassVar[Stage]
     FEATURE_LOOKUP: _ClassVar[Stage]
     FEATURE_ASSEMBLE: _ClassVar[Stage]
     MODEL_CALL: _ClassVar[Stage]
@@ -37,6 +38,7 @@ DESERIALIZE: Stage
 SHUFFLE: Stage
 STATE_FEATURES: Stage
 FEATURE_STORE_WRITE: Stage
+TXN_ASSEMBLY: Stage
 FEATURE_LOOKUP: Stage
 FEATURE_ASSEMBLE: Stage
 MODEL_CALL: Stage

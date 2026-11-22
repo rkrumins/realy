@@ -22,6 +22,8 @@ import org.apache.kafka.common.header.Header;
 public final class EventDeserializer implements KafkaRecordDeserializationSchema<Envelope> {
     private final String schemaYaml;
     private final boolean keepRaw;
+    private final boolean assembling;   // the job assembles multi-message transactions (--assemble)
+    private transient io.realy.scoring.binding.PipelineBinding pipeline;
     private transient Filters filters;
     private transient FeatureSchema schema;
 
@@ -35,8 +37,38 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
      *                source, so leaving them out shrinks every shuffle
      */
     public EventDeserializer(String schemaYaml, boolean keepRaw) {
+        this(schemaYaml, keepRaw, false);
+    }
+
+    public EventDeserializer(String schemaYaml, boolean keepRaw, boolean assembling) {
         this.schemaYaml = schemaYaml;
         this.keepRaw = keepRaw;
+        this.assembling = assembling;
+    }
+
+    private io.realy.scoring.binding.PipelineBinding pipeline() {
+        if (pipeline == null) pipeline = io.realy.scoring.binding.PipelineBinding.current();
+        return pipeline;
+    }
+
+    /**
+     * A part of a multi-message transaction: decoded with its binding's codec only far enough to key it
+     * (the row's entity keys); the assembler reads the rest.
+     */
+    public static Envelope part(io.realy.scoring.binding.PipelineBinding pipeline, FeatureSchema schema, String type,
+                                byte[] raw, byte[] trace, long ingest) throws IOException {
+        var b = pipeline.binding(type);
+        var codec = io.realy.scoring.binding.WireCodec.of(b.message);
+        Envelope env = new Envelope();
+        env.type = type;
+        env.event = raw;
+        env.trace = trace;
+        env.row = schema.rowPlan().row(b, codec, codec.decode(raw));
+        env.eventId = env.row.eventId;
+        env.eventTimeUs = env.row.timeUs;
+        env.ingestUs = ingest;
+        env.lastEmitUs = BenchClock.nowUs();
+        return env;
     }
 
     @Override
@@ -48,18 +80,39 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
     @Override
     public void deserialize(ConsumerRecord<byte[], byte[]> r, Collector<Envelope> out) throws IOException {
         long ingest = BenchClock.nowUs();
+        Header ty = r.headers().lastHeader("x-event-type");
+        Header rid = r.headers().lastHeader("x-run-id");
+        if (ty != null) {
+            String type = new String(ty.value(), java.nio.charset.StandardCharsets.UTF_8);
+            if (!type.equals(pipeline().defaultType)) {
+                Header tr = r.headers().lastHeader("x-bench-trace");
+                Envelope p = part(pipeline(), schema, type, r.value(), tr == null ? null : tr.value(), ingest);
+                p.backfill = r.headers().lastHeader("x-backfill") != null;
+                p.runId = rid == null ? null : rid.value();
+                out.collect(p);
+                return;
+            }
+        }
         TransactionEvent e = TransactionEvent.parseFrom(r.value());
         Header th = r.headers().lastHeader("x-bench-trace");
         Envelope env = envelope(e, r.value(), th == null ? null : th.value(), r.headers().lastHeader("x-mirrored") != null,
                 schema, filters, ingest);
         env.backfill = r.headers().lastHeader("x-backfill") != null;
-        if (!keepRaw) env.event = null;
+        env.runId = rid == null ? null : rid.value();
+        // the raw event stays when the assembler re-publishes it (passthrough) or the job scores it
+        if (!keepRaw && !assembling) env.event = null;
         out.collect(env);
     }
 
     /** Build an envelope (shared with tests). */
     public static Envelope envelope(TransactionEvent e, byte[] raw, byte[] trace, boolean mirrored, FeatureSchema schema,
                                     Filters filters, long ingest) {
+        return envelope(e, raw, trace, mirrored, schema, filters, ingest, null);
+    }
+
+    /** @param txn the context of the transaction the event was assembled from (filters see event.txn) */
+    public static Envelope envelope(TransactionEvent e, byte[] raw, byte[] trace, boolean mirrored, FeatureSchema schema,
+                                    Filters filters, long ingest, io.realy.contracts.flows.v1.TxnContext txn) {
         Envelope env = new Envelope();
         env.event = raw;
         env.trace = trace;
@@ -67,7 +120,8 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
         env.eventId = e.getEventId();
         env.eventTimeUs = e.getEventTimeUs();
         env.row = schema.rowPlan().row(e);
-        env.filterMask = filters.mask(EventView.of(e));
+        env.filterMask = filters.mask(EventView.of(e, io.realy.scoring.binding.TxnContexts.view(txn)));
+        if (txn != null) env.txn = txn.toByteArray();
         env.features = new float[schema.size()];
         env.ingestUs = ingest;
         int dom = BenchClock.domain();
