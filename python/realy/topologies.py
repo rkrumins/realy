@@ -10,13 +10,29 @@ from __future__ import annotations
 import functools
 import os
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 import yaml
 
-from .scenario import REPO_ROOT, Topology
+from dataclasses import dataclass
 
+# the repository root, as realy.scenario computes it (not imported: the scenario model takes its allowed
+# topologies from this contract)
+REPO_ROOT = Path(os.environ.get("REALY_HOME") or Path(__file__).resolve().parents[2])
 PATH = REPO_ROOT / "contracts" / "topologies.yaml"
+# what the runner implements, per runtime choice (a new value is a new component: docs/dev/topologies.md)
+RUNTIME_VALUES = {
+    "ingress": ("kafka", "grpc"),                 # how events reach the scorer
+    "scorer": ("gateway", "flink", "echo"),       # who decides
+    "flink_mode": ("features", "both", "none"),   # the Flink job's mode (none: Flink is not used)
+    "flows": ("assembled_topic", "in_job", "none"),   # multi-message transactions: how they reach the scorer
+}
+COMPONENT_KINDS = ("driver", "kafka", "flink", "store", "service", "model", "sink")
+# Freshness of the online store (Flink pickup -> blob durable in Redis) is not a hot-path latency: it decides
+# how stale the gateway's features can be. It gets its own SLO on the map (warn at 25%, hot at 100%) instead
+# of a share of the e2e budget, which painted every replay red.
+FRESHNESS_SLO_MS = float(os.environ.get("REALY_FRESHNESS_SLO_MS", "1000"))
+SLO_STAGES = {"store_update_lag": FRESHNESS_SLO_MS}
 STATUSES = ("yes", "partial", "no", "n/a")
 ENHANCEMENT_STATUSES = ("available", "planned", "idea")
 # stages the report's tail attribution can name (report.report tail_attribution)
@@ -34,7 +50,134 @@ def load(path: Path | None = None) -> dict[str, Any]:
 
 
 def names() -> tuple[str, ...]:
-    return tuple(get_args(Topology))
+    """Every topology the contract defines (the scenario model accepts exactly these)."""
+    return tuple((load().get("topologies") or {}).keys())
+
+
+@dataclass(frozen=True)
+class Runtime:
+    """What the runner sets up for a topology."""
+    ingress: str
+    scorer: str
+    flink_mode: str
+    flows: str
+    exact_target: float | None
+
+    @property
+    def uses_flink(self) -> bool:
+        return self.flink_mode != "none"
+
+    @property
+    def gateway_consumes_kafka(self) -> bool:
+        """The gateway reads the events (or assembled) topic: the async rail and echo."""
+        return self.scorer in ("gateway", "echo") and self.ingress == "kafka"
+
+    @property
+    def sync(self) -> bool:
+        return self.ingress == "grpc"
+
+    @property
+    def echo(self) -> bool:
+        return self.scorer == "echo"
+
+    @property
+    def supports_flows(self) -> bool:
+        return self.flows != "none"
+
+
+def runtime(topology: str) -> Runtime:
+    t = (load().get("topologies") or {}).get(topology)
+    if t is None:
+        raise KeyError(f"no topology {topology!r} in contracts/topologies.yaml ({', '.join(names())})")
+    r = t.get("runtime") or {}
+    return Runtime(r.get("ingress", "kafka"), r.get("scorer", "gateway"), r.get("flink_mode", "features"),
+                   r.get("flows", "none"), r.get("exact_target"))
+
+
+def _metric(ref: str | None, entity: str | None = None) -> dict[str, str] | None:
+    """"counter:src.name" / "stage:src.name" (rate) or "src.stage" (p99) -> the map's metric reference."""
+    if not ref:
+        return None
+    ref = ref.replace("{entity}", entity or "")
+    kind, _, rest = ref.partition(":") if ":" in ref else ("stage", "", ref)
+    src, _, name = rest.partition(".")
+    return {"source": src, kind: name}
+
+
+def steps(topology: str, flows: bool = False) -> list[dict[str, Any]]:
+    """The steps of `topology` as written (the flows variant when `flows` and the topology has one)."""
+    t = (load().get("topologies") or {})[topology]
+    return list((t.get("steps_with_flows") if flows and t.get("steps_with_flows") else t.get("steps")) or [])
+
+
+def graph(topology: str, flows: bool = False, stream_entities: list[str] | None = None) -> dict[str, Any]:
+    """The live map of `topology`: nodes on a column / row grid with the metrics that feed them, and the
+    hops between them, built from its steps (`for_each: stream_entities` expanded, chained)."""
+    if stream_entities is None:
+        from .features import load_schema
+        stream_entities = load_schema().stream_entities()
+    comps = load().get("components") or {}
+    flows = bool(flows) and runtime(topology).supports_flows
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    first_of: dict[str, str] = {}      # a step id -> the node an edge into it reaches
+    last_of: dict[str, str] = {}       # a step id -> the node its edges leave from
+    in_edge: dict[str, dict] = {}      # a for_each step's edge template into each of its nodes
+    max_col, next_col = -1, 0
+
+    def col_of(c: Any) -> int:
+        nonlocal max_col, next_col
+        if c == "next":
+            next_col = max_col + 1
+            return next_col
+        if c == "same":
+            return next_col
+        next_col = int(c)
+        return int(c)
+
+    def node(sid: str, st: dict[str, Any], col: int, row: int, entity: str | None = None) -> None:
+        nonlocal max_col
+        comp = comps.get(st["component"]) or {}
+        fill = (lambda x: x.replace("{entity}", entity) if isinstance(x, str) and entity else x)
+        n = {"id": sid, "label": fill(st.get("label") or comp.get("label") or sid), "kind": comp.get("kind", "service"),
+             "column": col, "row": row, "rate": _metric(st.get("rate"), entity), "p99": _metric(st.get("p99"), entity),
+             "subtitle": fill(st.get("sub")), "component": st["component"], "does": fill(st.get("does"))}
+        if n["p99"] and n["p99"].get("stage") in SLO_STAGES:
+            n["slo_ms"] = SLO_STAGES[n["p99"]["stage"]]
+        nodes.append(n)
+        max_col = max(max_col, col)
+
+    plan = steps(topology, flows)
+    for st in plan:
+        c, r = (st.get("at") or [0, 0])
+        if st.get("for_each") == "stream_entities":
+            c0, wrap = col_of(c), int(st.get("wrap", 4))
+            ids = [st["id"].replace("{entity}", e) for e in stream_entities]
+            for i, e in enumerate(stream_entities):
+                node(ids[i], st, c0 + i // wrap, int(r) + i % wrap, e)
+                if i:
+                    tmpl = st.get("in") or {}
+                    edges.append({"from": ids[i - 1], "to": ids[i], "label": tmpl.get("label", ""),
+                                  "rate": _metric(tmpl.get("rate"), e), "p99": _metric(tmpl.get("p99"), e)})
+            next_col = c0 + (len(stream_entities) - 1) // wrap
+            first_of[st["id"]], last_of[st["id"]] = ids[0], ids[-1]
+            in_edge[st["id"]] = {**(st.get("in") or {}), "_entity": stream_entities[0]}
+        else:
+            node(st["id"], st, col_of(c), int(r))
+            first_of[st["id"]] = last_of[st["id"]] = st["id"]
+    for st in plan:
+        for h in st.get("to") or []:
+            to = h["id"]
+            tmpl = in_edge.get(to)
+            e = {"from": last_of[st["id"]], "to": first_of.get(to, to), "label": h.get("label", ""),
+                 "rate": _metric(h.get("rate")), "p99": _metric(h.get("p99"))}
+            if tmpl:                    # into a for_each block: its own first hop (the first shuffle)
+                e.update({"label": tmpl.get("label", e["label"]), "rate": _metric(tmpl.get("rate"), tmpl["_entity"]),
+                          "p99": _metric(tmpl.get("p99"), tmpl["_entity"])})
+            if h.get("bulk"):
+                e["bulk"] = _metric(h["bulk"])
+            edges.append(e)
+    return {"topology": topology, "flows": flows, "nodes": nodes, "edges": edges}
 
 
 def validate(doc: dict[str, Any] | None = None) -> list[str]:
@@ -44,13 +187,13 @@ def validate(doc: dict[str, Any] | None = None) -> list[str]:
     p: list[str] = []
     caps = list((doc.get("capabilities") or {}).keys())
     tops = doc.get("topologies") or {}
-    for t in names():
+    for t in ("gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"):   # the bundled scenarios use these
         if t not in tops:
             p.append(f"topology {t} is not described")
     for t, d in tops.items():
-        if t not in names():
-            p.append(f"{t}: not a topology the scenario model accepts ({', '.join(names())})")
-        for k in ("title", "tagline", "decides", "built", "capabilities", "choose_when"):
+        if not t.replace("-", "").isalnum() or t != t.lower():
+            p.append(f"{t}: a topology name is lowercase letters, digits and dashes")
+        for k in ("title", "tagline", "decides", "runtime", "steps", "capabilities", "choose_when"):
             if not d.get(k):
                 p.append(f"{t}: missing {k}")
         for c in caps:
@@ -67,6 +210,47 @@ def validate(doc: dict[str, Any] | None = None) -> list[str]:
         for e in d.get("enhancements") or []:
             if e.get("status") not in ENHANCEMENT_STATUSES:
                 p.append(f"{t}: enhancement {e.get('title')!r}: status must be one of {ENHANCEMENT_STATUSES}")
+    comps = doc.get("components") or {}
+    for cid, c in comps.items():
+        if c.get("kind") not in COMPONENT_KINDS:
+            p.append(f"component {cid}: kind must be one of {COMPONENT_KINDS}")
+        for k in ("label", "what", "code", "extend"):
+            if not c.get(k):
+                p.append(f"component {cid}: missing {k}")
+        for i, cfg in enumerate(c.get("config") or []):
+            for k in ("key", "in", "effect"):
+                if not cfg.get(k):
+                    p.append(f"component {cid}: config[{i}] needs {k}")
+    for t, d in tops.items():
+        r = d.get("runtime") or {}
+        for k, allowed in RUNTIME_VALUES.items():
+            if r.get(k) not in allowed:
+                p.append(f"{t}: runtime.{k} must be one of {allowed} (a new value needs a component: docs/dev/topologies.md)")
+        et = r.get("exact_target")
+        if et is not None and not (isinstance(et, (int, float)) and 0 < et <= 1):
+            p.append(f"{t}: runtime.exact_target must be a share in (0, 1] or null")
+        if r.get("flows") != "none" and not d.get("steps_with_flows"):
+            p.append(f"{t}: runtime.flows is {r.get('flows')} but there are no steps_with_flows")
+        for key in ("steps", "steps_with_flows"):
+            plan = d.get(key) or []
+            if key == "steps" and not plan:
+                p.append(f"{t}: no steps")
+            ids = [x.get("id") for x in plan]
+            if len(ids) != len(set(ids)):
+                p.append(f"{t}: {key}: step ids repeat")
+            for x in plan:
+                if x.get("component") not in comps:
+                    p.append(f"{t}: {key}: step {x.get('id')} uses unknown component {x.get('component')!r}")
+                if not x.get("does"):
+                    p.append(f"{t}: {key}: step {x.get('id')} needs `does`")
+                for h in x.get("to") or []:
+                    if h.get("id") not in ids:
+                        p.append(f"{t}: {key}: step {x.get('id')} goes to unknown step {h.get('id')!r}")
+                for ref in [x.get("rate"), *(h.get("rate") for h in x.get("to") or []), *(h.get("bulk") for h in x.get("to") or [])]:
+                    if ref and not (ref.startswith("counter:") or ref.startswith("stage:")):
+                        p.append(f"{t}: {key}: step {x.get('id')}: rate {ref!r} must start with counter: or stage:")
+                if x.get("for_each") not in (None, "stream_entities"):
+                    p.append(f"{t}: {key}: step {x.get('id')}: for_each must be stream_entities")
     for stage, per in (doc.get("advice") or {}).items():
         if stage not in TAIL_STAGES:
             p.append(f"advice for {stage!r}: not a stage the report attributes ({', '.join(TAIL_STAGES)})")

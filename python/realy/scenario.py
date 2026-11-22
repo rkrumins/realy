@@ -23,7 +23,10 @@ REPO_ROOT = Path(_os.environ.get("REALY_HOME") or Path(__file__).resolve().paren
 SCENARIO_DIR = Path(_os.environ.get("REALY_SCENARIOS") or REPO_ROOT / "scenarios")
 DATA_DIR = Path(_os.environ.get("REALY_DATA") or REPO_ROOT / "data")
 
-Topology = Literal["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"]
+# the topologies contracts/topologies.yaml defines (a new topology there is accepted here)
+from .topologies import names as _topology_names  # noqa: E402
+from .topologies import runtime as _topology_runtime  # noqa: E402
+Topology = Literal[_topology_names()]  # type: ignore[valid-type]
 # Fraud typologies are data (contracts/usecases, python/realy/usecases.py): a kind is any enabled
 # typology in the registry, validated at load time rather than fixed in a Literal.
 FraudKind = str
@@ -249,9 +252,11 @@ class Scenario(_Model):
     @model_validator(mode="after")
     def _wire(self) -> "Scenario":
         self.traffic.profile._duration = self.traffic.duration_s
-        if self.traffic.flows and self.topology not in ("gateway-kafka", "flink-inline"):
-            raise ValueError(f"traffic.flows (multi-message transactions) need an async topology with Flink "
-                             f"(gateway-kafka or flink-inline), not {self.topology}: the Flink job assembles them")
+        if self.traffic.flows and not _topology_runtime(self.topology).supports_flows:
+            ok = [t for t in _topology_names() if _topology_runtime(t).supports_flows]
+            raise ValueError(f"traffic.flows (multi-message transactions) need a topology that carries them "
+                             f"({' or '.join(ok)}), not {self.topology}: the Flink job assembles them, and "
+                             f"{self.topology} cannot wait for parts (contracts/topologies.yaml)")
         return self
 
     # ------------------------------------------------------------------ helpers
@@ -284,7 +289,7 @@ class Scenario(_Model):
         cfg.update(self.scoring)
         text = resolve_rule_set(self.rules)
         cfg.setdefault("rule_set_yaml", text)
-        if self.topology.startswith("echo"):
+        if _topology_runtime(self.topology).echo:
             cfg["echo"] = True
         return cfg
 

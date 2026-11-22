@@ -94,9 +94,9 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `REALY_EXPLORER` | `REPO_ROOT / "contracts" / "explorer.yaml` | console |  | `python/realy/control/explorer.py` |
 | `REALY_EXPLORER_CACHE_MB` | `768` | console |  | `python/realy/control/explorer.py` |
 | `REALY_EXPLORER_FEATURES_MB` | `256` | console |  | `python/realy/control/explorer.py` |
-| `REALY_FRESHNESS_SLO_MS` | `1000` | console |  | `python/realy/control/topology.py` |
+| `REALY_FRESHNESS_SLO_MS` | `1000` | python (shared) |  | `python/realy/topologies.py` |
 | `REALY_GIT_SHA` |  | report |  | `python/realy/report/history.py` |
-| `REALY_HOME` |  | python (shared) |  | `python/realy/scenario.py` |
+| `REALY_HOME` |  | python (shared) |  | `python/realy/scenario.py`<br>`python/realy/topologies.py` |
 | `REALY_IMAGES` |  | report |  | `python/realy/report/history.py` |
 | `REALY_INFRA_INTERVAL_S` | `5` | runner |  | `python/realy/runner/infra.py` |
 | `REALY_INSIGHTS` | `REPO_ROOT / "contracts" / "insights.yaml` | report |  | `python/realy/report/insights.py` |
@@ -117,7 +117,7 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `REALY_TRANSACTIONS_DIR` |  | python (shared) |  | `python/realy/bindings/transactions.py` |
 | `REALY_USECASES` | `REPO_ROOT / "contracts" / "usecases" / "typologies` | python (shared) |  | `python/realy/usecases.py` |
 | `REALY_USECASES_USER` |  | python (shared) |  | `python/realy/usecases.py` |
-| `REALY_VERIFY_MIN_EXACT` | `0.98` | verifier |  | `python/realy/verify/verify.py` |
+| `REALY_VERIFY_MIN_EXACT` | `str(rt.exact_target or 0.98` | verifier |  | `python/realy/verify/verify.py` |
 | `REALY_WORLD_SWITCH_BACKFILL_DAYS` | `1` | runner |  | `python/realy/runner/run.py` |
 | `REDIS_COMMAND_TIMEOUT_MS` | `2000` | gateway + Flink (scoring core) | flink-taskmanager | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java` |
 | `REDIS_CONNECTIONS` | `4` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |

@@ -3,14 +3,17 @@
 
 # Topologies
 
-A scenario's `topology:` decides how events travel and who decides. All four share the contracts, the features, rules and model, the audit log and the verifier; they differ in who scores, where features come from, and what that makes possible. The console's **Topologies** page shows the same, with the latest measurements and advice from your own runs.
+A scenario's `topology:` decides how events travel and who decides. A topology is a set of steps, each one a [component](#components) with its own settings; all of them share the contracts, the features, rules and model, the audit log and the verifier. They differ in who scores, where features come from, and what that makes possible. The console's **Topologies** page shows the same, with the latest measurements and advice from your own runs. To build a new topology, or add a component: [dev/topologies.md](../dev/topologies.md).
 
 ## Key differences
 
 | | [Gateway on Kafka](#gateway-kafka) | [Gateway on gRPC (sync)](#gateway-grpc) | [Flink inline](#flink-inline) | [Echo (calibration)](#echo-kafka) |
 |---|---|---|---|---|
 | Who decides | the scoring gateway (stateless Java service; any number of replicas up to the partition count) | the scoring gateway, behind a load balancer | the Flink job (async scoring operator after the keyed feature stages) | the gateway, without scoring (ScoringConfig.echo) |
-| Flink | `features` job: every entity's windows in RocksDB, each updated entity's blob written to Redis. With multi-message transactions it also assembles them and publishes each one to the assembled topic. | `features` job, fed by the gateway's mirror of each request on payments.events.raw | `both` job: features, then async scoring (model call, rules, policy) and the decisions sink; it also writes Redis blobs so a gateway can share the state | untouched |
+| Events reach the scorer by | kafka | grpc | kafka | kafka |
+| Flink job mode | features | features | both | none |
+| Multi-message transactions | assembled topic | none | in job | none |
+| Verifier's exact-feature target | 98.0% | 98.0% | 99.9% | n/a |
 | Answers the caller synchronously | no | yes | no | no |
 | Customer and card features exact | partly | partly | yes | n/a |
 | Shared-entity features exact | partly | partly | partly | n/a |
@@ -29,21 +32,33 @@ A scenario's `topology:` decides how events travel and who decides. All four sha
 
 **Gateway on Kafka.** Events arrive on Kafka; a stateless scoring gateway decides each one, reading features that Flink keeps fresh in Redis.
 
+Runtime: events reach the scorer by **kafka**, the **gateway** decides, the Flink job runs in **features** mode, multi-message transactions: **assembled topic**, exact-feature target **98.0%**.
+
 ### How it is built
 
-1. **Emitter**: sends each event at its intended time (open loop), keyed by customer, with a trace header
-2. **Kafka payments.events.raw**: one customer's events on one partition, in order (acks=all, idempotent)
-3. **Flink features job**: consumes the same topic; per entity a keyBy stage updates its windows in RocksDB and writes the blob to Redis
-4. **Scoring gateway**: consumes the topic; one pipelined Redis round trip for the event's feature and profile blobs; re-windows customer / card state at the event's own time
-5. **Model server**: KServe v2 call with the feature vector (micro-batching and hedging optional)
-6. **Rules and policy**: CEL rules, then precedence and thresholds; deadlines turn a slow call into a rules-only decision
-7. **Kafka payments.decisions**: the decision, durable (acks=all) before the source offset is committed
-8. **Collector and ClickHouse**: the instrument's end-to-end latency; the audit, analytics and training views
+1. **Emitter** ([Emitter](#component-emitter)): sends each event at its intended time (open loop), keyed by customer, with a trace header
+2. **events.raw** ([events.raw](#component-events_topic)): one customer's events on one partition, in order (acks=all, idempotent)
+3. **Flink features** ([Flink features](#component-flink_features)): consumes the same topic; per entity a keyBy stage updates its windows in RocksDB and writes the blob to Redis
+4. **Scoring gateway** ([Scoring gateway](#component-gateway)): consumes the topic; one pipelined Redis round trip for the event's feature and profile blobs; re-windows customer / card state at the event's own time; model, rules, policy, deadlines
+5. **Redis** ([Redis](#component-redis)): the blobs the gateway reads in one round trip
+6. **Model server** ([Model server](#component-model_server)): the KServe v2 call with the feature vector (micro-batching and hedging optional)
+7. **decisions** ([decisions](#component-decisions_topic)): the decision, durable before the source offset is committed
+8. **Collector** ([Collector](#component-collector)): the instrument's end-to-end latency
+9. **ClickHouse** ([ClickHouse](#component-clickhouse)): the audit, analytics and training views
 
 With multi-message transactions (`traffic.flows`):
 
-- **Flink assembler**: keyed by customer, before the feature stages: holds a transaction's parts until its trigger and required parts are in (or the wait expires)
-- **Kafka payments.events.assembled**: every scoreable event (assembled or passed through) with the trigger's trace and the assembly wait as a span; the gateway consumes this topic instead of the raw one
+1. **Emitter** ([Emitter](#component-emitter)): sends every message of a transaction at its own time, typed (x-event-type), keyed by customer
+2. **events.raw** ([events.raw](#component-events_topic)): one customer's messages on one partition, in order
+3. **Flink assembler** ([Flink assembler](#component-flink_assembler)): keyed by customer, before the feature stages: holds a transaction's parts until its trigger and required parts are in (or the wait expires)
+4. **Flink features** ([Flink features](#component-flink_features)): the keyed feature stages on assembled transactions; blobs to Redis
+5. **events.assembled** ([events.assembled](#component-assembled_topic)): every scoreable event with the trigger's trace, the assembly wait as a span, and x-txn; the gateway consumes this topic
+6. **Redis** ([Redis](#component-redis)): the blobs the gateway reads
+7. **Scoring gateway** ([Scoring gateway](#component-gateway)): scores each assembled transaction (event.txn.* in rules)
+8. **Model server** ([Model server](#component-model_server)): the model call
+9. **decisions** ([decisions](#component-decisions_topic)): the decision, with the transaction's context
+10. **Collector** ([Collector](#component-collector)): latency from the trigger's intended time: the customer's wait, including the wait for parts
+11. **ClickHouse** ([ClickHouse](#component-clickhouse)): the audit, analytics and training views
 
 ### What works and what does not
 
@@ -80,14 +95,19 @@ With multi-message transactions (`traffic.flows`):
 
 **Gateway on gRPC (sync).** The caller sends each payment to the gateway's Score API and waits for the answer: the card authorisation path. Flink keeps features fresh from a mirror of the requests.
 
+Runtime: events reach the scorer by **grpc**, the **gateway** decides, the Flink job runs in **features** mode, multi-message transactions: **none**, exact-feature target **98.0%**.
+
 ### How it is built
 
-1. **gRPC load emitter (Java)**: calls Score() at each event's intended time (unary, or a bidirectional stream); HTTP/JSON works on the same port
-2. **Scoring gateway**: the same scoring as gateway-kafka: one Redis round trip, model, rules, policy, deadlines (the caller's own deadline_ms too)
-3. **Kafka payments.events.raw (mirror)**: the gateway mirrors each request (x-mirrored); Flink folds it into state, the gateway's own consumer skips it
-4. **Flink features job**: keeps every entity's windows and writes the blobs to Redis
-5. **Kafka payments.decisions**: the decision, durable before the reply is sent (the AUDIT_ACK span)
-6. **Reply**: outcome, score, reason codes; the emitter measures intended time to response
+1. **gRPC emitter** ([gRPC emitter](#component-grpc_emitter)): calls Score() at each event's intended time (unary, or a bidirectional stream); HTTP/JSON works on the same port
+2. **events.raw (mirror)** ([events.raw (mirror)](#component-mirror_topic)): the gateway mirrors each request (x-mirrored); Flink folds it into state, the gateway's own consumer skips it
+3. **Flink features** ([Flink features](#component-flink_features)): keeps every entity's windows and writes the blobs to Redis
+4. **Scoring gateway** ([Scoring gateway](#component-gateway)): the same scoring as gateway-kafka (the caller's deadline_ms too); replies after the audit write
+5. **Redis** ([Redis](#component-redis)): the blobs the gateway reads
+6. **Model server** ([Model server](#component-model_server)): the model call
+7. **decisions** ([decisions](#component-decisions_topic)): the decision, durable before the reply is sent (the AUDIT_ACK span)
+8. **Collector** ([Collector](#component-collector)): every answered request is in the audit (the emitter measures the latency)
+9. **ClickHouse** ([ClickHouse](#component-clickhouse)): the audit, analytics and training views
 
 ### What works and what does not
 
@@ -123,18 +143,32 @@ With multi-message transactions (`traffic.flows`):
 
 **Flink inline.** Flink does everything: the features in its keyed state and the decision in the same job, with no online store on the decision path.
 
+Runtime: events reach the scorer by **kafka**, the **flink** decides, the Flink job runs in **both** mode, multi-message transactions: **in job**, exact-feature target **99.9%**.
+
 ### How it is built
 
-1. **Emitter**: sends each event at its intended time, keyed by customer
-2. **Kafka payments.events.raw**: one customer's events on one partition, in order
-3. **Flink keyed stages**: one keyBy per entity in schema order: a network shuffle to the key's owner, then RocksDB read, update, write
-4. **Async scoring**: profiles from Redis, the same orchestrator as the gateway, the model call; an async timeout becomes REVIEW (ASYNC_TIMEOUT)
-5. **Kafka payments.decisions**: KafkaSink (at-least-once; exactly-once with transactions)
-6. **Collector and ClickHouse**: end-to-end latency; the audit and training views
+1. **Emitter** ([Emitter](#component-emitter)): sends each event at its intended time, keyed by customer
+2. **events.raw** ([events.raw](#component-events_topic)): one customer's events on one partition, in order
+3. **keyBy <entity>** (one per entity with stream features) ([Flink features](#component-flink_features)): a network shuffle to the key's owner, then RocksDB read, update, write
+4. **Async scoring** ([Async scoring](#component-flink_scoring)): profiles from Redis, the same orchestrator as the gateway, the model call; an async timeout becomes REVIEW
+5. **Redis** ([Redis](#component-redis)): profiles only: stream features never leave the job
+6. **Model server** ([Model server](#component-model_server)): the model call
+7. **decisions** ([decisions](#component-decisions_topic)): KafkaSink (at-least-once; exactly-once with transactions)
+8. **Collector** ([Collector](#component-collector)): end-to-end latency
+9. **ClickHouse** ([ClickHouse](#component-clickhouse)): the audit and training views
 
 With multi-message transactions (`traffic.flows`):
 
-- **Flink assembler**: keyed by customer, before the feature stages; the customer stage reuses its keying, so assembly adds no shuffle and no Kafka hop
+1. **Emitter** ([Emitter](#component-emitter)): sends every message of a transaction at its own time, typed, keyed by customer
+2. **events.raw** ([events.raw](#component-events_topic)): one customer's messages on one partition, in order
+3. **Flink assembler** ([Flink assembler](#component-flink_assembler)): keyed by customer; the customer stage reuses its keying, so assembly adds no shuffle and no Kafka hop
+4. **keyBy <entity>** ([Flink features](#component-flink_features)): a network shuffle to the key's owner, then RocksDB read, update, write
+5. **Async scoring** ([Async scoring](#component-flink_scoring)): scores each assembled transaction (event.txn.* in rules)
+6. **Redis** ([Redis](#component-redis)): profiles only
+7. **Model server** ([Model server](#component-model_server)): the model call
+8. **decisions** ([decisions](#component-decisions_topic)): the decision, with the transaction's context
+9. **Collector** ([Collector](#component-collector)): end-to-end latency
+10. **ClickHouse** ([ClickHouse](#component-clickhouse)): the audit and training views
 
 ### What works and what does not
 
@@ -169,13 +203,15 @@ With multi-message transactions (`traffic.flows`):
 
 **Echo (calibration).** The gateway answers every event immediately, with no features, model or rules: what is left is the instrument's own floor (the Kafka round trip and the driver).
 
+Runtime: events reach the scorer by **kafka**, the **echo** decides, the Flink job runs in **none** mode, multi-message transactions: **none**.
+
 ### How it is built
 
-1. **Emitter**: sends each event at its intended time
-2. **Kafka payments.events.raw**: the inbound hop
-3. **Gateway (echo)**: answers at once
-4. **Kafka payments.decisions**: the outbound hop
-5. **Collector**: end-to-end latency: the floor any topology adds to
+1. **Emitter** ([Emitter](#component-emitter)): sends each event at its intended time
+2. **events.raw** ([events.raw](#component-events_topic)): the inbound hop
+3. **Gateway (echo)** ([Scoring gateway](#component-gateway)): answers at once: no features, model or rules (ScoringConfig.echo)
+4. **decisions** ([decisions](#component-decisions_topic)): the outbound hop
+5. **Collector** ([Collector](#component-collector)): end-to-end latency: the floor any topology adds to
 
 ### What works and what does not
 
@@ -198,6 +234,218 @@ With multi-message transactions (`traffic.flows`):
 **Scales by:** n/a. **Tail:** the brokers and the driver themselves.
 
 **Bundled scenarios:** `echo-calibration`.
+
+## Components
+
+Every building block a topology's steps use: what it does, where its code is, every setting that controls it (where it is set, and its default), and how to swap or extend it.
+
+### Component `emitter`
+
+**Emitter** (driver): the open-loop load generator; sends each event at its intended time, so a slow pipeline cannot slow the schedule
+
+Code: `python/realy/emit/driver.py (generator python/realy/gen)`. Used by: [gateway-kafka](#gateway-kafka), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `traffic.profile` | scenario | constant 500 TPS | the rate over time: constant, ramp, step, burst |
+| `traffic.arrivals` | scenario | uniform | uniform or Poisson inter-arrival times |
+| `traffic.generators` | scenario | 1 | emitter processes (shards of the customer population); raise when schedule lag grows |
+| `traffic.flows` | scenario | [] | send payments as the messages of these transaction contracts |
+| `fraud` | scenario | background mix | typology mix, campaigns, labels, step-up rates |
+
+**Swap or extend:** send your own events to the events topic instead (keyed by the partition entity; `x-event-type` for typed messages); replaying a recorded dataset is planned (S8)
+
+### Component `grpc_emitter`
+
+**gRPC emitter** (driver): the Java open-loop load emitter for the synchronous rail; calls Score() and measures intended time to response
+
+Code: `java/load-emitter, python/realy/runner/sync.py`. Used by: [gateway-grpc](#gateway-grpc).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `sync.mode` | scenario | unary | unary calls or one bidirectional stream per channel |
+| `sync.channels` | scenario | 4 | gRPC channels to the gateway |
+| `sync.deadline_ms` | scenario | 0 (the gateway's budget) | the per-request deadline sent with each call |
+| `GATEWAY_GRPC` | env (runner) | localhost:8080 | the gateway's gRPC address |
+| `EMITTER_JAVA_OPTS` | env (runner) | -XX:+UseZGC -Xmx3g | the emitter JVM |
+
+**Swap or extend:** any gRPC or HTTP/JSON client of realy.scoring.v1.ScoringService (the Score API: docs/dev/integration.md)
+
+### Component `events_topic`
+
+**events.raw** (kafka): the inbound topic: every event (and every message of a multi-message transaction), keyed by the pipeline's partition entity so one customer's events are ordered
+
+Code: `contracts/kafka/topics.yaml, deploy/compose/kafka/create-topics.sh`. Used by: [gateway-kafka](#gateway-kafka), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `topics.events` | contracts/pipelines/<pipeline>.yaml | payments.events.raw | the topic name |
+| `partitions` | contracts/kafka/topics.yaml | 12 (compose) | the upper bound on gateway consumers and Flink source parallelism |
+| `KAFKA_LINGER_MS / KAFKA_BATCH_SIZE / KAFKA_COMPRESSION` | env (every JVM service) | 1 / 131072 / lz4 | producer batching: latency against throughput |
+| `KAFKA_ACKS` | env (every JVM service) | all | durability before the ack |
+| `KAFKA_SECURITY_PROTOCOL, KAFKA_SASL_*, KAFKA_SSL_*` | env | PLAINTEXT | TLS / SASL to your own brokers |
+
+**Swap or extend:** any Kafka-compatible broker (bring your own: docs/dev/integration.md); another transport needs a new source in the gateway and the Flink job
+
+### Component `assembled_topic`
+
+**events.assembled** (kafka): assembled transactions (and passed-through payments) from the Flink assembler, with the trigger's trace and the assembly wait as a span
+
+Code: `java/flink-job/src/main/java/io/realy/flink/FraudJob.java (assembledSink)`. Used by: [gateway-kafka](#gateway-kafka).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `topics.assembled` | contracts/pipelines/<pipeline>.yaml | payments.events.assembled | the topic name; the gateway consumes it instead of the raw topic when a run has flows |
+
+**Swap or extend:** consumed by anything that wants complete transactions (another scorer, a case-management system)
+
+### Component `mirror_topic`
+
+**events.raw (mirror)** (kafka): the synchronous rail's requests, mirrored by the gateway so Flink folds them into state (marked x-mirrored, so the gateway's own consumer skips them)
+
+Code: `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java (mirror)`. Used by: [gateway-grpc](#gateway-grpc).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `MIRROR_TO_KAFKA` | env (gateway) | true | off: sync requests never reach the feature state |
+
+**Swap or extend:** the mirror is an ordinary producer: point it at another topic to feed other consumers
+
+### Component `decisions_topic`
+
+**decisions** (kafka): the audit write-ahead log: every DecisionRecord, durable before the source offset is committed (async) or the reply is sent (sync)
+
+Code: `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java, FraudJob.sink (Flink)`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `topics.decisions` | contracts/pipelines/<pipeline>.yaml | payments.decisions | the topic name |
+| `scoring.audit_on_failure` | scenario | SPOOL_LOCAL | when the broker is down: spool to a local file (AUDIT_SPOOL) and replay, or decline (FAIL_CLOSED) |
+| `exactly_once` | scenario | false | Flink inline: transactional sink (adds the checkpoint interval to visibility) |
+
+**Swap or extend:** consume it for downstream actions (holds, case management, notifications); the gateway's sink is a class, not yet an interface (DecisionSink: planned with S7)
+
+### Component `flink_assembler`
+
+**Flink assembler** (flink): keyed by the partition entity before the feature stages: holds a transaction's parts until its trigger and required parts are in (or the wait expires), then emits the unified event with its context
+
+Code: `java/flink-job/src/main/java/io/realy/flink/AssembleFunction.java (twin python/realy/bindings/transactions.py)`. Used by: [gateway-kafka](#gateway-kafka), [flink-inline](#flink-inline).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `assemble.wait_ms / require / optional` | contracts/transactions/<name>.yaml | per contract | how long a required part is waited for, and which parts are waited for at all |
+| `transactions` | contracts/pipelines/<pipeline>.yaml | [a2a_transfer, card_payment] | the contracts the job assembles |
+| `stages.<name>.scored` | contracts/transactions/<name>.yaml | per contract | a lifecycle stage decided again (read-only) |
+| `TXN_TTL_DAYS` | env (Flink job) | 2 | how long an open transaction is kept in state |
+
+**Swap or extend:** a new transaction is a contract, no code (docs/dev/transactions.md)
+
+### Component `flink_features`
+
+**Flink features** (flink): one keyBy stage per entity with stream features: a shuffle to the key's owner, then its windows in RocksDB read, updated and written; in `features` mode each updated blob is written to Redis
+
+Code: `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java, java/scoring-core/.../features/EntityAggregator.java (twin python/realy/features/engine.py)`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `features` | contracts/features/feature_schema.yaml | 62 features | entities, filters (CEL), aggregations, windows, granularity: the job's whole computation |
+| `FLINK_PARALLELISM` | env (runner) | 2 | task parallelism (at most the partition count for the source) |
+| `MAX_PARALLELISM` | env (Flink job) | 128 | key groups: the ceiling for rescaling from a savepoint |
+| `FLINK_CHECKPOINT_MS` | env (runner) | 10000 | checkpoint interval (recovery point, exactly-once visibility) |
+| `STATE_TTL_DAYS` | env (Flink job) | 8 | idle entity state expires after this |
+| `STORE_STATE` | env (Flink job) | customer,card | entities written as state blobs (re-windowed exactly at the gateway); the rest as values |
+| `STORE_MAX_IN_FLIGHT` | env (Flink job) | 1000 | Redis writes in flight per subtask (backpressure beyond it) |
+| `flink_state` | scenario | warm | keep the job's state across runs, or start fresh |
+
+**Swap or extend:** new features, filters, windows and entities are contract edits (docs/dev/features.md); a new aggregation kind is code in EntityAggregator and its Python twin (an Aggregation extension point is planned)
+
+### Component `flink_scoring`
+
+**Async scoring** (flink): Flink inline only: after the keyed stages, the same orchestrator as the gateway (profiles from Redis, the model call, rules, policy, deadlines) in an async operator
+
+Code: `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`. Used by: [flink-inline](#flink-inline).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `--async-timeout-ms / --async-capacity` | Flink job args | 1000 / 1000 | a call stuck past the timeout becomes REVIEW (ASYNC_TIMEOUT); capacity bounds calls in flight |
+| `scoring` | scenario | the gateway's defaults | budget, deadlines, thresholds: the same ScoringConfig as the gateway |
+| `MODEL_TARGET` | env (Flink TaskManager) | localhost:8001 | the model server |
+
+**Swap or extend:** ModelClient (io.realy.scoring.model) for another model protocol
+
+### Component `gateway`
+
+**Scoring gateway** (service): the stateless scorer: one pipelined Redis round trip for the event's blobs, the feature vector (customer / card state re-windowed at the event's time), the model call, CEL rules, policy and deadlines
+
+Code: `java/scoring-gateway, java/scoring-core (ScoringOrchestrator, FeatureAssembler)`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [echo-kafka](#echo-kafka).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `INGRESS_KAFKA` | env (gateway) | false (compose: true) | consume the events topic (async rail) |
+| `KAFKA_CONSUMERS` | env (gateway) | 2 | consumer threads; with replicas, at most the partition count in total |
+| `MAX_INFLIGHT` | env (gateway) | 4096 | events being scored at once per gateway |
+| `scoring.budget_ms / feature_deadline_ms / model_deadline_ms` | scenario | 100 / 30 / 80 | deadlines from ingest; a miss gives a rules-only decision |
+| `scoring.on_deadline` | scenario | RULES_ONLY | or answer now and publish the final decision later (PROVISIONAL_THEN_ASYNC) |
+| `scoring.self_inclusion` | scenario | true | count the current event in the online-store aggregates |
+| `scoring.microbatch_window_us / microbatch_max / hedge_after_ms` | scenario | 0 / - / 0 | batch model calls; send a duplicate call after this long |
+| `scoring.review_threshold / challenge_threshold / decline_threshold` | scenario (or live) | the rule set's | live policy tuning |
+| `rules` | scenario | baseline | the CEL rule set (rules/<name>.yaml) |
+| `REDIS_CONNECTIONS / MODEL_CHANNELS` | env (gateway) | 4 / 4 | connections to the store and the model server |
+
+**Swap or extend:** OnlineStore (io.realy.scoring.store) for another feature store, ModelClient for another model protocol; rules and policy are YAML
+
+### Component `redis`
+
+**Redis** (store): the online store: one blob per entity (state blobs for customer and card, value blobs for the rest) and the profiles
+
+Code: `contracts/storage/redis.md, java/scoring-core/.../store/RedisOnlineStore.java`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `REDIS_URI` | env | redis://localhost:6379 | the store |
+| `REDIS_COMMAND_TIMEOUT_MS / REDIS_REQUEST_QUEUE` | env | 2000 / 100000 | client timeout and bounded queue |
+| `scoring.feature_lookup_delay` | scenario | none | inject extra lookup latency (what a remote store would add) |
+
+**Swap or extend:** OnlineStore: implement get / pipelined batch for another store (Aerospike, DynamoDB, Feast online)
+
+### Component `model_server`
+
+**Model server** (model): KServe v2 inference (the mock server here; Triton or KServe in production): the feature vector in, a score out
+
+Code: `java/mock-model-server, models/`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `model_server.service_time / per_item_us / workers` | scenario | mock service time | the mock server's compute and concurrency |
+| `model_server.max_batch / max_queue_delay_us` | scenario | 1 / 0 | server-side dynamic batching |
+| `MODEL_NAME / MODEL_INPUT_NAME / MODEL_OUTPUT_NAME` | env (gateway | fraud_mlp / input__0 / output__0 | the served model and its tensors |
+| `MODEL_WEIGHTS` | env (model server) | the proxy model | the weights the mock server loads (hot redeploy through the admin API) |
+
+**Swap or extend:** any KServe v2 server (docs/dev/models.md); another protocol through ModelClient
+
+### Component `collector`
+
+**Collector** (driver): the instrument's end of the run: consumes the decisions topic, correlates each decision with its event by id, and records end-to-end latency on the driver's clock
+
+Code: `python/realy/collect/collector.py`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `traffic.generators` | scenario | 1 | one collector per emitter shard |
+
+**Swap or extend:** not part of the platform being tested: production systems consume the decisions topic themselves
+
+### Component `clickhouse`
+
+**ClickHouse** (sink): the asynchronous audit and analytics store: decisions, labels and raw events through Kafka engines; the training view; independent verification
+
+Code: `contracts/storage/clickhouse (generated by python/realy/codegen.py)`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `CLICKHOUSE_URL` | env (console | http://localhost:8123 | the warehouse |
+
+**Swap or extend:** views (v_training_dataset, v_rule_performance) for BI and training; another warehouse can read the same topics
 
 ## Advice by dominant tail stage
 

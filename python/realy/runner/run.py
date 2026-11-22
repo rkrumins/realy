@@ -27,7 +27,9 @@ from ..common.clock import now_us
 from ..common.kafka import CONTROL, METRICS, ensure_topics, make_consumer
 from ..emit.driver import ShardPlan, emitter_main, generator_main
 from ..gen import auto_time_scale, natural_rate_total, sim_start_us
+from ..bindings import pipeline
 from ..scenario import REPO_ROOT, Scenario
+from ..topologies import runtime
 from ..world import load_or_build
 
 RUNS_DIR = Path(os.environ.get("REALY_RUNS", REPO_ROOT / "runs"))
@@ -103,9 +105,9 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
     model_cfg = sc.model_server_config()
     msgs = [
         control.control_message(run_id, "gateway", ingress={
-            "kafka_enabled": sc.topology in ("gateway-kafka", "echo-kafka"),
+            "kafka_enabled": runtime(sc.topology).gateway_consumes_kafka,
             # multi-message transactions: the gateway scores what the Flink assembler publishes
-            "topic": _assembled_topic() if sc.traffic.flows and sc.topology == "gateway-kafka" else ""}),
+            "topic": _assembled_topic() if sc.traffic.flows and runtime(sc.topology).flows == "assembled_topic" else ""}),
         control.control_message(run_id, "*", scoring=scoring),
     ]
     msgs.append(control.control_message(run_id, "model", model_server=model_cfg))
@@ -134,7 +136,7 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
             st.finish("store", f"could not clear stream blobs: {e}", "warn")
     else:
         st.skip("store", "warm state: stream blobs kept")
-    if sc.topology == "flink-inline" or sc.topology.startswith("gateway"):
+    if runtime(sc.topology).uses_flink:
         from .flink import ensure_jobs, job_progress
         before = job_progress(ep.flink_rest)
         st.start("flink", "cancelling the running job, submitting a fresh one" if sc.flink_state == "fresh"
@@ -311,11 +313,11 @@ def cold_pipeline(sc: Scenario, ep: Endpoints) -> list[str]:
     adds seconds of latency for the first ~15 s, which would land inside a short scenario's measured
     window and fail it for reasons that have nothing to do with the pipeline's steady state."""
     reasons = []
-    if sc.topology in ("gateway-kafka", "echo-kafka"):
+    if runtime(sc.topology).gateway_consumes_kafka:
         n = _gateway_decisions(ep.gateway_admin)
         if n is not None and n < WARM_GATEWAY_DECISIONS:
             reasons.append(f"gateway has scored {n:,} events since it started")
-    if sc.topology in ("gateway-kafka", "gateway-grpc", "flink-inline"):
+    if runtime(sc.topology).uses_flink:
         up = _flink_job_uptime_s(ep.flink_rest)
         if up is not None and up < WARM_FLINK_UPTIME_S:
             reasons.append(f"Flink job started {up:.0f} s ago")
@@ -688,9 +690,9 @@ class _Run:
         self.write_manifest()
         from .flink import job_progress
         # Flink's processed-record count before any history is sent: catch-up progress is the delta
-        self.flink_base = job_progress(ep.flink_rest) if sc.topology != "echo-kafka" else None
+        self.flink_base = job_progress(ep.flink_rest) if runtime(sc.topology).uses_flink else None
         self.sleep(float(os.environ.get("REALY_CONFIG_SETTLE_S", "2")), "config settle")
-        self.sync = sc.topology == "gateway-grpc"
+        self.sync = runtime(sc.topology).sync
         # the sync rail replays a compiled dataset (no history path); REALY_AUTO_PRIME=0 disables priming
         auto_prime = os.environ.get("REALY_AUTO_PRIME", "1") != "0" and not self.sync
         cold = cold_pipeline(sc, ep) if auto_prime else []
@@ -734,7 +736,7 @@ class _Run:
         def _note(k: str, v: Any) -> None:
             self.manifest.setdefault("health", {})[k] = v
         self.health = HealthWatch(self.log, _abort, _note)
-        self.infra = InfraSampler(self.run_dir, self.ep.flink_rest if sc.topology != "echo-kafka" else None, self.log,
+        self.infra = InfraSampler(self.run_dir, self.ep.flink_rest if runtime(sc.topology).uses_flink else None, self.log,
                                   max_s=sc.traffic.duration_s + sc.traffic.warmup_s + 3600,
                                   on_sample=self.health.check).start()
         tps = sc.traffic.profile.tps
@@ -820,7 +822,7 @@ class _Run:
         self.phase("BACKFILL" if sc.traffic.backfill_days else "PREPARE")
         timeout = float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900"))
         stopped = lambda: bool(h.abort_reason)  # noqa: E731
-        feature_job = sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc")
+        feature_job = runtime(sc.topology).uses_flink
         has_bulk = bool(history_days(self.history, "bulk"))
         if has_bulk:
             st.start("history", describe_history_short(self.history))
@@ -861,9 +863,9 @@ class _Run:
             self.pump(0.5)
         bf = self.bf_events
         if self.bf_primed:
-            if sc.topology in ("gateway-kafka", "echo-kafka"):
+            if runtime(sc.topology).gateway_consumes_kafka:
                 st.start("prime", f"{self.bf_primed:,} prime events sent; waiting for the gateway to score them")
-                topic = _assembled_topic() if self.sc.traffic.flows else "payments.events.raw"
+                topic = _assembled_topic() if self.sc.traffic.flows else pipeline().topics["events"]
                 primed = wait_gateway_primed(ep, self.gw_before, self.bf_primed, timeout, log, stop=stopped, topic=topic)
                 self.check("prime catch-up")
                 n = _gateway_decisions(ep.gateway_admin)
@@ -925,7 +927,7 @@ class _Run:
             self._wait_sinks()
         elif self.startup.steps["sinks"]["status"] == "pending":
             self.startup.skip("sinks", "no history to ingest")
-        if sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc") and ep.flink_rest:
+        if runtime(sc.topology).uses_flink and ep.flink_rest:
             from .flink import job_progress
             jp = job_progress(ep.flink_rest)
             self.gates["flink_running"] = bool(jp and jp.get("state") == "RUNNING"

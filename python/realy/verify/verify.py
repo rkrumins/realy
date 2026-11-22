@@ -253,7 +253,8 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         "exact_set_agreement": float(np.mean([per_feature[k]["agreement"] for k in exact])) if exact else None,
         "per_feature": per_feature,
         "worst": sorted(((k, v["agreement"]) for k, v in per_feature.items()), key=lambda x: x[1])[:8],
-        "note": ("Flink-inline: customer/card features must match exactly" if sc.topology == "flink-inline" else
+        "note": (f"{sc.topology}: customer/card features are computed in the task that scores, so must match exactly"
+                 if _scorer_in_task(sc.topology) else
                  "gateway topology: customer/card features are re-windowed from online-store state blobs at each "
                  "event's time (target >= 99%); the remainder is store lag - events of the same entity not yet "
                  "written to Redis when the gateway read it"),
@@ -315,7 +316,11 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     # blobs and differ only by store lag (REALY_VERIFY_MIN_EXACT, default 0.98). Lower means the served
     # features are wrong, e.g. state left over from another world.
     exact = out["features"]["exact_set_agreement"] or 0
-    target = 0.999 if sc.topology == "flink-inline" else float(os.environ.get("REALY_VERIFY_MIN_EXACT", "0.98"))
+    from ..topologies import runtime
+    rt = runtime(sc.topology)
+    # in-task features must be exact; a store-backed scorer re-windows state (store lag allowed, env override)
+    target = (rt.exact_target or 0.98) if rt.scorer == "flink" else float(
+        os.environ.get("REALY_VERIFY_MIN_EXACT", str(rt.exact_target or 0.98)))
     out["features"]["exact_set_target"] = target
     out["features"]["exact_set_ok"] = exact >= target or out["features"]["compared_events"] == 0
     # The reference replays THIS run's events only. Warm state that earlier runs fed (same world, same
@@ -330,6 +335,11 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     out["inconclusive"] = not comparable and out["passed"] is False and out["reasons"] == [NOT_COMPARABLE]
     (run_dir / "verify.json").write_text(json.dumps(out, indent=1, default=float))
     return out
+
+
+def _scorer_in_task(topology: str) -> bool:
+    from ..topologies import runtime
+    return runtime(topology).scorer == "flink"
 
 
 def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table

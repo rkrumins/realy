@@ -2,9 +2,10 @@
 topology needs, switching modes via stop-with-savepoint so keyed feature state (RocksDB) stays warm
 (operator uids `features-<entity>` are identical across modes).
 
-  gateway-* topologies -> `features` job (writes entity blobs to the online store)
-  flink-inline         -> `both` job (inline scoring + online-store writes)
-  echo-kafka           -> no change (gateway echoes)
+Which mode a topology needs is its runtime.flink_mode in contracts/topologies.yaml:
+  features  -> the `features` job (writes entity blobs to the online store)
+  both      -> inline scoring + online-store writes
+  none      -> no change (e.g. echo-kafka: the gateway echoes)
 """
 from __future__ import annotations
 
@@ -246,11 +247,10 @@ def _stop_with_savepoint(c: httpx.Client, jid: str, log) -> str | None:
 
 
 def desired_mode(sc: Scenario) -> str | None:
-    if sc.topology == "flink-inline":
-        return "both"
-    if sc.topology in ("gateway-kafka", "gateway-grpc"):
-        return "features"
-    return None
+    """The job mode the topology needs (contracts/topologies.yaml runtime.flink_mode; None: no Flink)."""
+    from ..topologies import runtime
+    mode = runtime(sc.topology).flink_mode
+    return None if mode == "none" else mode
 
 
 def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = print, parallelism: int | None = None,

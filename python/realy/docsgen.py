@@ -605,26 +605,43 @@ def bindings() -> str:
 
 
 def topologies() -> str:
-    """How each topology is built, what it can and cannot do, the key differences, and what would improve it."""
-    from .topologies import load
+    """How each topology is built from components, what it can and cannot do, the key differences, every
+    component's settings, and what would improve each."""
+    from .topologies import load, runtime, steps
     doc = load()
     caps = doc.get("capabilities") or {}
     tops = doc.get("topologies") or {}
+    comps = doc.get("components") or {}
     mark = {"yes": "yes", "partial": "partly", "no": "no", "n/a": "n/a"}
     by_topo: dict[str, list[str]] = {}
     for f in sorted((REPO_ROOT / "scenarios").glob("*.yaml")):
         d = yaml.safe_load(f.read_text()) or {}
         by_topo.setdefault(d.get("topology") or "gateway-kafka", []).append(f.stem)
+    used_by: dict[str, list[str]] = {}
+    for tid in tops:
+        for st in steps(tid) + steps(tid, True):
+            if tid not in used_by.setdefault(st["component"], []):
+                used_by[st["component"]].append(tid)
+
+    def clink(cid: str) -> str:
+        return f"[{comps.get(cid, {}).get('label', cid)}](#component-{cid})"
+
     out = [HEADER.format(src="contracts/topologies.yaml"), "# Topologies\n",
-           "A scenario's `topology:` decides how events travel and who decides. All four share the contracts, the "
-           "features, rules and model, the audit log and the verifier; they differ in who scores, where features "
-           "come from, and what that makes possible. The console's **Topologies** page shows the same, with the "
-           "latest measurements and advice from your own runs.\n",
+           "A scenario's `topology:` decides how events travel and who decides. A topology is a set of steps, each "
+           "one a [component](#components) with its own settings; all of them share the contracts, the features, "
+           "rules and model, the audit log and the verifier. They differ in who scores, where features come from, "
+           "and what that makes possible. The console's **Topologies** page shows the same, with the latest "
+           "measurements and advice from your own runs. To build a new topology, or add a component: "
+           "[dev/topologies.md](../dev/topologies.md).\n",
            "## Key differences\n",
            "| | " + " | ".join(f"[{t['title']}](#{tid})" for tid, t in tops.items()) + " |",
            "|---|" + "---|" * len(tops),
            "| Who decides | " + " | ".join(_cell(t.get("decides")) for t in tops.values()) + " |",
-           "| Flink | " + " | ".join(_cell(t.get("flink")) for t in tops.values()) + " |"]
+           "| Events reach the scorer by | " + " | ".join(runtime(t).ingress for t in tops) + " |",
+           "| Flink job mode | " + " | ".join(runtime(t).flink_mode for t in tops) + " |",
+           "| Multi-message transactions | " + " | ".join(runtime(t).flows.replace("_", " ") for t in tops) + " |",
+           "| Verifier's exact-feature target | " + " | ".join(
+               f"{runtime(t).exact_target:.1%}" if runtime(t).exact_target else "n/a" for t in tops) + " |"]
     for cid, c in caps.items():
         out.append(f"| {c['label']} | " + " | ".join(
             mark.get(((t.get("capabilities") or {}).get(cid) or {}).get("status"), "?") for t in tops.values()) + " |")
@@ -632,15 +649,22 @@ def topologies() -> str:
     out.append("| The tail usually comes from | " + " | ".join(_cell(t.get("tail")) for t in tops.values()) + " |")
     out.append("\n**The hybrid most institutions end up with.** " + (doc.get("hybrid") or "").strip() + "\n")
     for tid, t in tops.items():
+        r = runtime(tid)
         out.append(f"## {tid}\n")
         out.append(f"**{t['title']}.** {t['tagline'].strip()}\n")
-        out.append("### How it is built\n")
-        for i, h in enumerate(t.get("built") or [], 1):
-            out.append(f"{i}. **{h['component']}**: {h['does']}")
-        if t.get("built_with_flows"):
+        out.append(f"Runtime: events reach the scorer by **{r.ingress}**, the **{r.scorer}** decides, the Flink job runs "
+                   f"in **{r.flink_mode}** mode, multi-message transactions: **{r.flows.replace('_', ' ')}**"
+                   + (f", exact-feature target **{r.exact_target:.1%}**." if r.exact_target else "."))
+        out.append("\n### How it is built\n")
+        for i, st in enumerate(steps(tid), 1):
+            label = (st.get("label") or comps.get(st["component"], {}).get("label") or st["id"]).replace("{entity}", "<entity>")
+            each = " (one per entity with stream features)" if st.get("for_each") else ""
+            out.append(f"{i}. **{label}**{each} ({clink(st['component'])}): {st['does']}")
+        if t.get("steps_with_flows"):
             out.append("\nWith multi-message transactions (`traffic.flows`):\n")
-            for h in t["built_with_flows"]:
-                out.append(f"- **{h['component']}**: {h['does']}")
+            for i, st in enumerate(steps(tid, True), 1):
+                label = (st.get("label") or comps.get(st["component"], {}).get("label") or st["id"]).replace("{entity}", "<entity>")
+                out.append(f"{i}. **{label}** ({clink(st['component'])}): {st['does']}")
         out.append("\n### What works and what does not\n")
         out.append("| Capability | | Why |")
         out.append("|---|---|---|")
@@ -660,6 +684,19 @@ def topologies() -> str:
             for e in t["enhancements"]:
                 out.append(f"| {e['title']} | {_cell(e['why'])} | {_cell(e['effect'])} | {e['status']} |")
         out.append("")
+    out.append("## Components\n")
+    out.append("Every building block a topology's steps use: what it does, where its code is, every setting that "
+               "controls it (where it is set, and its default), and how to swap or extend it.\n")
+    for cid, c in comps.items():
+        out.append(f"### Component `{cid}`\n")
+        out.append(f"**{c['label']}** ({c['kind']}): {c['what']}\n")
+        out.append(f"Code: `{c['code']}`. Used by: " + (", ".join(f"[{u}](#{u})" for u in used_by.get(cid, [])) or "none") + ".\n")
+        if c.get("config"):
+            out.append("| Setting | Set in | Default | Effect |")
+            out.append("|---|---|---|---|")
+            for k in c["config"]:
+                out.append(f"| `{k['key']}` | {_cell(k['in'])} | {_cell(k.get('default', ''))} | {_cell(k['effect'])} |")
+        out.append(f"\n**Swap or extend:** {c['extend']}\n")
     out.append("## Advice by dominant tail stage\n")
     out.append("The run report names the stage that holds the largest share of the slowest 1% of events; this is "
                "what to try for each (topology-specific advice where it differs).\n")
@@ -670,7 +707,6 @@ def topologies() -> str:
         extra = "".join(f"<br>**{k}:** {_cell(v)}" for k, v in per.items() if k != "all")
         out.append(f"| `{stage}` | {txt}{extra} |")
     return "\n".join(out) + "\n"
-
 
 PAGES = {"scenario-schema.md": scenario_schema, "config.md": config, "cli.md": cli, "http-api.md": http_api,
          "features.md": features, "rules.md": rules, "topics.md": topics, "scenarios.md": scenarios,
