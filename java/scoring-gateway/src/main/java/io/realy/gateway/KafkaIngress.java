@@ -70,6 +70,11 @@ public final class KafkaIngress implements AutoCloseable {
     private final String defaultTopic = Env.str("EVENTS_TOPIC", "payments.events.raw");
     private volatile String topic = defaultTopic;
 
+    /** The topic consumed now. */
+    public String topic() {
+        return topic;
+    }
+
     /** Consume another topic from the next poll ("" = EVENTS_TOPIC): the assembled transactions in flows runs. */
     public void setTopic(String t) {
         String want = t == null || t.isBlank() ? defaultTopic : t;

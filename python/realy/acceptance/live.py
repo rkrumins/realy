@@ -165,7 +165,8 @@ class Suite:
     # ------------------------------------------------------------------ evidence helpers
     def ch(self, sql: str) -> str | None:
         try:
-            r = httpx.post(self.clickhouse, params={"query": sql}, timeout=15)
+            from ..common import clickhouse as chc
+            r = chc.post("", params={"query": sql}, timeout=15, base=self.clickhouse)
             return r.text.strip() if r.status_code == 200 else None
         except httpx.HTTPError:
             return None

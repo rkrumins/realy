@@ -2,24 +2,44 @@ package io.realy.scoring.store;
 
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisFuture;
+import io.lettuce.core.RedisURI;
 import io.lettuce.core.SetArgs;
+import io.lettuce.core.api.StatefulConnection;
 import io.lettuce.core.api.StatefulRedisConnection;
-import io.lettuce.core.api.async.RedisAsyncCommands;
+import io.lettuce.core.api.async.RedisStringAsyncCommands;
+import io.lettuce.core.cluster.ClusterClientOptions;
+import io.lettuce.core.cluster.ClusterTopologyRefreshOptions;
+import io.lettuce.core.cluster.RedisClusterClient;
+import io.lettuce.core.cluster.api.StatefulRedisClusterConnection;
 import io.lettuce.core.codec.ByteArrayCodec;
+import io.lettuce.core.resource.ClientResources;
+import io.lettuce.core.resource.DefaultClientResources;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 /**
- * Lettuce async client. Commands issued back-to-back are pipelined on a shared connection, so all
- * entity blobs of one event cost a single network round trip. Several connections are used
- * round-robin to spread load across Lettuce's event loops.
+ * Lettuce async client for a standalone Redis or a Redis Cluster (ElastiCache cluster mode, Memorystore
+ * Cluster, Redis Enterprise, a self-managed cluster). Commands issued back-to-back are pipelined, so all
+ * entity blobs of one event cost a single network round trip per node they live on. Several connections
+ * are used round-robin to spread load across Lettuce's event loops.
+ *
+ * <p>Mode: REDIS_MODE = auto (default: ask the server, INFO cluster) | standalone | cluster. TLS and auth
+ * come from the URI (rediss://user:password@host:port); a private CA through the JVM trust store. In
+ * cluster mode the topology is refreshed periodically and on MOVED / ASK / reconnects, so a failover or a
+ * resharding is followed without a restart.
  */
 public final class RedisOnlineStore implements OnlineStore {
-    private final RedisClient client;
-    private final StatefulRedisConnection<byte[], byte[]>[] conns;
+    private final AutoCloseable client;
+    private final StatefulConnection<byte[], byte[]>[] conns;
+    private final Supplier<RedisStringAsyncCommands<byte[], byte[]>>[] cmds;
     private final AtomicInteger rr = new AtomicInteger();
+    private final String mode;
+    private final String server;
+    private final ClientResources resources;
 
     private static final java.util.Map<String, RedisOnlineStore> SHARED = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger refs = new java.util.concurrent.atomic.AtomicInteger();
@@ -41,13 +61,68 @@ public final class RedisOnlineStore implements OnlineStore {
 
     @SuppressWarnings("unchecked")
     public RedisOnlineStore(String uri, int connections, int ioThreads) {
-        client = ioThreads > 0
-                ? RedisClient.create(io.lettuce.core.resource.DefaultClientResources.builder()
-                        .ioThreadPoolSize(ioThreads).computationThreadPoolSize(ioThreads).build(), uri)
-                : RedisClient.create(uri);
-        client.setOptions(clientOptions());
-        conns = new StatefulRedisConnection[Math.max(1, connections)];
-        for (int i = 0; i < conns.length; i++) conns[i] = client.connect(ByteArrayCodec.INSTANCE);
+        ClientResources res = ioThreads > 0
+                ? DefaultClientResources.builder().ioThreadPoolSize(ioThreads).computationThreadPoolSize(ioThreads).build()
+                : DefaultClientResources.create();
+        resources = res;
+        RedisURI ruri = RedisURI.create(uri);
+        String want = io.realy.common.Env.str("REDIS_MODE", "auto").toLowerCase();
+        RedisClient standalone = RedisClient.create(res, ruri);
+        standalone.setOptions(clientOptions());
+        boolean cluster = "cluster".equals(want);
+        String info = "";
+        if ("auto".equals(want) || cluster) {
+            try (StatefulRedisConnection<String, String> probe = standalone.connect()) {
+                info = probe.sync().info("server") + probe.sync().info("cluster");
+                cluster = cluster || info.contains("cluster_enabled:1");
+            } catch (RuntimeException e) {
+                if (cluster) throw e;           // asked for a cluster and cannot reach it
+            }
+        }
+        int n = Math.max(1, connections);
+        conns = new StatefulConnection[n];
+        cmds = new Supplier[n];
+        if (cluster) {
+            standalone.shutdown(Duration.ZERO, Duration.ZERO);
+            RedisClusterClient c = RedisClusterClient.create(res, ruri);
+            c.setOptions(clusterOptions());
+            client = c;
+            for (int i = 0; i < n; i++) {
+                StatefulRedisClusterConnection<byte[], byte[]> conn = c.connect(ByteArrayCodec.INSTANCE);
+                conns[i] = conn;
+                cmds[i] = conn::async;
+            }
+        } else {
+            client = standalone;
+            for (int i = 0; i < n; i++) {
+                StatefulRedisConnection<byte[], byte[]> conn = standalone.connect(ByteArrayCodec.INSTANCE);
+                conns[i] = conn;
+                cmds[i] = conn::async;
+            }
+        }
+        mode = cluster ? "cluster" : "standalone";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("redis_version:(\\S+)").matcher(info);
+        server = m.find() ? m.group(1) : "";
+    }
+
+    /** "standalone" or "cluster": what the client connected as (reported by /admin/info). */
+    public String mode() {
+        return mode;
+    }
+
+    /** The server's redis_version, when the client could ask for it ("" otherwise). */
+    public String serverVersion() {
+        return server;
+    }
+
+    static ClusterClientOptions clusterOptions() {
+        io.lettuce.core.ClientOptions base = clientOptions();
+        return ClusterClientOptions.builder(base)
+                .topologyRefreshOptions(ClusterTopologyRefreshOptions.builder()
+                        .enablePeriodicRefresh(Duration.ofSeconds(io.realy.common.Env.lng("REDIS_TOPOLOGY_REFRESH_S", 30)))
+                        .enableAllAdaptiveRefreshTriggers()
+                        .build())
+                .build();
     }
 
     /**
@@ -71,8 +146,8 @@ public final class RedisOnlineStore implements OnlineStore {
                 .build();
     }
 
-    private RedisAsyncCommands<byte[], byte[]> cmd() {
-        return conns[Math.floorMod(rr.getAndIncrement(), conns.length)].async();
+    private RedisStringAsyncCommands<byte[], byte[]> cmd() {
+        return cmds[Math.floorMod(rr.getAndIncrement(), cmds.length)].get();
     }
 
     @Override
@@ -123,6 +198,8 @@ public final class RedisOnlineStore implements OnlineStore {
         if (SHARED.containsValue(this) && refs.decrementAndGet() > 0) return;
         SHARED.values().remove(this);
         for (var c : conns) c.close();
-        client.shutdown();
+        if (client instanceof RedisClusterClient c) c.shutdown();
+        else ((RedisClient) client).shutdown();
+        resources.shutdown();
     }
 }

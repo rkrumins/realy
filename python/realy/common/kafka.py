@@ -88,11 +88,42 @@ def make_consumer(group: str, **over: Any) -> Consumer:
     return Consumer(consumer_conf(group, **over))
 
 
+class TopicsNotReady(RuntimeError):
+    """The cluster lacks topics (or partitions) the pipeline needs and may not create them."""
+
+
+def topic_plan(md: Any, spec: dict[str, Any], partitions_override: int | None = None) -> list[dict[str, Any]]:
+    """Per contract topic: whether it exists, its partitions, and what the contract asks for."""
+    out = []
+    for name, t in spec["topics"].items():
+        want = int(t["partitions"])
+        if partitions_override and want > 6:
+            want = partitions_override
+        elif len(md.brokers) == 1 and want > 12:
+            want = 12
+        have = md.topics.get(name)
+        out.append({"topic": name, "exists": have is not None,
+                    "partitions": len(have.partitions) if have is not None else 0, "wanted": want,
+                    "min_partitions": int(t.get("min_partitions", 1))})
+    return out
+
+
 def ensure_topics(replication: int | None = None, partitions_override: int | None = None) -> list[str]:
-    """Create contract topics if missing. Single-broker stacks pass replication=1."""
+    """Make sure the contract topics exist. REALY_KAFKA_TOPICS = manage (default: create the missing ones)
+    | verify (a managed cluster the benchmark may not change: check they exist, with at least their
+    `min_partitions`, and say what to create otherwise). Single-broker stacks pass replication=1."""
     spec = yaml.safe_load(TOPICS_PATH.read_text())
     admin = AdminClient({"bootstrap.servers": bootstrap(), **security_config()})
     md = admin.list_topics(timeout=10)
+    if os.environ.get("REALY_KAFKA_TOPICS", "manage").lower() == "verify":
+        plan = topic_plan(md, spec, partitions_override)
+        bad = [p for p in plan if not p["exists"] or p["partitions"] < p["min_partitions"]]
+        if bad:
+            raise TopicsNotReady("REALY_KAFKA_TOPICS=verify and the cluster is not ready: " + "; ".join(
+                (f"create {p['topic']} ({p['wanted']} partitions)" if not p["exists"] else
+                 f"{p['topic']} has {p['partitions']} partitions, needs at least {p['min_partitions']}") for p in bad)
+                + " (contracts/kafka/topics.yaml has their settings)")
+        return []
     existing = set(md.topics)
     rf = replication or int(os.environ.get("KAFKA_REPLICATION", spec["defaults"]["replication_factor"]))
     rf = max(1, min(rf, len(md.brokers)))  # dev stacks run a single broker
@@ -116,8 +147,13 @@ def ensure_topics(replication: int | None = None, partitions_override: int | Non
             try:
                 fut.result()
             except Exception as e:  # noqa: BLE001 - already exists races are fine
-                if "TOPIC_ALREADY_EXISTS" not in str(e):
-                    raise
+                if "TOPIC_ALREADY_EXISTS" in str(e):
+                    continue
+                if "AUTHORIZATION" in str(e).upper():
+                    raise TopicsNotReady(
+                        f"may not create {name} on this cluster ({e}). Create the topics yourself "
+                        "(contracts/kafka/topics.yaml) and set REALY_KAFKA_TOPICS=verify") from e
+                raise
     return [t.topic for t in new]
 
 

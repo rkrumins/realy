@@ -16,10 +16,12 @@ def test_steps_log_consistently_and_persist(tmp_path):
     st.finish("history", "583,063 events sent")
     st.skip("prime", "scoring path already warm")
     n = len(STEPS)
-    assert lines[0] == f"[startup 8/{n}] history replay: bulk replay"
-    assert lines[1] == f"[startup 8/{n}] history replay: 71% (412,330/583,063 events), 9,800/s, ETA 17 s · bulk replay"
-    assert lines[2].startswith(f"[startup 8/{n}] history replay done in ") and lines[2].endswith(": 583,063 events sent")
-    assert lines[3] == f"[startup 10/{n}] scoring-path prime skipped in 0.0 s: scoring path already warm"
+    pos = {sid: i + 1 for i, (sid, _) in enumerate(STEPS)}
+    h, p = pos["history"], pos["prime"]
+    assert lines[0] == f"[startup {h}/{n}] history replay: bulk replay"
+    assert lines[1] == f"[startup {h}/{n}] history replay: 71% (412,330/583,063 events), 9,800/s, ETA 17 s · bulk replay"
+    assert lines[2].startswith(f"[startup {h}/{n}] history replay done in ") and lines[2].endswith(": 583,063 events sent")
+    assert lines[3] == f"[startup {p}/{n}] scoring-path prime skipped in 0.0 s: scoring path already warm"
     snap = json.loads((tmp_path / "startup.json").read_text())
     by = {s["id"]: s for s in snap["steps"]}
     assert [s["id"] for s in snap["steps"]] == [sid for sid, _ in STEPS]
@@ -31,7 +33,8 @@ def test_abort_marks_the_running_step_failed(tmp_path):
     st = Startup(tmp_path, lambda _m: None, write_every_s=0)
     st.start("catchup")
     st.fail_running("aborted (operator): stop")
-    assert st.snapshot()["steps"][8]["status"] == "failed"
+    idx = [sid for sid, _ in STEPS].index("catchup")
+    assert st.snapshot()["steps"][idx]["status"] == "failed"
 
 
 def test_fmt_progress():

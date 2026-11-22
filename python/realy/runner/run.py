@@ -617,6 +617,40 @@ class _Run:
                 "inherited": list(before.get("runs", []))[-10:], "unknown": bool(before.get("unknown"))}
 
     # ------------------------------------------------------------------ phases
+    def preflight(self) -> None:
+        """Check every component the topology uses before anything is sent (realy.infra): record what this
+        run ran against (infra.json, manifest `infra`) and what in it is simulated; a failed check aborts
+        with its fix (REALY_PREFLIGHT=warn: record and continue; off: skip)."""
+        st, mode = self.startup, os.environ.get("REALY_PREFLIGHT", "enforce").lower()
+        if mode == "off":
+            st.skip("infra", "REALY_PREFLIGHT=off")
+            return
+        st.start("infra", "probing every component the topology uses")
+        from ..infra import blockers, check
+        try:
+            res = check(self.sc)
+        except Exception as e:  # noqa: BLE001 - the preflight must never be why a run cannot start
+            self.log(f"warn: preflight failed to run ({type(e).__name__}: {e})")
+            st.finish("infra", f"could not run: {e}", "warn")
+            return
+        (self.run_dir / "infra.json").write_text(json.dumps(res, indent=1, default=str))
+        self.manifest["infra"] = {"status": res["status"], "components": res["summary"], "simulated": res["simulated"]}
+        self.write_manifest()
+        line = ", ".join(f"{k} {v['implementation']}" for k, v in res["summary"].items())
+        for c in res["components"]:
+            for k in c["checks"]:
+                if k["status"] in ("warn", "fail"):
+                    self.log(f"preflight {k['status']}: {c['label']} {k['name']}: {k['detail']}"
+                             + (f" -> {k['fix']}" if k.get("fix") else ""))
+        for s_ in res["simulated"]:
+            self.log(f"preflight: simulated in this run: {s_['what']} ({s_['detail']})")
+        bad = blockers(res)
+        if bad and mode == "enforce":
+            st.finish("infra", "; ".join(bad), "failed")
+            raise RuntimeError("preflight failed (REALY_PREFLIGHT=warn to run anyway): " + "; ".join(bad))
+        st.finish("infra", line + (f"; {len(res['simulated'])} simulated part(s)" if res["simulated"] else ""),
+                  "warn" if res["status"] != "pass" else "done")
+
     def prepare(self) -> None:
         sc, ep, log = self.sc, self.ep, self.log
         self.phase("PREPARE")
@@ -627,6 +661,7 @@ class _Run:
                          "owner": self.lease.info.get("owner"), "pipeline": self.lease.info.get("pipeline")}
         self.write_manifest()
         st = self.startup
+        self.preflight()
         st.start("world", f"{sc.world_dir.name}")
         self.world = load_or_build(sc.world, sc.seed, sc.world_dir)
         log(f"world {sc.world_dir.name}: {self.world.n_customers:,} customers, hash {self.world.content_hash[:12]}")

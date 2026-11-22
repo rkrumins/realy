@@ -16,6 +16,25 @@ from .control.cli import console
 app = typer.Typer(no_args_is_help=True, add_completion=False,
                   help="Deterministic benchmarking & correctness instrument for real-time fraud pipelines.")
 app.add_typer(world_app, name="world", help="Synthetic payments world: build, profile, compile datasets.")
+infra_app = typer.Typer(no_args_is_help=True, help="The infrastructure a run uses: preflight checks, real or mock.")
+app.add_typer(infra_app, name="infra")
+
+
+@infra_app.command("check")
+def infra_check(scenario: Optional[str] = typer.Argument(None, help="scenario (its topology and simulated settings)"),
+                topology: Optional[str] = typer.Option(None, help="check for this topology instead of a scenario's"),
+                json_: bool = typer.Option(False, "--json", help="machine-readable output")) -> None:
+    """Probe every component the topology uses, through the settings the services read; exit 1 on a
+    failed check (the run would measure or verify the wrong thing)."""
+    import json as _json
+
+    from .infra import check, render
+    from .scenario import load_scenario
+    sc = load_scenario(scenario) if scenario else None
+    res = check(sc, topology)
+    typer.echo(_json.dumps(res, indent=1, default=str) if json_ else render(res))
+    raise typer.Exit(1 if res["status"] == "fail" else 0)
+
 app.command(help="Operator console (FastAPI + React UI) for configuring and running sustained tests.")(console)
 
 

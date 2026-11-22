@@ -15,7 +15,9 @@ HDR = struct.Struct("<HHqq")
 
 
 def redis_client() -> redis.Redis:
-    return redis.Redis.from_url(os.environ.get("REDIS_URI", "redis://localhost:6379"))
+    """Standalone or Redis Cluster (REDIS_MODE, realy.common.redis_client)."""
+    from ..common.redis_client import client
+    return client()
 
 
 def blob(values: np.ndarray, version: int, as_of: int, updated: int) -> bytes:

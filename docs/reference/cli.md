@@ -102,6 +102,20 @@ pulsebench gate RUN [OPTIONS]
 | `--require-verify, --no-require-verify` | flag |  |  |
 | `--json` | flag |  |  |
 
+## `pulsebench infra check`
+
+Probe every component the topology uses, through the settings the services read; exit 1 on a failed check (the run would measure or verify the wrong thing).
+
+```
+pulsebench infra check SCENARIO [OPTIONS]
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `SCENARIO` | argument, optional |  | scenario (its topology and simulated settings) |
+| `--topology` | str |  | check for this topology instead of a scenario's |
+| `--json` | flag |  | machine-readable output |
+
 ## `pulsebench live-test`
 
 Live acceptance suite against a running stack, through the console API: launch, steer, report accuracy (vs the ClickHouse audit), abort in every phase and from every process, bulk control, guardrails, dead instrument processes, signals and recovery. Exit 0 only if every check passes.

@@ -7,25 +7,29 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | Variable | Default | Read by | Compose sets it in | Where |
 |---|---|---|---|---|
 | `ADMIN_PORT` | `8002` | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
-| `AUDIT_SPOOL` | `/tmp/realy-audit.spool` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
-| `CLICKHOUSE_URL` | `http://localhost:8123` | python (shared), report, verifier | console | `python/realy/acceptance/live.py`<br>`python/realy/report/history.py`<br>`python/realy/verify/verify.py` |
+| `AUDIT_SPOOL` | `/tmp/realy-audit.spool` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
+| `CLICKHOUSE_CA_FILE` |  | python (shared) |  | `python/realy/common/clickhouse.py` |
+| `CLICKHOUSE_PASSWORD` |  | python (shared) |  | `python/realy/common/clickhouse.py` |
+| `CLICKHOUSE_PASSWORD_FILE` |  | python (shared) |  | `python/realy/common/clickhouse.py` |
+| `CLICKHOUSE_URL` | `http://localhost:8123` | python (shared), report, verifier | console | `python/realy/acceptance/live.py`<br>`python/realy/common/clickhouse.py`<br>`python/realy/report/history.py` |
+| `CLICKHOUSE_USER` |  | python (shared) |  | `python/realy/common/clickhouse.py` |
 | `CONTROL_TOPIC` | `bench.control` | every JVM service |  | `java/common/src/main/java/io/realy/common/ControlSubscriber.java` |
-| `DECISIONS_TOPIC` | `payments.decisions` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
+| `DECISIONS_TOPIC` | `payments.decisions` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
 | `EMITTER_JAVA_OPTS` | `-XX:+UseZGC -XX:+ZGenerational -Xmx3g` | runner |  | `python/realy/runner/sync.py` |
 | `EVENTS_TOPIC` | `payments.events.raw` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
-| `FEATURE_SCHEMA` |  | gateway + Flink (scoring core), python (shared) |  | `python/realy/features/schema.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/features/FeatureSchema.java` |
+| `FEATURE_SCHEMA` |  | gateway + Flink (scoring core), python (shared) |  | `python/realy/features/schema.py`<br>`python/realy/infra.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/features/FeatureSchema.java` |
 | `FLINK_CHECKPOINTS_LOCAL` |  | runner | console | `python/realy/runner/flink.py` |
 | `FLINK_CHECKPOINTS_URI` | `file:///checkpoints` | runner |  | `python/realy/runner/flink.py` |
 | `FLINK_CHECKPOINT_MS` | `10000` | runner |  | `python/realy/runner/flink.py`<br>`python/realy/runner/run.py` |
 | `FLINK_JOB_JAR` |  | runner |  | `python/realy/runner/flink.py` |
 | `FLINK_KAFKA_BOOTSTRAP` | `kafka:29092` | runner | console | `python/realy/runner/flink.py` |
-| `FLINK_PARALLELISM` | `2` | runner |  | `python/realy/runner/flink.py` |
-| `FLINK_REST` | `http://localhost:8081` | console, runner | console | `python/realy/control/env.py`<br>`python/realy/runner/run.py` |
+| `FLINK_PARALLELISM` | `2` | python (shared), runner |  | `python/realy/infra.py`<br>`python/realy/runner/flink.py` |
+| `FLINK_REST` | `http://localhost:8081` | console, python (shared), runner | console | `python/realy/control/env.py`<br>`python/realy/infra.py`<br>`python/realy/runner/run.py` |
 | `FLINK_SAVEPOINT_DIR` | `file:///checkpoints/savepoints` | runner |  | `python/realy/runner/flink.py` |
 | `FLINK_STORE_STATE` |  | runner |  | `python/realy/runner/flink.py` |
 | `FLINK_UI_URL` |  | console | console | `python/realy/control/env.py` |
-| `GATEWAY_ADMIN` | `http://localhost:8080` | runner | console | `python/realy/runner/run.py` |
-| `GATEWAY_GROUP` | `realy-gateway` | gateway, runner |  | `python/realy/runner/run.py`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
+| `GATEWAY_ADMIN` | `http://localhost:8080` | python (shared), runner | console | `python/realy/infra.py`<br>`python/realy/runner/run.py` |
+| `GATEWAY_GROUP` | `realy-gateway` | gateway, runner |  | `python/realy/runner/run.py`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
 | `GATEWAY_GRPC` | `localhost:8080` | runner | console | `python/realy/runner/run.py` |
 | `GRAFANA_URL` |  | console | console | `python/realy/control/env.py` |
 | `GRPC_PORT` | `8001` | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
@@ -34,9 +38,9 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `JOB_MODE` | `features` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
 | `KAFKA_ACKS` | `all` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
 | `KAFKA_BATCH_SIZE` | `131072` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
-| `KAFKA_BOOTSTRAP` | `localhost:9092` | Flink job, console, every JVM service, python (shared) | console, flink-taskmanager, gateway, mock-model | `python/realy/common/kafka.py`<br>`python/realy/control/env.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_BOOTSTRAP` | `localhost:9092` | Flink job, console, every JVM service, gateway, python (shared) | console, flink-taskmanager, gateway, mock-model | `python/realy/common/kafka.py`<br>`python/realy/control/env.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
 | `KAFKA_COMPRESSION` | `lz4` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
-| `KAFKA_CONSUMERS` | `2` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
+| `KAFKA_CONSUMERS` | `2` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
 | `KAFKA_DELIVERY_TIMEOUT_MS` | `30000` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
 | `KAFKA_FETCH_MAX_WAIT_MS` | `100` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
 | `KAFKA_IDEMPOTENCE` | `true` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
@@ -45,10 +49,10 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `KAFKA_OFFSET_RESET` | `latest` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
 | `KAFKA_REPLICATION` | `spec["defaults` | python (shared) |  | `python/realy/common/kafka.py` |
 | `KAFKA_SASL_JAAS_CONFIG` | `unset: PLAINTEXT` | every JVM service |  | `java/common/src/main/java/io/realy/common/KafkaProps.java` |
-| `KAFKA_SASL_MECHANISM` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SASL_MECHANISM` | / `unset: PLAINTEXT` | every JVM service, gateway, python (shared) |  | `java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java`<br>`python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
 | `KAFKA_SASL_PASSWORD` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
 | `KAFKA_SASL_USERNAME` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
-| `KAFKA_SECURITY_PROTOCOL` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
+| `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT` / `unset: PLAINTEXT` | every JVM service, gateway, python (shared) |  | `java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java`<br>`python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
 | `KAFKA_SSL_CA_LOCATION` | `unset: PLAINTEXT` | python (shared) |  | `python/realy/common/kafka.py` |
 | `KAFKA_SSL_CERT_LOCATION` | `unset: PLAINTEXT` | python (shared) |  | `python/realy/common/kafka.py` |
 | `KAFKA_SSL_ENDPOINT_IDENTIFICATION` | `unset: PLAINTEXT` | every JVM service, python (shared) |  | `python/realy/common/kafka.py`<br>`java/common/src/main/java/io/realy/common/KafkaProps.java` |
@@ -66,13 +70,21 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `METRICS_TOPIC` | `bench.metrics` | every JVM service |  | `java/common/src/main/java/io/realy/common/StageMetrics.java` |
 | `MIRROR_TO_KAFKA` | `true` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `MODEL_ADMIN` | `http://localhost:8002` | python (shared), runner | console | `python/realy/cli.py`<br>`python/realy/runner/run.py` |
+| `MODEL_AUTHORITY` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/ModelChannels.java` |
+| `MODEL_AUTH_HEADER` |  | gateway, gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/ModelChannels.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java` |
+| `MODEL_AUTH_TOKEN` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/ModelChannels.java` |
+| `MODEL_AUTH_TOKEN_FILE` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/ModelChannels.java` |
+| `MODEL_CA_FILE` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/ModelChannels.java` |
 | `MODEL_CHANNELS` | `4` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MODEL_CLIENT_CERT` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/ModelChannels.java` |
+| `MODEL_CLIENT_KEY` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/ModelChannels.java` |
 | `MODEL_INPUT_DIM` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
 | `MODEL_INPUT_NAME` | `input__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
-| `MODEL_NAME` | `fraud_mlp` | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MODEL_NAME` | `fraud_mlp` | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `MODEL_OUTPUT_NAME` | `output__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
 | `MODEL_SERVER_CONFIG` |  | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
 | `MODEL_TARGET` | `localhost:8001` | Flink job, gateway | flink-taskmanager, gateway | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MODEL_TLS` | `false` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/ModelChannels.java` |
 | `MODEL_WEIGHTS` |  | model server, verifier | mock-model | `python/realy/verify/verify.py`<br>`java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
 | `PARALLELISM` | `4` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
 | `PIPELINE` | `payments` | gateway + Flink (scoring core), python (shared) |  | `python/realy/bindings/pipeline.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/binding/PipelineBinding.java` |
@@ -100,10 +112,13 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `REALY_IMAGES` |  | report |  | `python/realy/report/history.py` |
 | `REALY_INFRA_INTERVAL_S` | `5` | runner |  | `python/realy/runner/infra.py` |
 | `REALY_INSIGHTS` | `REPO_ROOT / "contracts" / "insights.yaml` | report |  | `python/realy/report/insights.py` |
+| `REALY_KAFKA_TOPICS` | `manage` | python (shared) |  | `python/realy/common/kafka.py`<br>`python/realy/infra.py` |
 | `REALY_MODELS` |  | trainer | console | `python/realy/train/proxy.py` |
 | `REALY_OWNER` |  | runner | console | `python/realy/runner/lifecycle.py` |
 | `REALY_PIPELINE` | `default` | runner |  | `python/realy/runner/lifecycle.py` |
 | `REALY_PIPELINES_DIR` |  | python (shared) |  | `python/realy/bindings/pipeline.py` |
+| `REALY_PREFLIGHT` | `enforce` | runner |  | `python/realy/runner/run.py` |
+| `REALY_PREFLIGHT_TIMEOUT_S` | `5` | python (shared) |  | `python/realy/infra.py` |
 | `REALY_PRIME_S` | `30` | runner |  | `python/realy/runner/run.py` |
 | `REALY_RUNS` | `/runs` / `REPO_ROOT / "runs` | python (shared), runner |  | `python/realy/acceptance/live.py`<br>`python/realy/runner/run.py` |
 | `REALY_RUN_HISTORY` | `1` | report |  | `python/realy/report/history.py` |
@@ -119,11 +134,14 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `REALY_USECASES_USER` |  | python (shared) |  | `python/realy/usecases.py` |
 | `REALY_VERIFY_MIN_EXACT` | `str(rt.exact_target or 0.98` | verifier |  | `python/realy/verify/verify.py` |
 | `REALY_WORLD_SWITCH_BACKFILL_DAYS` | `1` | runner |  | `python/realy/runner/run.py` |
+| `REDIS_CA_FILE` |  | python (shared) |  | `python/realy/common/redis_client.py` |
 | `REDIS_COMMAND_TIMEOUT_MS` | `2000` | gateway + Flink (scoring core) | flink-taskmanager | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java` |
 | `REDIS_CONNECTIONS` | `4` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `REDIS_CONNECT_TIMEOUT_MS` | `2000` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java` |
+| `REDIS_MODE` | `auto` | gateway + Flink (scoring core), python (shared) |  | `python/realy/common/redis_client.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java` |
 | `REDIS_REQUEST_QUEUE` | `100_000` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java` |
-| `REDIS_URI` | `redis://localhost:6379` | Flink job, console, gateway, runner | console, flink-taskmanager, gateway | `python/realy/control/env.py`<br>`python/realy/runner/lifecycle.py`<br>`python/realy/runner/seed.py` |
+| `REDIS_TOPOLOGY_REFRESH_S` | `30` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/store/RedisOnlineStore.java` |
+| `REDIS_URI` | `redis://localhost:6379` | Flink job, console, gateway, python (shared) | console, flink-taskmanager, gateway | `python/realy/common/redis_client.py`<br>`python/realy/control/env.py`<br>`java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java` |
 | `RUN_ID` |  | every JVM service |  | `java/common/src/main/java/io/realy/common/StageMetrics.java` |
 | `RUN_SEED` | `42` | Flink job, gateway, model server | flink-taskmanager, gateway, mock-model | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `SCORING_CONFIG` |  | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
@@ -134,4 +152,4 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `STORE_STATE` | `customer,card` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
 | `TXN_TTL_DAYS` | `2` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/AssembleFunction.java` |
 
-127 variables.
+145 variables.

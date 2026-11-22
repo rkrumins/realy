@@ -17,7 +17,7 @@ the cause, and what the code or config now does about it.
 
 ## Startup: what a run does before it measures
 
-Every run walks the same 13 steps. Each is recorded with a status (`pending`, `running`, `done`,
+Every run walks the same 14 steps. Each is recorded with a status (`pending`, `running`, `done`,
 `skipped`, `failed`, `warn`), timings, a detail line and, where it applies, live progress:
 
 | # | Step | What happens |
@@ -41,7 +41,7 @@ Every run walks the same 13 steps. Each is recorded with a status (`pending`, `r
   collapses to "prepared in N s" once the run measures.
 - **Overview:** the "running now" card shows the active step.
 - **Run log:** one consistent line per transition and every 5 s of progress, for example
-  `[startup 9/13] feature catch-up: 71% (412,330/583,063 events), 9,800/s, ETA 17 s · committed lag 230,511 (offsets commit at each checkpoint)`.
+  `[startup 10/14] feature catch-up: 71% (412,330/583,063 events), 9,800/s, ETA 17 s · committed lag 230,511 (offsets commit at each checkpoint)`.
 - **Run directory:** `startup.json`, rewritten atomically. The console reads it for the active run
   whoever started it (console, CLI, Kubernetes Job).
 - **Report:** a `startup` section with the time spent per step.

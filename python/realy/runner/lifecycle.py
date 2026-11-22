@@ -77,9 +77,8 @@ def owner_id() -> str:
 
 
 def _redis():
-    import redis
-    return redis.Redis.from_url(os.environ.get("REDIS_URI", "redis://localhost:6379"),
-                                socket_timeout=2, socket_connect_timeout=2)
+    from ..common.redis_client import client
+    return client(socket_timeout=2, socket_connect_timeout=2)
 
 
 def _decode(raw: bytes | str | None) -> dict[str, Any] | None:

@@ -23,7 +23,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Real-time scoring gateway (stateless; scale horizontally).
  *   :8080  gRPC ScoringService (+ unframed JSON: POST /realy.scoring.v1.ScoringService/Score),
- *          GET /health, GET /metrics, GET|PUT /admin/config
+ *          GET /health, GET /metrics, GET|PUT /admin/config, GET /admin/info (dependencies as connected)
  *   INGRESS_KAFKA=true additionally consumes payments.events.raw (async rail).
  */
 public final class GatewayMain {
@@ -52,6 +52,7 @@ public final class GatewayMain {
                 .metrics(metrics);
         var sink = new DecisionSink("gateway-" + instance);
         var pipeline = new Pipeline(orchestrator, sink, metrics);
+        KafkaIngress ingress = new KafkaIngress(pipeline, metrics);   // started once the server is up
 
         Server server = Server.builder()
                 .http(Env.integer("PORT", 8080))
@@ -73,10 +74,13 @@ public final class GatewayMain {
                         return HttpResponse.of(HttpStatus.BAD_REQUEST, MediaType.PLAIN_TEXT_UTF_8, e.getMessage());
                     }
                 })))
+                // what this gateway is connected to, as it sees it (the preflight's view of the pipeline)
+                .service("/admin/info", (ctx, req) -> HttpResponse.of(HttpStatus.OK, MediaType.JSON_UTF_8,
+                        AdminInfo.json(instance, schema, store, model, ingress, holder.get().cfg())))
                 .build();
         server.start().join();
 
-        KafkaIngress ingress = new KafkaIngress(pipeline, metrics).start();
+        ingress.start();
         new ControlSubscriber("gateway", (msg, raw) -> {
             if (msg.hasScoring()) holder.update(raw.get("scoring").toString());
             // messages issued before this process started are its restored state, not a live switch

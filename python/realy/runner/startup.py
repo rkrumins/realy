@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 STEPS: list[tuple[str, str]] = [
+    ("infra", "Infrastructure checked"),
     ("world", "World loaded"),
     ("topics", "Kafka topics"),
     ("profiles", "Profiles seeded"),

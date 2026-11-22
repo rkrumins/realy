@@ -457,7 +457,8 @@ def _q(ch: str, sql: str, retries: int = 2) -> list[dict]:
     last: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            r = httpx.post(ch, params={"default_format": "JSONEachRow"}, content=sql, timeout=120)
+            from ..common import clickhouse as chc
+            r = chc.post(sql, params={"default_format": "JSONEachRow"}, timeout=120, base=ch)
             if r.status_code >= 400:
                 raise ClickHouseError(f"HTTP {r.status_code}: {r.text.strip()[:300]}")
             rows = []

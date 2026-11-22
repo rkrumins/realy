@@ -129,7 +129,7 @@ message is in [reference/messages.md](reference/messages.md); every environment 
 
 ## Runner
 
-- **Does:** runs a scenario end to end: the 13 startup steps ([operations](operations.md#startup-what-a-run-does-before-it-measures)),
+- **Does:** runs a scenario end to end: the 14 startup steps ([operations](operations.md#startup-what-a-run-does-before-it-measures)),
   the measured window, the guardrails, the drain and the report; holds the pipeline lease (one run per
   pipeline).
 - **How:** `runner/run.py` (`run_scenario`), `runner/flink.py` (job management, provenance, retained
