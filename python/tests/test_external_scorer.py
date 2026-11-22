@@ -56,7 +56,7 @@ def test_verify_counts_missing_and_duplicate_decisions(tmp_path, monkeypatch):
     assert not v["passed"] and any("1 of 5 events have no decision" in r for r in v["reasons"])
     assert v["rules"]["not_checkable"] == EXTERNAL_NOTE and v["score"]["parity"] is None
     text = render(v)
-    assert "features: not checkable" in text and "rules parity: not checkable" in text
+    assert "features: not checkable (decided by your scorer" in text and "rules parity: not checkable" in text
     assert json.loads((d / "verify.json").read_text())["decisions"]["missing"] == 1
 
 
@@ -77,3 +77,14 @@ def test_the_reference_scorer_decides_and_copies_the_trace():
     from realy.scoring.v1 import decision_pb2 as dpb
     assert decide(epb.TransactionEvent(amount_usd_minor=1_000), 500_000) == (dpb.APPROVE, [])
     assert decide(epb.TransactionEvent(amount_usd_minor=600_000), 500_000)[0] == dpb.REVIEW
+
+
+def test_bundled_scoring_jobs_are_stopped_so_they_cannot_compete(monkeypatch):
+    from realy.runner import flink as F
+    monkeypatch.setattr(F, "_running", lambda c: [{"name": "realy-inline+a2a_transfer", "jid": "a"},
+                                                  {"name": "realy-features", "jid": "b"}, {"name": "realy-both", "jid": "c"}])
+    stopped: list[str] = []
+    monkeypatch.setattr(F, "_stop_with_savepoint", lambda c, jid, log: stopped.append(jid))
+    assert F.stop_scoring_jobs("http://flink:8081", lambda m: None) == ["realy-inline+a2a_transfer", "realy-both"]
+    assert stopped == ["a", "c"]                     # the features job keeps running: it decides nothing
+    assert F.stop_scoring_jobs(None) == []

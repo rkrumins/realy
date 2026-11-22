@@ -81,3 +81,11 @@ def test_step_up_findings_name_what_it_does_not_stop_and_what_it_costs():
     # money that moved, and "stopped", once the report has them
     assert any(t.startswith("Bust-out") and "$17,000" in t and "fraud $ paid" in t for t in titles)
     assert any("bust_out is stopped only 10%" in t for t in titles)
+
+
+def test_a_scorer_that_flags_no_fraud_gets_insights_not_a_crash():
+    """recall 0 (e.g. a black-box scorer that approves everything) gives precision 0 at any base rate."""
+    rep = _rep(detection=dict(_rep()["detection"], recall_flagged=0.0, precision_flagged=0.0))
+    ins = build_insights(rep, load_config(), None, registry())
+    assert ins and not any("insights unavailable" in i["title"] for i in ins)
+    assert not any("flags would be fraud" in i["title"] for i in ins)

@@ -181,7 +181,7 @@ def build_insights(rep: dict[str, Any], cfg: dict[str, Any], prev: dict[str, Any
             "the rules with the most legitimate hits are listed above", fpr * 1e6)
     p = float(cfg.get("production_base_rate", 0.001))
     prec_p = base_rate_precision(d.get("recall_flagged"), fpr, p)
-    if prec_p is not None:
+    if prec_p is not None and prec_p > 0:      # 0 when nothing fraudulent was flagged (recall 0): no ratio to give
         add("info", "detection", f"at a {_pct(p)} fraud rate, about 1 in {max(1, round(1 / prec_p)):,} flags would be fraud",
             f"measured precision {_pct(d.get('precision_flagged'))} is at this run's fraud share "
             f"({_pct((d.get('model') or {}).get('fraud_base_rate'), 2)}); recall {_pct(d.get('recall_flagged'))} and "

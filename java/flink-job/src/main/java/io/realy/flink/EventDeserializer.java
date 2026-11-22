@@ -112,8 +112,10 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
             }
         }
         TransactionEvent e = TransactionEvent.parseFrom(r.value());
-        if (e.getEventId() == 0 || e.getCustomerId() == 0) {
-            throw new IllegalArgumentException("event_id or customer_id is 0 (not a payment event, or a garbled payload)");
+        // event_id 0 is a real id (the generator's first: gen 0, seq 0); a payment without its partition key
+        // or its time is not one (an empty or garbled payload decodes to all defaults)
+        if (e.getCustomerId() == 0 || e.getEventTimeUs() == 0) {
+            throw new IllegalArgumentException("customer_id or event_time_us is 0 (not a payment event, or a garbled payload)");
         }
         Header th = r.headers().lastHeader("x-bench-trace");
         Envelope env = envelope(e, r.value(), th == null ? null : th.value(), r.headers().lastHeader("x-mirrored") != null,

@@ -101,10 +101,18 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
     from .startup import Startup
     st = startup or Startup(None, lambda _m: None)
     if runtime(sc.topology).external:
-        # a black box: nothing on its path is PulseBench's to configure (scoring, model, store, Flink)
+        # a black box: nothing on its path is PulseBench's to configure (scoring, model, store). Bundled
+        # scorers that would consume the same events (gateway ingress, an inline Flink job) are switched
+        # off, so the decisions collected are your service's alone.
         st.skip("config", "your scorer: PulseBench configures nothing on its path")
+        try:
+            control.publish([control.control_message(run_id, "gateway", ingress={"kafka_enabled": False, "topic": ""})])
+        except Exception as e:  # noqa: BLE001 - no control topic: no bundled gateway to switch off
+            log(f"note: bench.control not available ({e}); no bundled gateway switched off")
         st.skip("store", "your scorer keeps its own state")
-        st.skip("flink", "Flink is not part of this topology")
+        from .flink import stop_scoring_jobs
+        stopped = stop_scoring_jobs(ep.flink_rest, log)
+        st.skip("flink", "Flink is not part of this topology" + (f" (stopped {', '.join(stopped)})" if stopped else ""))
         return
     st.start("config")
     scoring = sc.scoring_config()
@@ -143,6 +151,10 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
             st.finish("store", f"could not clear stream blobs: {e}", "warn")
     else:
         st.skip("store", "warm state: stream blobs kept")
+    if not runtime(sc.topology).uses_flink:
+        # echo: the gateway decides; an inline Flink job left by an earlier run would decide too
+        from .flink import stop_scoring_jobs
+        stop_scoring_jobs(ep.flink_rest, log)
     if runtime(sc.topology).uses_flink:
         from .flink import ensure_jobs, job_progress
         before = job_progress(ep.flink_rest)

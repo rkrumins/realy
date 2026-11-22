@@ -89,6 +89,7 @@ public final class RedisOnlineStore implements OnlineStore {
             client = c;
             for (int i = 0; i < n; i++) {
                 StatefulRedisClusterConnection<byte[], byte[]> conn = c.connect(ByteArrayCodec.INSTANCE);
+                warmNodeConnections(c, conn);
                 conns[i] = conn;
                 cmds[i] = conn::async;
             }
@@ -103,6 +104,21 @@ public final class RedisOnlineStore implements OnlineStore {
         mode = cluster ? "cluster" : "standalone";
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("redis_version:(\\S+)").matcher(info);
         server = m.find() ? m.group(1) : "";
+    }
+
+    /**
+     * Open every primary's connection now, for reads and for writes. Lettuce opens a cluster node's
+     * connection on the first command routed to it, and with commands rejected while disconnected (the
+     * fail-fast choice below) the first burst after start-up - a Flink job's first writes, a gateway's
+     * first lookups - would race those connections and fail. Measured: a fresh features job failed its
+     * first checkpoints with "Currently not connected" until this was done up front.
+     */
+    static void warmNodeConnections(RedisClusterClient client, StatefulRedisClusterConnection<byte[], byte[]> conn) {
+        for (io.lettuce.core.cluster.models.partitions.RedisClusterNode node : client.getPartitions()) {
+            if (!node.is(io.lettuce.core.cluster.models.partitions.RedisClusterNode.NodeFlag.UPSTREAM)) continue;
+            conn.getConnection(node.getNodeId(), io.lettuce.core.protocol.ConnectionIntent.WRITE);
+            conn.getConnection(node.getNodeId(), io.lettuce.core.protocol.ConnectionIntent.READ);
+        }
     }
 
     /** Every connection is open (Lettuce reconnects on its own; a closed one means the store is unreachable). */

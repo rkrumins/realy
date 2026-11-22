@@ -91,3 +91,12 @@ def test_clickhouse_credentials_travel_in_headers(monkeypatch, tmp_path):
     assert clickhouse.headers() == {"X-ClickHouse-User": "bench", "X-ClickHouse-Key": "s3cret"}
     monkeypatch.setenv("CLICKHOUSE_URL", "https://ch.example.com:8443/")
     assert clickhouse.url() == "https://ch.example.com:8443"
+
+
+def test_cluster_info_shapes_are_read_from_one_node():
+    """redis-py's cluster client answers INFO from one node (a flat dict) or several ({node: dict})."""
+    from realy.infra import _one_node
+    flat = {"redis_version": "8.8.4", "maxmemory_policy": "noeviction"}
+    assert _one_node(flat) == flat
+    assert _one_node({"redis-c1:6379": flat, "redis-c2:6379": {"redis_version": "8.8.4"}}) == flat
+    assert _one_node(None) == {} and _one_node("x") == {}

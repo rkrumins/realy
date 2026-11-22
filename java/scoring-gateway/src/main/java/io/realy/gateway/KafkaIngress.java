@@ -298,7 +298,6 @@ public final class KafkaIngress implements AutoCloseable {
 
     /** Why an event cannot be scored (null: it can): the ids every decision needs. */
     static String invalid(TransactionEvent ev) {
-        if (ev.getEventId() == 0) return "event_id is 0 (not a payment event, or a garbled payload)";
         if (ev.getCustomerId() == 0) return "customer_id is 0 (the partition key)";
         if (ev.getEventTimeUs() == 0) return "event_time_us is 0";
         return null;

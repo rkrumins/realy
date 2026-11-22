@@ -4,7 +4,10 @@ Once you have built a decision service, from this repository or not, PulseBench 
 black box. The same scenarios, world, open-loop load, clock and completeness checks apply as for the
 bundled topologies, so your service's numbers sit next to theirs on the same host. PulseBench drives
 the load, collects every decision and audits it. Your service decides, and the run configures nothing on
-its path: no scoring config, model settings, online-store reset or Flink job.
+its path: no scoring config, model settings, online-store reset or Flink job. On a stack that also runs
+the bundled scorers, the run switches off whatever would consume the same events: gateway ingress over
+`bench.control`, and an inline Flink job, stopped with a savepoint. The decisions collected are then
+your service's alone, and any duplicate is counted.
 
 ## The contract
 

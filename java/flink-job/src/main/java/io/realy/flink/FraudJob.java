@@ -45,6 +45,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
  *   --parallelism N  --max-parallelism 128  --checkpoint-ms 10000  --buffer-timeout-ms 1  --exactly-once false
  *   --tolerable-checkpoint-failures 3  --checkpoint-timeout-ms 120000
  *   --async-capacity 1000  --scoring-config '{...proto3 JSON ScoringConfig...}'
+ *   --start-ms <epoch ms>  a fresh job's starting point (else the group's committed offsets, latest if none)
  * </pre>
  */
 public final class FraudJob {
@@ -62,7 +63,12 @@ public final class FraudJob {
                 // topics: the pipeline's (contracts/pipelines/<pipeline>.yaml), overridable per job
                 .setTopics(p.get("events-topic", io.realy.scoring.binding.PipelineBinding.current().topics.getOrDefault("events", "payments.events.raw")))
                 .setGroupId(p.get("group", "realy-flink-" + mode))
-                .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.LATEST))
+                // --start-ms (a fresh job): read from the job's submission time, so a restart before the first
+                // checkpoint re-reads what it had not checkpointed (a history replay) instead of skipping to the
+                // latest offset; otherwise the group's committed offsets (latest when it has none)
+                .setStartingOffsets(p.getLong("start-ms", 0L) > 0
+                        ? OffsetsInitializer.timestamp(p.getLong("start-ms", 0L))
+                        : OffsetsInitializer.committedOffsets(OffsetResetStrategy.LATEST))
                 .setDeserializer(new EventDeserializer(schemaYaml, !"features".equals(mode), !p.get("assemble", "").isBlank()))
                 .setProperty("fetch.max.wait.ms", "100")
                 .setProperty("fetch.min.bytes", "1")

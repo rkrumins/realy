@@ -45,6 +45,9 @@ await shoot("topologies-settings-dark", "dark", "/topologies?t=flink-inline", {
     await p.getByRole("tab", { name: /Settings by component/ }).click().catch(() => {});
   },
 });
+await shoot("topologies-external-light", "light", "/topologies?t=external", {
+  prepare: async (p) => { await p.locator("#detail").scrollIntoViewIfNeeded(); },
+});
 await shoot("topologies-mobile", "dark", "/topologies?need=multi_message", { width: 390, height: 844, mobile: true });
 await shoot("launch-explainer-dark", "dark", "/launch?scenario=flows-smoke", {
   prepare: async (p) => {

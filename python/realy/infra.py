@@ -24,7 +24,8 @@ from urllib.parse import urlparse
 
 TIMEOUT = float(os.environ.get("REALY_PREFLIGHT_TIMEOUT_S", "5"))
 BUNDLED_HOSTS = {"kafka", "redis", "clickhouse", "flink-jobmanager", "gateway", "mock-model", "localhost", "127.0.0.1",
-                 "realy-kafka-bootstrap", "realy-redis", "realy-clickhouse", "realy-gateway", "realy-mock-model"}
+                 "realy-kafka-bootstrap", "realy-redis", "realy-clickhouse", "realy-gateway", "realy-mock-model",
+                 "redis-c1", "redis-c2", "redis-c3"}   # the secured overlay's Redis Cluster nodes
 RANK = {"pass": 0, "skip": 0, "warn": 1, "fail": 2}
 
 
@@ -113,6 +114,13 @@ def check_kafka() -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------------------------------- Redis
+def _one_node(x: Any) -> dict[str, Any]:
+    """A cluster client answers INFO from one node (a flat dict) or from several ({node: dict}): one node's."""
+    if isinstance(x, dict) and x and all(isinstance(v, dict) for v in x.values()):
+        return next(iter(x.values()))
+    return x if isinstance(x, dict) else {}
+
+
 def check_redis() -> dict[str, Any]:
     from .common import redis_client
     u = redis_client.uri()
@@ -126,9 +134,18 @@ def check_redis() -> dict[str, Any]:
             t0 = time.perf_counter()
             r.ping()
             lat.append((time.perf_counter() - t0) * 1000)
-        info = r.info("server") if mode == "standalone" else next(iter(r.info("server").values()), {})
-        mem = r.info("memory") if mode == "standalone" else next(iter(r.info("memory").values()), {})
+        info, mem = _one_node(r.info("server")), _one_node(r.info("memory"))
         c.out["version"] = f"{info.get('redis_version', '?')} {mode}"
+        if mode == "cluster":
+            ci = _one_node(r.cluster_info())
+            primaries = len(r.get_primaries()) if hasattr(r, "get_primaries") else None
+            c.out["facts"].update({"cluster_state": ci.get("cluster_state"), "primaries": primaries,
+                                   "slots_assigned": ci.get("cluster_slots_assigned")})
+            ok = ci.get("cluster_state") == "ok" and str(ci.get("cluster_slots_assigned")) == "16384"
+            c.add("cluster", "pass" if ok else "fail",
+                  f"Redis Cluster: {primaries} primaries, state {ci.get('cluster_state')}, "
+                  f"{ci.get('cluster_slots_assigned')} of 16384 slots assigned",
+                  "" if ok else "form the cluster / assign every slot before a run (redis-cli --cluster check)")
         p99 = sorted(lat)[int(len(lat) * 0.99) - 1]
         c.out["facts"].update({"mode": mode, "tls": u.startswith("rediss://"), "ping_p50_ms": round(statistics.median(lat), 3),
                                "ping_p99_ms": round(p99, 3), "maxmemory_policy": mem.get("maxmemory_policy"),

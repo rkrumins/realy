@@ -5,7 +5,8 @@ topology needs, switching modes via stop-with-savepoint so keyed feature state (
 Which mode a topology needs is its runtime.flink_mode in contracts/topologies.yaml:
   features  -> the `features` job (writes entity blobs to the online store)
   both      -> inline scoring + online-store writes
-  none      -> no change (e.g. echo-kafka: the gateway echoes)
+  none      -> Flink is not part of the run (echo-kafka, external): a job that would score its events
+               (inline / both) is stopped with a savepoint; a features job is left running
 """
 from __future__ import annotations
 
@@ -246,6 +247,30 @@ def _stop_with_savepoint(c: httpx.Client, jid: str, log) -> str | None:
     return location
 
 
+SCORING_MODES = ("inline", "both")
+
+
+def stop_scoring_jobs(rest: str | None, log: Callable[[str], None] = print) -> list[str]:
+    """Stop (with a savepoint, so the state is kept) any bundled job that scores events (inline / both):
+    for a topology in which Flink does not decide (echo-kafka, external), such a job would consume the
+    events topic and publish decisions of its own next to the scorer under test. Returns what was stopped;
+    no Flink (unset or unreachable) is nothing to stop."""
+    if not rest:
+        return []
+    stopped = []
+    try:
+        with httpx.Client(base_url=rest, timeout=10) as c:
+            for j in _running(c):
+                mode = j["name"].removeprefix("realy-").split("+")[0]
+                if j["name"].startswith("realy-") and mode in SCORING_MODES:
+                    log(f"flink: stopping {j['name']} with savepoint (it would score this run's events too)")
+                    _stop_with_savepoint(c, j["jid"], log)
+                    stopped.append(j["name"])
+    except httpx.HTTPError as e:
+        log(f"flink: not reachable ({type(e).__name__}); nothing to stop")
+    return stopped
+
+
 def desired_mode(sc: Scenario) -> str | None:
     """The job mode the topology needs (contracts/topologies.yaml runtime.flink_mode; None: no Flink)."""
     from ..topologies import runtime
@@ -324,6 +349,10 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 args += ["--score-stages", "true"]   # a scored lifecycle stage is decided again (read-only)
             if mode == "features":
                 args += ["--assembled-topic", pipeline().topics["assembled"]]
+        if fresh and not savepoint:
+            # a fresh job reads from its submission time: a restart before its first checkpoint then re-reads
+            # the history replay sent after it started instead of skipping to the latest offset
+            args += ["--start-ms", str(int(time.time() * 1000))]
         # online-store blobs carrying aggregator state (exact gateway features); "none" = values only
         if os.environ.get("FLINK_STORE_STATE"):
             args += ["--store-state", os.environ["FLINK_STORE_STATE"]]

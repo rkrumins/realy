@@ -340,7 +340,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     return out
 
 
-EXTERNAL_NOTE = "your scorer's own (the external topology: PulseBench does not know how it decides)"
+EXTERNAL_NOTE = "decided by your scorer: PulseBench does not know how, so it cannot recompute it"
 
 
 def verify_external(run_dir: Path, sc: Scenario, dec: pa.Table, expected: int, clickhouse: str | None,
@@ -631,5 +631,6 @@ def render(v: dict[str, Any]) -> str:
                      f"rows {a['rows_including_duplicates']:,} -> {a['rows_after_replacing_merge']:,} after merge, "
                      f"visibility p50 {a['visibility_p50_ms']:.0f} ms p99 {a['visibility_p99_ms']:.0f} ms, "
                      f"training rows {a['training_rows']:,} ({a['training_fraud_labels']} fraud labels), "
-                     f"replay parity {a['replay_score_parity']:.2%} of {a['replay_checked']}")
+                     + (f"replay parity {a['replay_score_parity']:.2%} of {a['replay_checked']}" if a.get("replay_checked")
+                        else "score replay not checkable"))
     return "\n".join(lines)
