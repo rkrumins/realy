@@ -43,6 +43,8 @@ assemble:
     channel: { from: initiation.channel, map: { A2A_MOBILE_APP: IN_APP, A2A_ONLINE_BANKING: ONLINE_BANKING,
                                                  A2A_API: ONLINE_BANKING, A2A_BRANCH: POS } }
     entry_mode: { const: BANK_APP }
+    cvv_match: { const: true }       # not applicable to a transfer: the unified event reads them as passed
+    avs_match: { const: true }
     lat: initiation.lat
     lon: initiation.lon
     device_id: device.device_id
@@ -76,3 +78,48 @@ context:
   payee_changed:       { changed: payee_id, between: [initiation, submission] }
   amount_changed:      { changed: amount_usd_minor, between: [initiation, submission] }
   secs_to_submit:      { elapsed: [initiation, submission] }
+
+# How the synthetic generator expands each of its transfers into these messages (realy/gen/flows.py):
+# the unified transfer it already draws is exactly what the parts assemble back into. Delays are uniform
+# [min, max] ms from the initiation (authentication from the payee check, submission from the
+# authentication, status from the submission). Rates are probabilities; `fraud.<typology>` overrides them.
+generate:
+  payment_type: TRANSFER
+  delays_ms:
+    device: [-60, 40]
+    payee_check: [20, 80]
+    authentication: [3000, 30000]
+    submission: [500, 5000]
+    status: [1000, 10000]
+  rates:
+    device: 0.97                   # the app sends its device / session context at all
+    payee_check: 0.995             # the rest never answer: assembled partial at the wait
+    payee_result: { PAYEE_MATCH: 0.93, PAYEE_CLOSE_MATCH: 0.04, PAYEE_NO_MATCH: 0.015, PAYEE_NOT_CHECKED: 0.015 }
+    account_type_mismatch: 0.02
+    abandon: { PAYEE_NO_MATCH: 0.4, PAYEE_CLOSE_MATCH: 0.15 }   # warned of a mismatch, the customer gives up
+    new_payee: 0.08
+    remote_access: 0.002
+    on_call: 0.01
+    emulator: 0.0005
+    session_age_s: [20, 900]
+    sca_fail: 0.02                 # a failed first attempt (then retried once)
+    payee_changed: 0.0             # the submission names another payee (malware rewriting it)
+    status: { PAYMENT_SETTLED: 0.995, PAYMENT_REJECTED: 0.005 }
+  fraud:
+    app_scam_mule:
+      payee_result: { PAYEE_MATCH: 0.45, PAYEE_CLOSE_MATCH: 0.2, PAYEE_NO_MATCH: 0.3, PAYEE_NOT_CHECKED: 0.05 }
+      abandon: {}                  # coached by the scammer: proceeds despite the warning
+      new_payee: 0.9
+      on_call: 0.6
+      remote_access: 0.08
+    investment_scam:
+      payee_result: { PAYEE_MATCH: 0.6, PAYEE_CLOSE_MATCH: 0.15, PAYEE_NO_MATCH: 0.2, PAYEE_NOT_CHECKED: 0.05 }
+      abandon: {}
+      new_payee: 0.7
+      on_call: 0.3
+    account_takeover:
+      new_payee: 0.85
+      remote_access: 0.35
+      sca_fail: 0.3
+      payee_changed: 0.05
+      session_age_s: [2, 60]

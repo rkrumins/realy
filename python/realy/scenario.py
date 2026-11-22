@@ -117,6 +117,9 @@ class TrafficSpec(_Model):
     generators: int = 1              # emitter processes (shards of the customer population)
     sim_start: str = "2026-11-02T00:00:00Z"
     backfill_days: float = 0.0       # unpaced history replay before the measured run
+    # transactions formed by several linked messages (contracts/transactions): the generator sends each
+    # matching payment as its messages, which the pipeline assembles back into one transaction
+    flows: list[str] = Field(default_factory=list)
 
 
 class CampaignSpec(_Model):
@@ -207,7 +210,7 @@ class SyncSpec(_Model):
 # Scenario settings added after the fingerprints were pinned (contracts/testdata/golden/scenarios.json):
 # dotted paths left out of `Scenario.fingerprint()` while they equal their default. Every new setting is
 # added here (tests/test_golden_payments.py fails otherwise), so existing runs keep their policy_version.
-FINGERPRINT_OPTIONAL: tuple[str, ...] = ()
+FINGERPRINT_OPTIONAL: tuple[str, ...] = ("traffic.flows",)
 
 
 def _drop_if_default(d: dict[str, Any], base: dict[str, Any], path: str) -> None:

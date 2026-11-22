@@ -473,6 +473,16 @@ Source: `contracts/proto/realy/flows/v1/txn.proto`
 | 7 | `numbers` | `map<string, double>` | context values: numbers, bools (1/0), counts, seconds |
 | 8 | `assembled_at_us` | `sfixed64` | wall time it was assembled (the assembly wait is measured from the trigger's ingest) |
 
+### `TxnState`
+
+The assembler's state of one open transaction (Flink keyed state, keyed by the partition entity; internal, versioned by its own fields).
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `role` | `string` |  |
+| 2 | `payload` | `bytes` | the message as received |
+| 3 | `event_time_us` | `sfixed64` |  |
+
 ## `realy.payments.v1` (label.proto)
 
 Source: `contracts/proto/realy/payments/v1/label.proto`

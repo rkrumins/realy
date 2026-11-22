@@ -1,0 +1,11 @@
+{
+ "kinds": {
+  "assembled": 584,
+  "passthrough": 5416,
+  "stage": 581
+ },
+ "outputs": 6581,
+ "partial": 10,
+ "records": 8918,
+ "records_sha256": "943c7e5101129b14a54d4b29594f3965224f98ab667f7ff8e7de2ecb156fecd0"
+}

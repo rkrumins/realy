@@ -61,7 +61,9 @@ def test_generic_view_equals_the_payment_view_on_the_golden_events():
     c = event_type("payment").codec
     for i in range(t.num_rows):
         ev = {k: lists[k][i] for k in names}
-        assert c.view(ev) == event_view(ev) == event_view_legacy(ev), i
+        v = event_view(ev)
+        assert v.pop("txn")["transaction"] == ""             # a one-message payment: the default context
+        assert c.view(ev) == v == event_view_legacy(ev), i
 
 
 def test_absent_fields_read_their_proto3_default():

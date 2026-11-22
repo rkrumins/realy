@@ -67,6 +67,16 @@ class Generator:
         w = np.array([f.mix[k] for k in kinds], dtype=np.float64)
         self.bg_kinds = kinds
         self.bg_p = w / w.sum() if w.sum() > 0 else w
+        self.flows = None
+        if scenario.traffic.flows:
+            from ..bindings.transactions import transaction
+            from .flows import FlowExpander
+            if len(scenario.traffic.flows) != 1:
+                raise ValueError("one flow per run for now (traffic.flows)")
+            # a stream of its own (spawned children are index-keyed: the three above are unchanged)
+            r_flow = np.random.Generator(np.random.PCG64(ss.spawn(1)[0]))
+            self.flows = FlowExpander(transaction(scenario.traffic.flows[0]), r_flow,
+                                      self.reg.fraud_type_names(), shard)
         self.pending = make_chunk(0)
         self.seq = 0
         self.order = 1 << 40
@@ -135,6 +145,8 @@ class Generator:
         legit = self.legit.generate(max(0, n - n_due), t0, t1, order0=self.seq)
         batch = finalize(concat_chunks([legit, camp]), self.gen_id, self.seq, self.auth)
         self.seq += len(batch)
+        if self.flows is not None:
+            batch.records = self.flows.expand(batch.columns, batch.payloads, batch.keys, t1)
         return batch
 
     @property

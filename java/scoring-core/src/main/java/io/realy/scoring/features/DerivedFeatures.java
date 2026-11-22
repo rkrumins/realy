@@ -20,6 +20,12 @@ public final class DerivedFeatures {
      * derived functions read stream/profile features from {@code v}).
      */
     public static void compute(FeatureSchema schema, TransactionEvent e, CustomerAttrs attrs, float[] v) {
+        compute(schema, e, attrs, v, null);
+    }
+
+    /** {@code view}: the event's CEL view when the caller already has it (null: built here, once). */
+    public static void compute(FeatureSchema schema, TransactionEvent e, CustomerAttrs attrs, float[] v,
+                               java.util.Map<String, Object> view) {
         java.util.Map<String, Object> vars = null;
         for (FeatureSpec s : schema.features) {
             if (!s.isDerived()) continue;
@@ -30,7 +36,7 @@ public final class DerivedFeatures {
                 // expression reads them), so each expression sees every feature as it stands when it runs,
                 // exactly what the Python mirror's snapshot holds. (Copying all features into a map per
                 // expression cost ~0.1 ms of gateway CPU per event with six expressions.)
-                if (vars == null) vars = java.util.Map.of("event", EventView.of(e), "f", new FeatureMap(schema, v));
+                if (vars == null) vars = java.util.Map.of("event", view != null ? view : EventView.of(e), "f", new FeatureMap(schema, v));
                 v[s.index()] = (float) s.expr().eval(vars);
             } else {
                 v[s.index()] = (float) value(schema, s.fn(), e, attrs, v);

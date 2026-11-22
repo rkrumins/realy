@@ -19,3 +19,28 @@ message TxnContext {
   map<string, double> numbers = 7; // context values: numbers, bools (1/0), counts, seconds
   sfixed64 assembled_at_us = 8;    // wall time it was assembled (the assembly wait is measured from the trigger's ingest)
 }
+
+// The assembler's state of one open transaction (Flink keyed state, keyed by the partition entity;
+// internal, versioned by its own fields).
+message TxnState {
+  message Part {
+    string role = 1;
+    bytes payload = 2;             // the message as received
+    sfixed64 event_time_us = 3;
+  }
+  string transaction = 1;
+  fixed64 txn_id = 2;
+  repeated Part latest = 3;        // the latest message of each role that arrived
+  repeated Part first = 4;         // the first message of each role (changed / elapsed context)
+  map<string, uint32> counts = 5;
+  uint32 arrived = 6;              // bit per role
+  bool assembled = 7;
+  bool partial = 8;
+  string stage = 9;
+  sfixed64 trigger_time_us = 10;   // event time of the trigger (0 = not arrived)
+  sfixed64 deadline_wall_us = 11;  // wall time the wait for required parts expires
+  bytes trigger_trace = 12;        // the trigger's x-bench-trace: the decision is timed from it
+  sfixed64 trigger_ingest_us = 13;
+  bool backfill = 14;              // history: assembled into state, never scored
+  repeated Part held = 15;         // lifecycle messages that arrived before assembly
+}

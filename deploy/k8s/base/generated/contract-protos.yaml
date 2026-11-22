@@ -345,7 +345,22 @@ data:
     \ = 6; // context values: enums by name, strings\n  map<string, double> numbers\
     \ = 7; // context values: numbers, bools (1/0), counts, seconds\n  sfixed64 assembled_at_us\
     \ = 8;    // wall time it was assembled (the assembly wait is measured from the\
-    \ trigger's ingest)\n}\n"
+    \ trigger's ingest)\n}\n\n// The assembler's state of one open transaction (Flink\
+    \ keyed state, keyed by the partition entity;\n// internal, versioned by its own\
+    \ fields).\nmessage TxnState {\n  message Part {\n    string role = 1;\n    bytes\
+    \ payload = 2;             // the message as received\n    sfixed64 event_time_us\
+    \ = 3;\n  }\n  string transaction = 1;\n  fixed64 txn_id = 2;\n  repeated Part\
+    \ latest = 3;        // the latest message of each role that arrived\n  repeated\
+    \ Part first = 4;         // the first message of each role (changed / elapsed\
+    \ context)\n  map<string, uint32> counts = 5;\n  uint32 arrived = 6;         \
+    \     // bit per role\n  bool assembled = 7;\n  bool partial = 8;\n  string stage\
+    \ = 9;\n  sfixed64 trigger_time_us = 10;   // event time of the trigger (0 = not\
+    \ arrived)\n  sfixed64 deadline_wall_us = 11;  // wall time the wait for required\
+    \ parts expires\n  bytes trigger_trace = 12;        // the trigger's x-bench-trace:\
+    \ the decision is timed from it\n  sfixed64 trigger_ingest_us = 13;\n  bool backfill\
+    \ = 14;              // history: assembled into state, never scored\n  repeated\
+    \ Part held = 15;         // lifecycle messages that arrived before assembly\n\
+    }\n"
   realy__payments__v1__label.proto: "// Ground-truth labels. Never embedded in TransactionEvent\
     \ (no leakage); published on\n// `payments.labels` with a simulated chargeback\
     \ / report delay.\nsyntax = \"proto3\";\n\npackage realy.payments.v1;\n\noption\

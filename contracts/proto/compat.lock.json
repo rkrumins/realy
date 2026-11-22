@@ -952,6 +952,20 @@
    "type": "sfixed64"
   }
  },
+ "realy.flows.v1.TxnState": {
+  "1": {
+   "name": "role",
+   "type": "string"
+  },
+  "2": {
+   "name": "payload",
+   "type": "bytes"
+  },
+  "3": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  }
+ },
  "realy.payments.v1.CardType": {
   "0": {
    "name": "CARD_TYPE_UNSPECIFIED"

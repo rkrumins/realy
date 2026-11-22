@@ -124,6 +124,68 @@ def write(out: Path = OUT, n_events: int = N_EVENTS) -> dict[str, Any]:
     return manifest
 
 
+FLOWS = REPO_ROOT / "contracts" / "testdata" / "golden" / "flows"
+
+
+def generate_flows(n_batches: int = 30):
+    """A stream of card payments and account-to-account transfers sent as their messages (a2a_transfer),
+    with APP scams and account takeover in it: every record in the order the pipeline receives it."""
+    from .gen.generator import Generator, sim_start_us
+    from .world import build_world
+    sc = Scenario(name="golden-flows", seed=SEED, world=SPEC, traffic={"flows": ["a2a_transfer"]},
+                  fraud={"background_per_1k": 8.0, "mix": {"app_scam_mule": 1.0, "account_takeover": 1.0,
+                                                           "investment_scam": 0.5}})
+    g = Generator(build_world(SPEC, SEED, None), sc, 0, 1)
+    t = sim_start_us(sc)
+    dt = int(200 / g.natural_rate_per_sim_s() * 1e6)
+    records = []
+    for _ in range(n_batches):
+        records += g.generate(200, t, t + dt).records
+        t += dt
+    return records + g.flows.drain()
+
+
+def write_flows(out: Path = FLOWS) -> dict[str, Any]:
+    """records.bin.gz: (u16 type length, type, u32 payload length, payload)* in arrival order ("" type =
+    the unified payment event); expected.jsonl.gz: what the reference assembler emits, in order."""
+    from .bindings import event_type
+    from .bindings.codec import message_class
+    from .bindings.transactions import Assembler, transaction
+    out.mkdir(parents=True, exist_ok=True)
+    records = generate_flows()
+    a = Assembler([transaction("a2a_transfer")])
+    pay = event_type("payment").codec
+    pay_cls = message_class(pay.full_name)
+    expected = []
+
+    def emit(outs):
+        for o in outs:
+            row = {f.name: (o.row[f.name].item() if hasattr(o.row[f.name], "item") else o.row[f.name])
+                   for f in pay.fields}
+            expected.append({"kind": o.kind, "event_id": int(row["event_id"]), "transaction": o.transaction,
+                             "stage": o.stage, "parts_present": o.parts_present, "partial": o.partial,
+                             "read_only": o.read_only, "event": pay_cls(**row).SerializeToString().hex(),
+                             "context": o.context})
+    with gzip.GzipFile(out / "records.bin.gz", "wb", mtime=0) as f:
+        for r in records:
+            t = r.type.encode()
+            f.write(struct.pack("<H", len(t)) + t + struct.pack("<I", len(r.payload)) + r.payload)
+            c = event_type(r.type or "payment").codec
+            emit(a.process(r.type or "payment", c.row(message_class(c.full_name).FromString(r.payload))))
+    emit(a.close())
+    with gzip.GzipFile(out / "expected.jsonl.gz", "wb", mtime=0) as f:
+        for e in expected:
+            f.write((json.dumps(e, sort_keys=True) + "\n").encode())
+    kinds = {}
+    for e in expected:
+        kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
+    man = {"records": len(records), "outputs": len(expected), "kinds": kinds,
+           "partial": sum(1 for e in expected if e["partial"]),
+           "records_sha256": hashlib.sha256(b"".join(r.payload for r in records)).hexdigest()}
+    (out / "manifest.json").write_text(json.dumps(man, indent=1, sort_keys=True) + "\n")
+    return man
+
+
 SCENARIOS = REPO_ROOT / "contracts" / "testdata" / "golden" / "scenarios.json"
 
 
@@ -155,7 +217,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--events", type=int, default=N_EVENTS)
     ap.add_argument("--scenarios", action="store_true", help="re-pin the bundled scenarios' fingerprints")
+    ap.add_argument("--flows", action="store_true", help="rebuild the golden multi-message transaction stream")
     a = ap.parse_args(argv)
+    if a.flows:
+        print(json.dumps(write_flows(), indent=1))
+        return
     if a.scenarios:
         SCENARIOS.write_text(json.dumps(scenario_pins(), indent=1, sort_keys=True) + "\n")
         print(f"pinned {SCENARIOS}")

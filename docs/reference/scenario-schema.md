@@ -50,6 +50,7 @@ A scenario is one YAML file in `scenarios/` (or saved from the console's builder
 | `generators` | `int` | `1` | emitter processes (shards of the customer population) |
 | `sim_start` | `str` | `"2026-11-02T00:00:00Z"` |  |
 | `backfill_days` | `float` | `0.0` | unpaced history replay before the measured run |
+| `flows` | `list[str]` | `[]` | transactions formed by several linked messages (contracts/transactions): the generator sends each matching payment as its messages, which the pipeline assembles back into one transaction |
 
 ## `traffic.profile` - RateProfile
 

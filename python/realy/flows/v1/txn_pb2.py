@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x18realy/flows/v1/txn.proto\x12\x0erealy.flows.v1\"\xd5\x02\n\nTxnContext\x12\x13\n\x0btransaction\x18\x01 \x01(\t\x12\x0e\n\x06txn_id\x18\x02 \x01(\x06\x12\r\n\x05stage\x18\x03 \x01(\t\x12\x15\n\rparts_present\x18\x04 \x01(\r\x12\x0f\n\x07partial\x18\x05 \x01(\x08\x12\x38\n\x07strings\x18\x06 \x03(\x0b\x32\'.realy.flows.v1.TxnContext.StringsEntry\x12\x38\n\x07numbers\x18\x07 \x03(\x0b\x32\'.realy.flows.v1.TxnContext.NumbersEntry\x12\x17\n\x0f\x61ssembled_at_us\x18\x08 \x01(\x10\x1a.\n\x0cStringsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a.\n\x0cNumbersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x01:\x02\x38\x01\x42\x1f\n\x1bio.realy.contracts.flows.v1P\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x18realy/flows/v1/txn.proto\x12\x0erealy.flows.v1\"\xd5\x02\n\nTxnContext\x12\x13\n\x0btransaction\x18\x01 \x01(\t\x12\x0e\n\x06txn_id\x18\x02 \x01(\x06\x12\r\n\x05stage\x18\x03 \x01(\t\x12\x15\n\rparts_present\x18\x04 \x01(\r\x12\x0f\n\x07partial\x18\x05 \x01(\x08\x12\x38\n\x07strings\x18\x06 \x03(\x0b\x32\'.realy.flows.v1.TxnContext.StringsEntry\x12\x38\n\x07numbers\x18\x07 \x03(\x0b\x32\'.realy.flows.v1.TxnContext.NumbersEntry\x12\x17\n\x0f\x61ssembled_at_us\x18\x08 \x01(\x10\x1a.\n\x0cStringsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a.\n\x0cNumbersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x01:\x02\x38\x01\"\x97\x04\n\x08TxnState\x12\x13\n\x0btransaction\x18\x01 \x01(\t\x12\x0e\n\x06txn_id\x18\x02 \x01(\x06\x12-\n\x06latest\x18\x03 \x03(\x0b\x32\x1d.realy.flows.v1.TxnState.Part\x12,\n\x05\x66irst\x18\x04 \x03(\x0b\x32\x1d.realy.flows.v1.TxnState.Part\x12\x34\n\x06\x63ounts\x18\x05 \x03(\x0b\x32$.realy.flows.v1.TxnState.CountsEntry\x12\x0f\n\x07\x61rrived\x18\x06 \x01(\r\x12\x11\n\tassembled\x18\x07 \x01(\x08\x12\x0f\n\x07partial\x18\x08 \x01(\x08\x12\r\n\x05stage\x18\t \x01(\t\x12\x17\n\x0ftrigger_time_us\x18\n \x01(\x10\x12\x18\n\x10\x64\x65\x61\x64line_wall_us\x18\x0b \x01(\x10\x12\x15\n\rtrigger_trace\x18\x0c \x01(\x0c\x12\x19\n\x11trigger_ingest_us\x18\r \x01(\x10\x12\x10\n\x08\x62\x61\x63kfill\x18\x0e \x01(\x08\x12+\n\x04held\x18\x0f \x03(\x0b\x32\x1d.realy.flows.v1.TxnState.Part\x1a<\n\x04Part\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07payload\x18\x02 \x01(\x0c\x12\x15\n\revent_time_us\x18\x03 \x01(\x10\x1a-\n\x0b\x43ountsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\r:\x02\x38\x01\x42\x1f\n\x1bio.realy.contracts.flows.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,10 +36,18 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_TXNCONTEXT_STRINGSENTRY']._serialized_options = b'8\001'
   _globals['_TXNCONTEXT_NUMBERSENTRY']._loaded_options = None
   _globals['_TXNCONTEXT_NUMBERSENTRY']._serialized_options = b'8\001'
+  _globals['_TXNSTATE_COUNTSENTRY']._loaded_options = None
+  _globals['_TXNSTATE_COUNTSENTRY']._serialized_options = b'8\001'
   _globals['_TXNCONTEXT']._serialized_start=45
   _globals['_TXNCONTEXT']._serialized_end=386
   _globals['_TXNCONTEXT_STRINGSENTRY']._serialized_start=292
   _globals['_TXNCONTEXT_STRINGSENTRY']._serialized_end=338
   _globals['_TXNCONTEXT_NUMBERSENTRY']._serialized_start=340
   _globals['_TXNCONTEXT_NUMBERSENTRY']._serialized_end=386
+  _globals['_TXNSTATE']._serialized_start=389
+  _globals['_TXNSTATE']._serialized_end=924
+  _globals['_TXNSTATE_PART']._serialized_start=817
+  _globals['_TXNSTATE_PART']._serialized_end=877
+  _globals['_TXNSTATE_COUNTSENTRY']._serialized_start=879
+  _globals['_TXNSTATE_COUNTSENTRY']._serialized_end=924
 # @@protoc_insertion_point(module_scope)

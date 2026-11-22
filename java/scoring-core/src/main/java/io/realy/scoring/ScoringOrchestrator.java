@@ -44,11 +44,20 @@ public final class ScoringOrchestrator {
     public static final int FB_MODEL_TIMEOUT = 3;
     public static final int FB_MODEL_ERROR = 4;
 
+    /**
+     * @param txn the context of the multi-message transaction the event was assembled from (CEL
+     *            {@code event.txn}, recorded on the decision); null for a one-message payment
+     */
     public record Request(TransactionEvent event, BenchTrace.Builder trace, long ingestUs, IngressMode mode,
                           float[] precomputed, long filterMask, long deadlineOverrideUs,
-                          Consumer<DecisionRecord> onFinal) {
+                          Consumer<DecisionRecord> onFinal, io.realy.contracts.flows.v1.TxnContext txn) {
+        public Request(TransactionEvent event, BenchTrace.Builder trace, long ingestUs, IngressMode mode,
+                       float[] precomputed, long filterMask, long deadlineOverrideUs, Consumer<DecisionRecord> onFinal) {
+            this(event, trace, ingestUs, mode, precomputed, filterMask, deadlineOverrideUs, onFinal, null);
+        }
+
         public static Request of(TransactionEvent e, BenchTrace.Builder trace, long ingestUs, IngressMode mode) {
-            return new Request(e, trace, ingestUs, mode, null, -1, 0, null);
+            return new Request(e, trace, ingestUs, mode, null, -1, 0, null, null);
         }
     }
 
@@ -114,7 +123,7 @@ public final class ScoringOrchestrator {
         }
         long budgetUs = r.deadlineOverrideUs() > 0 ? r.deadlineOverrideUs() : c.a.cfg().getBudgetMs() * 1000L;
         c.deadlineUs = (r.ingestUs() > 0 ? r.ingestUs() : start) + budgetUs;
-        c.view = EventView.of(r.event());
+        c.view = EventView.of(r.event(), io.realy.scoring.binding.TxnContexts.view(r.txn()));
         c.mask = r.filterMask() >= 0 ? r.filterMask() : filters.mask(c.view);
 
         // ---------------------------------------------------------------- 1. feature lookup
@@ -135,7 +144,7 @@ public final class ScoringOrchestrator {
                 c.fallbackReason = isTimeout(err) ? FB_FEATURE_TIMEOUT : FB_FEATURE_ERROR;
                 blobs = null;
             }
-            c.features = assembler.assemble(r.event(), c.mask, r.precomputed(), lk, blobs, c.a.cfg().getSelfInclusion());
+            c.features = assembler.assemble(r.event(), c.mask, r.precomputed(), lk, blobs, c.a.cfg().getSelfInclusion(), c.view);
             var m = metrics;
             if (m != null) {
                 m.add("store_read_bytes", c.features.storeBytes());
@@ -271,6 +280,7 @@ public final class ScoringOrchestrator {
                 .setRevision(revision)
                 .setEvent(r.event())
                 .setFeatureSchemaVersion(schema.version);
+        if (r.txn() != null) b.setTxn(r.txn());
         for (RuleSet.Hit h : hits) b.addRuleHits(RuleHit.newBuilder().setRuleId(h.id()).setAction(h.action()).setReason(h.reason()));
         if (res != null) {
             b.setModel(ModelResult.newBuilder().setModelName(res.modelName()).setModelVersion(res.modelVersion())

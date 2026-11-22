@@ -42,7 +42,9 @@ class BindingTest {
         var plan = FeatureSchema.load().rowPlan();
         for (TransactionEvent e : events) {
             Object[] v = c.decode(e.toByteArray());
-            assertThat(c.view(v)).as("event " + e.getEventId()).isEqualTo(EventView.of(e));
+            var legacy = new java.util.HashMap<>(EventView.of(e));
+            assertThat(legacy.remove("txn")).isEqualTo(io.realy.scoring.binding.TxnContexts.defaults());
+            assertThat(c.view(v)).as("event " + e.getEventId()).isEqualTo(legacy);
             EventRow g = plan.row(b, c, v);
             EventRow r = plan.row(e);
             assertThat(g.eventId).isEqualTo(r.eventId);
@@ -62,6 +64,8 @@ class BindingTest {
         var view = c.view(raw);
         assertThat(view.get("payment_type")).isEqualTo("42");
         assertThat(EventView.of(TransactionEvent.parseFrom(raw)).get("payment_type")).isEqualTo("42");
+        assertThat(((java.util.Map<?, ?>) EventView.of(TransactionEvent.parseFrom(raw)).get("txn")).get("payee_check"))
+                .isEqualTo("PAYEE_CHECK_UNSPECIFIED");
         assertThat(view.get("three_ds")).isEqualTo("THREE_DS_NONE");
         assertThat(view.get("merchant_country")).isEqualTo("");
         assertThat(view.get("lat")).isEqualTo(0.0d);

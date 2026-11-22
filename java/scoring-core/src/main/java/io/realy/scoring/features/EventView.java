@@ -14,7 +14,17 @@ public final class EventView {
     private EventView() {}
 
     public static Map<String, Object> of(TransactionEvent e) {
+        return of(e, io.realy.scoring.binding.TxnContexts.defaults());
+    }
+
+    /**
+     * The view with {@code event.txn}: the context of the multi-message transaction the event was
+     * assembled from ({@link io.realy.scoring.binding.TxnContexts#view}), or the defaults for a
+     * one-message payment.
+     */
+    public static Map<String, Object> of(TransactionEvent e, Map<String, Object> txn) {
         Map<String, Object> m = new HashMap<>(48);
+        m.put("txn", txn);
         m.put("event_id", e.getEventId());
         m.put("event_time_us", e.getEventTimeUs());
         m.put("payment_type", name(e.getPaymentType(), e.getPaymentTypeValue()));

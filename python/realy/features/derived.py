@@ -30,11 +30,26 @@ ENUMS = {"payment_type": PAYMENT_TYPE, "channel": CHANNEL, "entry_mode": ENTRY_M
          "three_ds": THREE_DS}
 
 
-def event_view(ev: dict) -> dict[str, Any]:
+def event_view(ev: dict, txn: dict | None = None) -> dict[str, Any]:
     """CEL `event` binding of a payment: the generic codec of its protobuf message (realy.bindings): enums
     by name, integers as int (uint64 as signed 64-bit), bools, doubles, strings; a field the row lacks (an
-    event logged before it existed) reads its proto3 default. Mirrors EventView.java."""
-    return _PAYMENT.view(ev)
+    event logged before it existed) reads its proto3 default. `event.txn` is the context of the
+    multi-message transaction it was assembled from (realy.bindings.transactions), or the default context
+    of every contract for a one-message payment, so expressions over it never fail. Mirrors EventView.java."""
+    v = _PAYMENT.view(ev)
+    v["txn"] = txn if txn is not None else (ev.get("txn") or _default_txn())
+    return v
+
+
+def _default_txn() -> dict[str, Any]:
+    global _DEFAULT_TXN
+    if _DEFAULT_TXN is None:
+        from ..bindings.transactions import default_context
+        _DEFAULT_TXN = default_context()
+    return _DEFAULT_TXN
+
+
+_DEFAULT_TXN: dict[str, Any] | None = None
 
 
 _PAYMENT = _payment_codec()

@@ -7,6 +7,7 @@ import io.realy.contracts.payments.v1.TransactionEvent;
 import io.realy.scoring.store.StoreBlob;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Builds the model input vector in canonical schema order from (a) stream features — computed
@@ -82,6 +83,12 @@ public final class FeatureAssembler {
      */
     public Assembled assemble(TransactionEvent e, long filterMask, float[] precomputed, Lookup lk, byte[][] blobs,
                               boolean selfInclusion) {
+        return assemble(e, filterMask, precomputed, lk, blobs, selfInclusion, null);
+    }
+
+    /** {@code view}: the event's CEL view (event.txn included), shared with the rules; null builds one. */
+    public Assembled assemble(TransactionEvent e, long filterMask, float[] precomputed, Lookup lk, byte[][] blobs,
+                              boolean selfInclusion, Map<String, Object> view) {
         int n = schema.size();
         float[] v = precomputed != null ? precomputed.clone() : new float[n];
         byte[] missing = new byte[(n + 7) / 8];
@@ -139,7 +146,7 @@ public final class FeatureAssembler {
             }
             if (EventView.entityKey(e, ent) != 0) fresh.add(freshness(ent, FeatureSource.PROFILE, blob));
         }
-        DerivedFeatures.compute(schema, e, attrs, v);
+        DerivedFeatures.compute(schema, e, attrs, v, view);
         return new Assembled(v, missing, fresh, attrs, storeBytes, stateReads);
     }
 
