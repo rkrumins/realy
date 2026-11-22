@@ -45,21 +45,58 @@ def edge(a: str, b: str, label: str = "", rate=None, p99=None, bulk=None) -> dic
     return out
 
 
-def build(topology: str) -> dict[str, Any]:
+def build(topology: str, flows: bool = False) -> dict[str, Any]:
+    """The map of `topology`; `flows`: the run has multi-message transactions, so Flink assembles them
+    first (and, on gateway-kafka, publishes them to the assembled topic the gateway consumes)."""
     if topology not in TOPOLOGIES:
         raise HTTPException(400, f"topology must be one of {TOPOLOGIES}")
     emitted = _c("emitter", "emitted")
     decided = _c("collector", "decided")
     n: list[dict] = []
     e: list[dict] = []
+    flows = bool(flows) and topology in ("gateway-kafka", "flink-inline")
+    if topology == "gateway-kafka" and flows:
+        n += [node("emitter", "Emitter", "driver", 0, 1, emitted, _s("emitter", "schedule_lag"), "open-loop, paced"),
+              node("events", "events.raw", "kafka", 1, 1, emitted, _s("emitter", "produce_ack"), "messages, by customer"),
+              node("assemble", "Flink assembler", "flink", 2, 1, _c("flink", "txn_parts"), _s("collector", "txn_assembly"),
+                   "parts into transactions"),
+              node("flink", "Flink features", "flink", 3, 0, _s("flink", "state_card"), _s("flink", "store_update_lag"),
+                   "keyed stages"),
+              node("assembled", "events.assembled", "kafka", 3, 1, None, None, "one more Kafka hop"),
+              node("redis", "Redis", "store", 4, 0, _s("flink", "feature_store_write"), _s("gateway", "feature_lookup"),
+                   "online store"),
+              node("gateway", "Scoring gateway", "service", 4, 1, _c("gateway", "decisions"), _s("gateway", "hot_path"),
+                   "Kafka ingress"),
+              node("model", "Model server", "model", 5, 2, _c("model", "requests"), _s("gateway", "model_call"), "KServe v2"),
+              node("decisions", "decisions", "kafka", 5, 1, _c("gateway", "decisions"), _s("gateway", "audit_ack"),
+                   "audit WAL (acks=all)"),
+              node("collector", "Collector", "driver", 6, 1, decided, _s("collector", "e2e"), "end to end"),
+              node("clickhouse", "ClickHouse", "sink", 6, 2, None, None, "async audit")]
+        e += [edge("emitter", "events", "produce", emitted), edge("events", "assemble", "consume"),
+              edge("assemble", "flink", "features"), edge("assemble", "assembled", "publish"),
+              edge("assembled", "gateway", "consume", _s("collector", "ingress"), _s("collector", "ingress")),
+              edge("flink", "redis", "write", _s("flink", "feature_store_write"), _s("flink", "feature_store_write"),
+                   bulk=_s("flink", "feature_store_write_backfill")),
+              edge("redis", "gateway", "lookup", None, _s("gateway", "feature_lookup")),
+              edge("gateway", "model", "infer", _c("model", "requests"), _s("gateway", "model_call")),
+              edge("gateway", "decisions", "audit", _c("gateway", "decisions"), _s("gateway", "audit_ack")),
+              edge("decisions", "collector", "consume", decided, _s("collector", "egress")),
+              edge("decisions", "clickhouse", "Kafka engine")]
+        return {"topology": topology, "flows": True, "nodes": n, "edges": e}
     if topology == "flink-inline":
         ents = load_schema().stream_entities()
         n += [node("emitter", "Emitter", "driver", 0, 1, emitted, _s("emitter", "schedule_lag"), "open-loop, paced"),
-              node("events", "events.raw", "kafka", 1, 1, emitted, _s("emitter", "produce_ack"), "Kafka topic")]
+              node("events", "events.raw", "kafka", 1, 1, emitted, _s("emitter", "produce_ack"),
+                   "messages, by customer" if flows else "Kafka topic")]
+        first = 2
+        if flows:
+            n.append(node("assemble", "Flink assembler", "flink", 2, 1, _c("flink", "txn_parts"),
+                          _s("collector", "txn_assembly"), "parts into transactions"))
+            first = 3
         for i, ent in enumerate(ents):
-            n.append(node(f"flink-{ent}", f"keyBy {ent}", "flink", 2 + i // 4, i % 4,
+            n.append(node(f"flink-{ent}", f"keyBy {ent}", "flink", first + i // 4, i % 4,
                           _s("flink", f"state_{ent}"), _s("flink", f"state_{ent}"), "RocksDB state"))
-        col = 2 + (len(ents) - 1) // 4 + 1
+        col = first + (len(ents) - 1) // 4 + 1
         n += [node("score", "Async scoring", "flink", col, 1, _c("flink", "decisions"), _s("flink", "hot_path"),
                    "orchestrator"),
               node("redis", "Redis", "store", col, 0, _s("collector", "feature_lookup"), _s("collector", "feature_lookup"),
@@ -71,6 +108,9 @@ def build(topology: str) -> dict[str, Any]:
               node("clickhouse", "ClickHouse", "sink", col + 2, 2, None, None, "async audit")]
         e.append(edge("emitter", "events", "produce", emitted))
         prev = "events"
+        if flows:
+            e.append(edge("events", "assemble", "consume"))
+            prev = "assemble"
         for ent in ents:
             e.append(edge(prev, f"flink-{ent}", "keyBy", _s("flink", f"shuffle_{ent}"), _s("flink", f"shuffle_{ent}")))
             prev = f"flink-{ent}"
@@ -120,9 +160,9 @@ def build(topology: str) -> dict[str, Any]:
               edge("gateway", "decisions", "audit", _c("gateway", "decisions"), _s("gateway", "audit_ack")),
               edge("decisions", "collector", "consume", decided, _s("collector", "egress")),
               edge("decisions", "clickhouse", "Kafka engine")]
-    return {"topology": topology, "nodes": n, "edges": e}
+    return {"topology": topology, "flows": flows, "nodes": n, "edges": e}
 
 
 @router.get("/api/topology")
-def topology(topology: str = "gateway-kafka") -> dict[str, Any]:
-    return build(topology)
+def topology(topology: str = "gateway-kafka", flows: bool = False) -> dict[str, Any]:
+    return build(topology, flows)

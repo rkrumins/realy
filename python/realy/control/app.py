@@ -151,7 +151,16 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             except (OSError, ValueError):
                 topology = None
         probes.active = phase in ACTIVE_PHASES
-        return pipeline_status(runs_dir, run_id, phase, topology, probes.data, build_topology, hub.silence())
+        flows = bool(cur.get("flows")) if cur.get("run_id") == run_id and "flows" in cur else _run_has_flows(run_id)
+        return pipeline_status(runs_dir, run_id, phase, topology, probes.data,
+                               lambda t: build_topology(t, flows), hub.silence())
+
+    def _run_has_flows(run_id: str | None) -> bool:
+        """The run sends multi-message transactions (its map has the assembly hop)."""
+        if not run_id:
+            return False
+        sc = _json(runs_dir / run_id / "scenario.json") or {}
+        return bool((sc.get("traffic") or {}).get("flows"))
 
     remote_cache: dict[str, Any] = {}
     log_tail: dict[str, int] = {}
@@ -178,7 +187,8 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                 "topology": man.get("topology") or sc.get("topology"),
                 "duration_s": man.get("duration_s") or (sc.get("traffic") or {}).get("duration_s"),
                 "warmup_s": man.get("warmup_s") if man.get("warmup_s") is not None else (sc.get("traffic") or {}).get("warmup_s"),
-                "base_tps": base, "budget": sc.get("budget")}}
+                "base_tps": base, "budget": sc.get("budget"),
+                "flows": list((sc.get("traffic") or {}).get("flows") or [])}}
         hb = _json(rd / "heartbeat") or {}
         phase = hb.get("phase") or lease.get("phase") or "PREPARE"
         return {"job_id": None, "run_id": rid, "scenario": lease.get("scenario") or hit["man"].get("scenario"),
@@ -294,19 +304,38 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         except ValidationError as e:
             raise HTTPException(400, {"errors": json.loads(e.json())}) from e
 
+    from ..scenario import REPO_ROOT as _ROOT
+    from . import scenario_seed
+    bundled_dir = _ROOT / "scenarios"
+    separate = bundled_dir.resolve() != scenario_dir.resolve()   # the console's writable copy (a volume)
+
     @app.get("/api/scenarios")
     def list_scenarios() -> list[dict[str, Any]]:
         out = []
+        flags = scenario_seed.status(bundled_dir, scenario_dir) if separate else {}
         for p in sorted(scenario_dir.glob("*.yaml")):
             text = p.read_text()
             try:
                 d = yaml.safe_load(text) or {}
             except yaml.YAMLError:
                 d = {}
+            f = flags.get(p.stem) or {"bundled": not separate or (bundled_dir / p.name).exists(), "edited": False,
+                                      "update_available": False}
             out.append({"name": p.stem, "topology": d.get("topology"), "description": d.get("description", ""),
                         "tps": ((d.get("traffic") or {}).get("profile") or {}).get("tps"),
-                        "duration_s": (d.get("traffic") or {}).get("duration_s"), "yaml": text})
+                        "duration_s": (d.get("traffic") or {}).get("duration_s"),
+                        "flows": (d.get("traffic") or {}).get("flows") or [], "yaml": text, **f})
         return out
+
+    @app.post("/api/scenarios/{name}/reset")
+    def reset_scenario(name: str) -> dict[str, Any]:
+        """Restore a bundled scenario to the version in this image (the edited copy is kept in .backup/)."""
+        _scenario_path(name)
+        if not separate:
+            raise HTTPException(400, "scenarios are read from the bundled directory itself: nothing to reset")
+        if not scenario_seed.reset(bundled_dir, scenario_dir, name):
+            raise HTTPException(404, f"{name} is not a bundled scenario")
+        return {"ok": True, "name": name}
 
     @app.get("/api/scenarios/{name}")
     def get_scenario(name: str) -> dict[str, Any]:
@@ -325,6 +354,8 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
     def put_scenario(name: str, body: ScenarioText) -> dict[str, Any]:
         sc = _validate(body.yaml, name)
         _scenario_path(name).write_text(body.yaml if body.yaml.endswith("\n") else body.yaml + "\n")
+        if separate:
+            scenario_seed.mark_edited(scenario_dir, name)   # an upgrade never overwrites it
         return {"ok": True, "name": name, "scenario": sc.model_dump(mode="json")}
 
     @app.post("/api/scenarios/{name}/budget")
@@ -397,6 +428,48 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                     h["phase"] = cur["phase"]
         return {"queue": store.queued(), "jobs": jobs[:50], "history": history, "current": cur,
                 "blocked_by": st["blocked_by"], "lease": _lease_holder()}
+
+    @app.get("/api/topologies")
+    def topologies(limit: int = 300) -> dict[str, Any]:
+        """Every topology: how it is built, what it can and cannot do, its limits and enhancements
+        (contracts/topologies.yaml), the scenarios that run it, its latest runs on this stack, and advice
+        from the latest finished one (with the evidence behind each item)."""
+        from ..topologies import load as load_topologies
+        from ..topologies import run_advice
+        doc = load_topologies()
+        scen: dict[str, list[dict[str, Any]]] = {}
+        for p in sorted(scenario_dir.glob("*.yaml")):
+            try:
+                d = yaml.safe_load(p.read_text()) or {}
+            except yaml.YAMLError:
+                continue
+            scen.setdefault(d.get("topology") or "gateway-kafka", []).append(
+                {"name": p.stem, "description": d.get("description", ""),
+                 "flows": (d.get("traffic") or {}).get("flows") or [],
+                 "tps": ((d.get("traffic") or {}).get("profile") or {}).get("tps")})
+        dirs = sorted((d for d in runs_dir.iterdir() if d.is_dir() and (d / "manifest.json").exists()),
+                      key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
+        by_topo: dict[str, list[dict[str, Any]]] = {}
+        for d in dirs:
+            sm = _summary(d)
+            if sm.get("verdict") and sm.get("topology"):
+                by_topo.setdefault(sm["topology"], []).append(sm)
+        out = []
+        for tid, t in (doc.get("topologies") or {}).items():
+            runs = by_topo.get(tid, [])
+            latest = runs[0] if runs else None
+            advice = []
+            if latest:
+                rd = runs_dir / latest["run_id"]
+                rep = _json(rd / "report.json") or {}
+                advice = run_advice(rep, latest, _json(rd / "verify.json"), tid)
+            out.append({"id": tid, **t, "scenarios": scen.get(tid, []), "latest": latest,
+                        "runs": [{k: r.get(k) for k in ("run_id", "scenario", "started_at", "verdict", "e2e_p99_ms",
+                                                         "hot_path_p99_ms", "achieved_tps", "verify_passed",
+                                                         "exact_set_agreement", "within_budget")} for r in runs[:8]],
+                        "advice": advice})
+        return {"version": doc.get("version"), "capabilities": doc.get("capabilities") or {},
+                "hybrid": doc.get("hybrid"), "topologies": out}
 
     @app.get("/api/summary")
     def summary(limit: int = 12) -> dict[str, Any]:

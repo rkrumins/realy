@@ -37,6 +37,7 @@ The console UI is a client of this API; scripts and CI can use it too. Live Open
 | `POST` | `/api/runs` |  | RunRequest | Start Run |
 | `POST` | `/api/scenarios/validate` |  | ScenarioText | Validate Scenario |
 | `POST` | `/api/scenarios/{name}/budget` |  | JSON | Budget |
+| `POST` | `/api/scenarios/{name}/reset` |  |  | Restore a bundled scenario to the version in this image (the edited copy is kept in .backup/). |
 | `GET` | `/api/scenarios/{name}` |  |  | Get Scenario |
 | `PUT` | `/api/scenarios/{name}` |  | ScenarioText | Put Scenario |
 | `GET` | `/api/scenarios` |  |  | List Scenarios |
@@ -50,6 +51,7 @@ The console UI is a client of this API; scripts and CI can use it too. Live Open
 | `GET` | `/api/status` |  |  | Status |
 | `POST` | `/api/stop-all` |  | JSON | Everything stops: schedules paused (so nothing new is enqueued), queue cancelled, the running run aborted, and a wildcard abort on bench.control reaches any run in any other process. |
 | `GET` | `/api/summary` | `?limit` |  | Summary |
+| `GET` | `/api/topologies` | `?limit` |  | Every topology: how it is built, what it can and cannot do, its limits and enhancements (contracts/topologies.yaml), the scenarios that run it, its latest runs on this stack, and advice from the latest finished one (with the evidence behind each item). |
 
 ## docs
 
@@ -95,5 +97,5 @@ The console UI is a client of this API; scripts and CI can use it too. Live Open
 
 | Method | Path | Query | Body | Description |
 |---|---|---|---|---|
-| `GET` | `/api/topology` | `?topology` |  | Topology |
+| `GET` | `/api/topology` | `?topology, ?flows` |  | Topology |
 

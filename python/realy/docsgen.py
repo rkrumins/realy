@@ -604,9 +604,78 @@ def bindings() -> str:
     return "\n".join(out) + "\n"
 
 
+def topologies() -> str:
+    """How each topology is built, what it can and cannot do, the key differences, and what would improve it."""
+    from .topologies import load
+    doc = load()
+    caps = doc.get("capabilities") or {}
+    tops = doc.get("topologies") or {}
+    mark = {"yes": "yes", "partial": "partly", "no": "no", "n/a": "n/a"}
+    by_topo: dict[str, list[str]] = {}
+    for f in sorted((REPO_ROOT / "scenarios").glob("*.yaml")):
+        d = yaml.safe_load(f.read_text()) or {}
+        by_topo.setdefault(d.get("topology") or "gateway-kafka", []).append(f.stem)
+    out = [HEADER.format(src="contracts/topologies.yaml"), "# Topologies\n",
+           "A scenario's `topology:` decides how events travel and who decides. All four share the contracts, the "
+           "features, rules and model, the audit log and the verifier; they differ in who scores, where features "
+           "come from, and what that makes possible. The console's **Topologies** page shows the same, with the "
+           "latest measurements and advice from your own runs.\n",
+           "## Key differences\n",
+           "| | " + " | ".join(f"[{t['title']}](#{tid})" for tid, t in tops.items()) + " |",
+           "|---|" + "---|" * len(tops),
+           "| Who decides | " + " | ".join(_cell(t.get("decides")) for t in tops.values()) + " |",
+           "| Flink | " + " | ".join(_cell(t.get("flink")) for t in tops.values()) + " |"]
+    for cid, c in caps.items():
+        out.append(f"| {c['label']} | " + " | ".join(
+            mark.get(((t.get("capabilities") or {}).get(cid) or {}).get("status"), "?") for t in tops.values()) + " |")
+    out.append("| Scales by | " + " | ".join(_cell(t.get("scales_by")) for t in tops.values()) + " |")
+    out.append("| The tail usually comes from | " + " | ".join(_cell(t.get("tail")) for t in tops.values()) + " |")
+    out.append("\n**The hybrid most institutions end up with.** " + (doc.get("hybrid") or "").strip() + "\n")
+    for tid, t in tops.items():
+        out.append(f"## {tid}\n")
+        out.append(f"**{t['title']}.** {t['tagline'].strip()}\n")
+        out.append("### How it is built\n")
+        for i, h in enumerate(t.get("built") or [], 1):
+            out.append(f"{i}. **{h['component']}**: {h['does']}")
+        if t.get("built_with_flows"):
+            out.append("\nWith multi-message transactions (`traffic.flows`):\n")
+            for h in t["built_with_flows"]:
+                out.append(f"- **{h['component']}**: {h['does']}")
+        out.append("\n### What works and what does not\n")
+        out.append("| Capability | | Why |")
+        out.append("|---|---|---|")
+        for cid, c in caps.items():
+            v = (t.get("capabilities") or {}).get(cid) or {}
+            out.append(f"| {c['label']} | {mark.get(v.get('status'), '?')} | {_cell(v.get('note'))} |")
+        out.append("\n**Choose it when:** " + "; ".join(t.get("choose_when") or []) + ".")
+        if t.get("avoid_when"):
+            out.append("\n**Avoid it when:** " + "; ".join(t["avoid_when"]) + ".")
+        out.append(f"\n**Scales by:** {t.get('scales_by')}. **Tail:** {t.get('tail')}.")
+        if by_topo.get(tid):
+            out.append("\n**Bundled scenarios:** " + ", ".join(f"`{n}`" for n in by_topo[tid]) + ".")
+        if t.get("enhancements"):
+            out.append("\n### Limits and the enhancements that would lift them\n")
+            out.append("| Enhancement | Why | Effect | Status |")
+            out.append("|---|---|---|---|")
+            for e in t["enhancements"]:
+                out.append(f"| {e['title']} | {_cell(e['why'])} | {_cell(e['effect'])} | {e['status']} |")
+        out.append("")
+    out.append("## Advice by dominant tail stage\n")
+    out.append("The run report names the stage that holds the largest share of the slowest 1% of events; this is "
+               "what to try for each (topology-specific advice where it differs).\n")
+    out.append("| Stage | Advice |")
+    out.append("|---|---|")
+    for stage, per in (doc.get("advice") or {}).items():
+        txt = _cell(per.get("all", ""))
+        extra = "".join(f"<br>**{k}:** {_cell(v)}" for k, v in per.items() if k != "all")
+        out.append(f"| `{stage}` | {txt}{extra} |")
+    return "\n".join(out) + "\n"
+
+
 PAGES = {"scenario-schema.md": scenario_schema, "config.md": config, "cli.md": cli, "http-api.md": http_api,
          "features.md": features, "rules.md": rules, "topics.md": topics, "scenarios.md": scenarios,
-         "messages.md": messages, "environment.md": environment, "bindings.md": bindings}
+         "messages.md": messages, "environment.md": environment, "bindings.md": bindings,
+         "topologies.md": topologies}
 
 
 def write() -> list[Path]:

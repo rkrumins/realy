@@ -93,6 +93,7 @@ class RunWorker:
                    "rate_multiplier": float(h.rate_mult.value) if h is not None and h.rate_mult is not None else 1.0,
                    "base_tps": sc.traffic.profile.tps if sc else None,
                    "topology": sc.topology if sc else None,
+                   "flows": list(sc.traffic.flows) if sc else [],
                    "budget": sc.budget.model_dump() if sc else None,
                    "duration_s": sc.traffic.duration_s if sc else None,
                    "warmup_s": sc.traffic.warmup_s if sc else None}

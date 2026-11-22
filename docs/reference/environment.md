@@ -113,6 +113,7 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `REALY_SINK_SETTLE_S` | `120` / `120` | runner |  | `python/realy/runner/run.py` |
 | `REALY_STORE_ABORT_AT` | `0.97` | runner |  | `python/realy/runner/infra.py` |
 | `REALY_STORE_WARN_AT` | `0.85` | runner |  | `python/realy/runner/infra.py` |
+| `REALY_TOPOLOGIES` |  | python (shared) |  | `python/realy/topologies.py` |
 | `REALY_TRANSACTIONS_DIR` |  | python (shared) |  | `python/realy/bindings/transactions.py` |
 | `REALY_USECASES` | `REPO_ROOT / "contracts" / "usecases" / "typologies` | python (shared) |  | `python/realy/usecases.py` |
 | `REALY_USECASES_USER` |  | python (shared) |  | `python/realy/usecases.py` |
@@ -133,4 +134,4 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `STORE_STATE` | `customer,card` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
 | `TXN_TTL_DAYS` | `2` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/AssembleFunction.java` |
 
-126 variables.
+127 variables.
