@@ -35,6 +35,15 @@ topics:
     timestamp: LogAppendTime   # broker-stamped, an independent clock for egress
     retention_ms: 86400000     # 24h: system of record until ClickHouse has ingested
     config: { compression.type: lz4, message.timestamp.type: LogAppendTime }
+  payments.events.dlq:
+    partitions: 6
+    key: the original record's key
+    value: the original record's bytes, unchanged
+    # dead letters: records the gateway or the Flink job could not score (unparseable, a missing id, an
+    # unknown event type, a filter that failed), with x-dlq-error, x-dlq-service and x-dlq-source
+    # (topic/partition/offset) beside the original headers; nothing is dropped silently
+    headers: [x-dlq-error, x-dlq-service, x-dlq-source]
+    retention_ms: 1209600000
   payments.labels:
     partitions: 12
     key: customer_id (decimal string)

@@ -13,7 +13,7 @@ partition_key: customer
 #   transactions    multi-message transactions (contracts/transactions) whose parts arrive on the events
 #                   topic; a run with traffic.flows assembles them (the Flink assembler) into `payment`
 topics: { events: payments.events.raw, decisions: payments.decisions, labels: payments.labels,
-          assembled: payments.events.assembled }
+          assembled: payments.events.assembled, dlq: payments.events.dlq }
 default_type: payment
 event_types:
   payment: { scored: true }

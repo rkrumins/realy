@@ -40,7 +40,11 @@ SECURITY_ENV = {
 
 def security_config(env: dict[str, str] | None = None) -> dict[str, str]:
     e = os.environ if env is None else env
-    return {key: e[var] for var, key in SECURITY_ENV.items() if e.get(var)}
+    out = {key: e[var] for var, key in SECURITY_ENV.items() if e.get(var)}
+    if e.get("KAFKA_SASL_PASSWORD_FILE"):           # a mounted secret, preferred to the variable
+        from pathlib import Path
+        out["sasl.password"] = Path(e["KAFKA_SASL_PASSWORD_FILE"]).read_text().strip()
+    return out
 
 
 def producer_conf(**over: Any) -> dict[str, Any]:

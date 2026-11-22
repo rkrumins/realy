@@ -77,8 +77,26 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
         filters = new Filters(schema);
     }
 
+    private transient io.realy.common.DeadLetters deadLetters;
+
+    /**
+     * A record that cannot be decoded (unparseable, a tombstone, an unknown event type, a missing id, a
+     * filter that fails on it) goes to the dead-letter topic and is skipped. Throwing here would fail the
+     * task, restart it from the checkpoint onto the same record, and loop forever (a poison pill).
+     */
     @Override
     public void deserialize(ConsumerRecord<byte[], byte[]> r, Collector<Envelope> out) throws IOException {
+        try {
+            deserialize0(r, out);
+        } catch (Exception e) {
+            if (deadLetters == null) deadLetters = new io.realy.common.DeadLetters("flink");
+            FlinkMetrics.get().add("poison_records", 1);
+            deadLetters.send(r, e);
+        }
+    }
+
+    private void deserialize0(ConsumerRecord<byte[], byte[]> r, Collector<Envelope> out) throws IOException {
+        if (r.value() == null) throw new IllegalArgumentException("a record without a value (tombstone)");
         long ingest = BenchClock.nowUs();
         Header ty = r.headers().lastHeader("x-event-type");
         Header rid = r.headers().lastHeader("x-run-id");
@@ -94,6 +112,9 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
             }
         }
         TransactionEvent e = TransactionEvent.parseFrom(r.value());
+        if (e.getEventId() == 0 || e.getCustomerId() == 0) {
+            throw new IllegalArgumentException("event_id or customer_id is 0 (not a payment event, or a garbled payload)");
+        }
         Header th = r.headers().lastHeader("x-bench-trace");
         Envelope env = envelope(e, r.value(), th == null ? null : th.value(), r.headers().lastHeader("x-mirrored") != null,
                 schema, filters, ingest);

@@ -49,9 +49,22 @@ public final class KafkaProps {
             String module = mech.startsWith("SCRAM") ? "org.apache.kafka.common.security.scram.ScramLoginModule"
                     : "org.apache.kafka.common.security.plain.PlainLoginModule";
             p.put("sasl.jaas.config", module + " required username=\"" + user + "\" password=\""
-                    + env.getOrDefault("KAFKA_SASL_PASSWORD", "") + "\";");
+                    + saslPassword(env) + "\";");
         }
         return p;
+    }
+
+    /** KAFKA_SASL_PASSWORD_FILE (a mounted secret) or KAFKA_SASL_PASSWORD. */
+    static String saslPassword(java.util.Map<String, String> env) {
+        String f = env.get("KAFKA_SASL_PASSWORD_FILE");
+        if (f != null && !f.isBlank()) {
+            try {
+                return java.nio.file.Files.readString(java.nio.file.Path.of(f)).trim();
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException("KAFKA_SASL_PASSWORD_FILE", e);
+            }
+        }
+        return env.getOrDefault("KAFKA_SASL_PASSWORD", "");
     }
 
     public static Properties producer(String clientId) {
@@ -69,6 +82,9 @@ public final class KafkaProps {
         p.put(ProducerConfig.BUFFER_MEMORY_CONFIG, Long.toString(256L << 20));
         p.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, Env.str("KAFKA_DELIVERY_TIMEOUT_MS", "30000"));
         p.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, "10000");
+        // send() blocks for metadata or buffer space at most this long (the default 60 s would stall the
+        // threads completing decisions while a broker is unreachable)
+        p.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, Env.str("KAFKA_MAX_BLOCK_MS", "5000"));
         p.putAll(security());
         return p;
     }

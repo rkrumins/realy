@@ -32,33 +32,65 @@ public final class Pipeline {
         return sink;
     }
 
-    /** Completes with the record once it is durable (or spooled); the trace includes AUDIT_ACK. */
+    /**
+     * Score, then make the decision durable; completes with the record once it is (on the broker, or fsynced
+     * to the spool), with AUDIT_ACK in its trace. Every request gets a decision: a scoring error, thrown or
+     * asynchronous, becomes a fail-safe decision (ON_PIPELINE_ERROR, default REVIEW, reason PIPELINE_ERROR)
+     * that is made durable like any other, so no event is ever consumed without one.
+     */
     public CompletableFuture<DecisionRecord> process(ScoringOrchestrator.Request req) {
-        return orchestrator.score(req).thenCompose(rec -> {
+        CompletableFuture<DecisionRecord> scored;
+        try {
+            scored = orchestrator.score(req);
+        } catch (RuntimeException e) {
+            scored = CompletableFuture.failedFuture(e);
+        }
+        return scored.exceptionally(err -> errorDecision(req, err)).thenCompose(rec -> {
             long aStart = BenchClock.nowUs();
-            return sink.write(rec).handle((ok, err) -> {
-                long aEnd = BenchClock.nowUs();
-                metrics.recordUs("audit_ack", aEnd - aStart);
+            return sink.write(rec).handle((ok, err) -> err).thenCompose(err -> {
+                if (err == null) return CompletableFuture.completedFuture(finish(rec, req, aStart, false));
+                metrics.inc("audit_failures");
                 DecisionRecord out = rec;
-                if (err != null) {
-                    metrics.inc("audit_failures");
-                    if (orchestrator.config().get().cfg().getAuditOnFailure() == AuditFailure.FAIL_CLOSED) {
-                        out = rec.toBuilder().setOutcome(Outcome.DECLINE).addReasonCodes("AUDIT_UNAVAILABLE").build();
-                    }
-                    sink.spool(out);
+                if (orchestrator.config().get().cfg().getAuditOnFailure() == AuditFailure.FAIL_CLOSED) {
+                    out = rec.toBuilder().setOutcome(Outcome.DECLINE).addReasonCodes("AUDIT_UNAVAILABLE").build();
                 }
-                BenchTrace.Builder t = out.getTrace().toBuilder();
-                Spans.add(t, Stage.AUDIT_ACK, err == null ? 0 : 1, aStart, aEnd - aStart);
-                record(out, req.ingestUs(), aEnd);
-                return out.toBuilder().setTrace(t).build();
+                DecisionRecord durable = out;
+                return sink.persist(durable).thenApply(v -> finish(durable, req, aStart, true));
             });
         });
     }
 
+    private DecisionRecord finish(DecisionRecord out, ScoringOrchestrator.Request req, long aStart, boolean spooled) {
+        long aEnd = BenchClock.nowUs();
+        metrics.recordUs("audit_ack", aEnd - aStart);
+        BenchTrace.Builder t = out.getTrace().toBuilder();
+        Spans.add(t, Stage.AUDIT_ACK, spooled ? 1 : 0, aStart, aEnd - aStart);
+        record(out, req.ingestUs(), aEnd);
+        return out.toBuilder().setTrace(t).build();
+    }
+
+    /** The decision for a request whose scoring failed: fail-safe, flagged degraded, with the error's kind. */
+    DecisionRecord errorDecision(ScoringOrchestrator.Request req, Throwable err) {
+        Throwable cause = err instanceof java.util.concurrent.CompletionException && err.getCause() != null ? err.getCause() : err;
+        metrics.inc("pipeline_errors");
+        org.slf4j.LoggerFactory.getLogger(Pipeline.class).warn("scoring failed for event {}: {}",
+                req.event().getEventId(), cause.toString());
+        long now = BenchClock.nowUs();
+        BenchTrace.Builder t = req.trace().clone();
+        t.addSpans(Span.newBuilder().setStage(Stage.DECISION).setAttr(ON_ERROR.getNumber()).setDomain(BenchClock.domain()).setStartUs(now));
+        return DecisionRecord.newBuilder().setEventId(req.event().getEventId()).setOutcome(ON_ERROR)
+                .addReasonCodes("PIPELINE_ERROR").addReasonCodes("ERROR_" + cause.getClass().getSimpleName().toUpperCase())
+                .setPath(io.realy.contracts.scoring.v1.DecisionPath.PATH_RULES_ONLY_FALLBACK).setDegraded(true)
+                .setIngressMode(req.mode()).setDecidedAtUs(now).setEvent(req.event()).setTrace(t).build();
+    }
+
+    /** The outcome of a decision whose scoring failed (ON_PIPELINE_ERROR: REVIEW, DECLINE or APPROVE). */
+    static final Outcome ON_ERROR = Outcome.valueOf(io.realy.common.Env.str("ON_PIPELINE_ERROR", "REVIEW"));
+
     /** Async final decision after a provisional answer (on_deadline = PROVISIONAL_THEN_ASYNC). */
     public void publishFinal(DecisionRecord fin) {
         sink.write(fin).exceptionally(e -> {
-            sink.spool(fin);
+            sink.persist(fin);
             return null;
         });
         metrics.inc("final_after_provisional");

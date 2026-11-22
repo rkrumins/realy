@@ -3,7 +3,7 @@ import type {
   AuthMe, BudgetCheck, BulkAbortResult, Campaign, ClickHouseEnv, CompareResponse, CustomerResponse, CustomersResponse, DecisionDetail, DocPage, DocsIndex,
   EntitiesResponse, EntityResponse, ExplorerViews, SearchResponse, Typology,
   EnvResponse, FlinkEnv, Job, KafkaEnv, RedisEnv, RunDetail, RunsResponse, ScenarioListItem, Schedule, SearchRow,
-  Status, SummaryResponse, TopologyResponse,
+  Status, SummaryResponse, TopologyResponse, TopologiesResponse, PreflightResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -93,7 +93,10 @@ export const api = {
   liveRate: (tps: number) => request<{ published: boolean }>("/api/live/rate", { method: "POST", json: { tps } }),
   liveScoring: (body: Record<string, unknown>) => request<{ published: boolean; gateway_admin?: string }>("/api/live/scoring", { method: "POST", json: body }),
   liveModel: (body: Record<string, unknown>) => request<{ published: boolean; model_admin?: string }>("/api/live/model", { method: "POST", json: body }),
-  topology: (t: string) => request<TopologyResponse>(`/api/topology?topology=${enc(t)}`),
+  topology: (t: string, flows = false) => request<TopologyResponse>(`/api/topology?topology=${enc(t)}${flows ? "&flows=true" : ""}`),
+  topologies: () => request<TopologiesResponse>("/api/topologies"),
+  preflight: (q: { scenario?: string; topology?: string }) =>
+    request<PreflightResult>(`/api/env/preflight?${new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]).toString()}`),
   // schedules
   schedules: () => request<Schedule[]>("/api/schedules"),
   addSchedule: (body: { scenario: string; overrides?: Record<string, unknown>; verify?: boolean; at?: string; every_minutes?: number; count?: number }) =>

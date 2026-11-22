@@ -1,0 +1,16 @@
+# Run the pipeline services and the benchmark against infrastructure you run (docs/real-infrastructure.md):
+# your Kafka, Redis, ClickHouse and model server instead of the bundled ones. Fill in external.env (start
+# from external.env.example; it is git-ignored), then start only the services you are not replacing:
+#   docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.external.yml \
+#     up -d --no-deps gateway flink-jobmanager flink-taskmanager console
+# (add mock-model to keep the bundled model server). `pulsebench infra check <scenario>` in the console
+# container then says what each component is (bundled / mock / external) and what is not ready.
+services:
+  gateway:
+    env_file: [external.env]
+  flink-jobmanager:
+    env_file: [external.env]
+  flink-taskmanager:
+    env_file: [external.env]
+  console:
+    env_file: [external.env]

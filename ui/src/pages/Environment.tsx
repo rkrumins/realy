@@ -9,6 +9,7 @@ import { api, isNotFound } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { fmtBytes, fmtCompact, fmtDuration, fmtMs, fmtNum, isNum } from "@/lib/format";
 import { useEnv } from "@/lib/hooks";
+import { PreflightCard } from "@/components/preflight-card";
 import type { EnvComponent } from "@/lib/types";
 
 const ICONS: Record<string, typeof Server> = {
@@ -75,13 +76,14 @@ export default function Environment() {
   return (
     <>
       <PageHeader eyebrow="Environment" title="Environment & infrastructure"
-        subtitle="Health of every component the benchmark drives, plus the Kafka, Flink, Redis and ClickHouse internals that explain its numbers."
+        subtitle="What each run uses (bundled, mock or yours, and what is not ready), every component's health, and the Kafka, Flink, Redis and ClickHouse internals that explain the numbers."
         actions={<>
           {links.flink && <Button variant="outline" asChild><a href={links.flink} target="_blank" rel="noreferrer"><Boxes />Flink UI<ExternalLink className="size-3" /></a></Button>}
           {links.grafana && <Button variant="outline" asChild><a href={links.grafana} target="_blank" rel="noreferrer"><LayoutDashboard />Grafana<ExternalLink className="size-3" /></a></Button>}
           {links.prometheus && <Button variant="outline" asChild><a href={links.prometheus} target="_blank" rel="noreferrer"><LineChart />Prometheus<ExternalLink className="size-3" /></a></Button>}
           <Button variant="secondary" onClick={refresh}><RefreshCw className={cn(env.isFetching && "animate-spin")} />Refresh</Button>
         </>} />
+      <PreflightCard />
       {env.error && <ErrorState error={env.error} />}
       {env.isLoading ? <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 7 }, (_, i) => <Skeleton key={i} className="h-48 rounded-2xl" />)}</div>
         : !env.data ? <Unavailable what="Environment status" /> : (

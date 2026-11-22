@@ -10,7 +10,13 @@ export interface ScenarioListItem {
   description: string;
   tps: number | null;
   duration_s: number | null;
+  /** multi-message transaction contracts the scenario sends */
+  flows?: string[];
   yaml: string;
+  /** ships with the image; the console's copy was edited; the image has a newer version than the edit's base */
+  bundled?: boolean;
+  edited?: boolean;
+  update_available?: boolean;
 }
 
 export interface Budget {
@@ -31,6 +37,8 @@ export interface CurrentRun {
   rate_multiplier: number;
   base_tps: number | null;
   topology: Topology | null;
+  /** multi-message transaction contracts the run sends (its map has the assembly hop) */
+  flows?: string[];
   budget: Budget | null;
   duration_s: number | null;
   warmup_s: number | null;
@@ -152,6 +160,8 @@ export interface RunSummary {
   measured_s?: number | null;
   owner?: string | null;
   verify_passed: boolean | null;
+  /** customer/card features exactly as the reference recomputes them (share of events), from verify */
+  exact_set_agreement?: number | null;
   has_html: boolean;
   job_id?: string;
   verify_requested?: boolean;
@@ -730,4 +740,52 @@ export interface DocPage {
   path: string;
   title: string;
   markdown: string;
+}
+
+/* ---------------------------------------------------------------- topologies (contracts/topologies.yaml) */
+export type CapStatus = "yes" | "partial" | "no" | "n/a";
+export interface TopologyStep {
+  id: string; component: string; label?: string; does: string; sub?: string; for_each?: string;
+  to?: { id: string; label?: string }[];
+}
+export interface ComponentConfig { key: string; in: string; default?: string; effect: string }
+export interface TopologyComponent { kind: string; label: string; what: string; code: string; config?: ComponentConfig[]; extend: string }
+export interface AdviceItem {
+  severity: "critical" | "warning" | "info" | "good"; area: string; title: string; evidence: string; action: string;
+  stage?: string; component?: string; topology?: string;
+}
+export interface TopologyRunRow {
+  run_id: string; scenario: string | null; started_at: number; verdict: Verdict; e2e_p99_ms: number | null;
+  hot_path_p99_ms: number | null; achieved_tps: number | null; verify_passed: boolean | null;
+  exact_set_agreement: number | null; within_budget: number | null;
+}
+export interface TopologyInfo {
+  id: Topology; title: string; tagline: string; decides: string; flink: string;
+  runtime: { ingress: string; scorer: string; flink_mode: string; flows: string; exact_target: number | null };
+  steps: TopologyStep[]; steps_with_flows?: TopologyStep[];
+  capabilities: Record<string, { status: CapStatus; note: string }>;
+  scales_by?: string; tail?: string; choose_when: string[]; avoid_when?: string[];
+  enhancements: { title: string; why: string; effect: string; status: "available" | "planned" | "idea" }[];
+  scenarios: { name: string; description: string; flows: string[]; tps: number | null }[];
+  latest: RunSummary | null; runs: TopologyRunRow[]; advice: AdviceItem[];
+}
+export interface TopologiesResponse {
+  version: number; hybrid: string;
+  capabilities: Record<string, { label: string; why: string }>;
+  components: Record<string, TopologyComponent>;
+  advice_by_stage: Record<string, Record<string, string>>;
+  topologies: TopologyInfo[];
+}
+
+/* ---------------------------------------------------------------- preflight (realy.infra) */
+export type CheckStatus = "pass" | "warn" | "fail" | "skip";
+export interface PreflightComponent {
+  component: string; label: string; endpoint: string; implementation: "bundled" | "mock" | "external" | "unknown";
+  version: string | null; status: CheckStatus; probe_ms?: number;
+  checks: { name: string; status: CheckStatus; detail: string; fix: string }[];
+  facts: Record<string, unknown>;
+}
+export interface PreflightResult {
+  checked_at: number; topology: string; status: CheckStatus; components: PreflightComponent[];
+  simulated: { what: string; detail: string }[];
 }

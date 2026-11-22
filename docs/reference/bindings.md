@@ -25,7 +25,7 @@ Order is the Flink job's keyed-stage order (append only).
 
 | Pipeline | Namespace | Partition key | Event types | Exact entities | Topics |
 |---|---|---|---|---|---|
-| `payments` | (default) | customer | `payment` (scored), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold), `card_authentication` (fold), `card_authorization` (fold), `card_capture` (fold), `card_reversal` (fold), `card_refund` (fold), `chargeback` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled` |
+| `payments` | (default) | customer | `payment` (scored), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold), `card_authentication` (fold), `card_authorization` (fold), `card_capture` (fold), `card_reversal` (fold), `card_refund` (fold), `chargeback` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq` |
 
 ## Transaction `a2a_transfer`
 

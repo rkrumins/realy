@@ -113,7 +113,8 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
     msgs.append(control.control_message(run_id, "model", model_server=model_cfg))
     control.publish(msgs)
     # Admin HTTP for immediate, verifiable effect (bench.control is the scalable path).
-    with httpx.Client(timeout=5) as c:
+    tok = os.environ.get("REALY_ADMIN_TOKEN")          # the services' ADMIN_TOKEN, when admin writes need one
+    with httpx.Client(timeout=5, headers={"Authorization": f"Bearer {tok}"} if tok else None) as c:
         for url, body, name in ((ep.gateway_admin, scoring, "gateway"), (ep.model_admin, model_cfg, "model")):
             if not url or not body:
                 continue

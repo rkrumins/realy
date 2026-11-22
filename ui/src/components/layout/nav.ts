@@ -1,5 +1,5 @@
 import {
-  Activity, BookOpen, GitCompareArrows, History, LayoutDashboard, Rocket, ScanSearch, Server, Settings, SlidersHorizontal,
+  Activity, BookOpen, GitCompareArrows, History, LayoutDashboard, Network, Rocket, ScanSearch, Server, Settings, SlidersHorizontal,
 } from "lucide-react";
 
 export interface NavItem {
@@ -30,7 +30,8 @@ export const NAV: { group: string; items: NavItem[] }[] = [
     group: "Configure",
     items: [
       { to: "/scenarios", label: "Scenarios", icon: SlidersHorizontal, hint: "visual scenario builder" },
-      { to: "/environment", label: "Environment", icon: Server, hint: "Kafka, Flink, Redis, ClickHouse" },
+      { to: "/topologies", label: "Topologies", icon: Network, hint: "how each is built, what works, advice from your runs" },
+      { to: "/environment", label: "Environment", icon: Server, hint: "preflight: your infrastructure, real or mock" },
     ],
   },
   {

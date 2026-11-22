@@ -73,7 +73,8 @@ class Replay:
         created = man.get("created_at")
         t_start = (man.get("t_start_us") or 0) / 1e6 or None
         info = {"run_id": run_id, "scenario": man.get("scenario") or sc.get("name"), "topology": man.get("topology"),
-                "budget": sc.get("budget"), "base_tps": prof.get("tps") if prof.get("kind") != "step" else (prof.get("start_tps") or prof.get("tps")),
+                "budget": sc.get("budget"), "flows": list((sc.get("traffic") or {}).get("flows") or []),
+                "base_tps": prof.get("tps") if prof.get("kind") != "step" else (prof.get("start_tps") or prof.get("tps")),
                 "warmup_s": man.get("warmup_s", traffic.get("warmup_s")), "duration_s": man.get("duration_s", traffic.get("duration_s")),
                 "started_at": created, "measure_started_at": t_start,
                 "ended_at": (run.get("emission_end_us") or 0) / 1e6 or None,

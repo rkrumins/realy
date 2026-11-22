@@ -105,6 +105,12 @@ public final class RedisOnlineStore implements OnlineStore {
         server = m.find() ? m.group(1) : "";
     }
 
+    /** Every connection is open (Lettuce reconnects on its own; a closed one means the store is unreachable). */
+    public boolean connected() {
+        for (var c : conns) if (!c.isOpen()) return false;
+        return true;
+    }
+
     /** "standalone" or "cluster": what the client connected as (reported by /admin/info). */
     public String mode() {
         return mode;

@@ -15,6 +15,7 @@ const RunReport = lazy(() => import("./pages/RunReport"));
 const Compare = lazy(() => import("./pages/Compare"));
 const Explorer = lazy(() => import("./pages/Explorer"));
 const Scenarios = lazy(() => import("./pages/Scenarios"));
+const Topologies = lazy(() => import("./pages/Topologies"));
 const Environment = lazy(() => import("./pages/Environment"));
 const Docs = lazy(() => import("./pages/Docs"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -70,7 +71,7 @@ export function App() {
       <Route element={<AppShell />}>
         {([
           ["/", Overview], ["/launch", Launch], ["/live", Live], ["/runs", Runs], ["/runs/:id", RunReport],
-          ["/compare", Compare], ["/explorer", Explorer], ["/scenarios", Scenarios], ["/environment", Environment],
+          ["/compare", Compare], ["/explorer", Explorer], ["/scenarios", Scenarios], ["/topologies", Topologies], ["/environment", Environment],
           ["/docs", Docs], ["/settings", Settings], ["*", NotFound],
         ] as const).map(([path, C]) => (
           <Route key={path} path={path} element={<Suspense fallback={<PageFallback />}><C /></Suspense>} />

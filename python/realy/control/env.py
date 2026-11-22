@@ -248,3 +248,25 @@ def clickhouse_detail() -> dict[str, Any]:
     rows = [json.loads(line) for line in chc.get({"query": q}, timeout=TIMEOUT).text.splitlines() if line]
     return {"version": v, "tables": [{"table": r["table"], "rows": int(r["rows"]), "parts": int(r["parts"]),
                                       "bytes": int(r["bytes"])} for r in rows]}
+
+
+@router.get("/preflight")
+def preflight(scenario: str | None = None, topology: str | None = None) -> dict[str, Any]:
+    """The preflight a run starts with (realy.infra): every component the scenario's (or the topology's)
+    path uses, bundled / mock / external, with pass / warn / fail checks and their fixes, and what the
+    scenario would simulate."""
+    from fastapi import HTTPException
+
+    from ..infra import check
+    from ..scenario import load_scenario
+    sc = None
+    if scenario:
+        try:
+            sc = load_scenario(scenario)
+        except Exception as e:  # noqa: BLE001 - a name the user typed
+            raise HTTPException(404, f"scenario {scenario}: {e}") from e
+    try:
+        return check(sc, topology)
+    except KeyError as e:
+        raise HTTPException(400, str(e)) from e
+

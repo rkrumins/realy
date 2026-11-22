@@ -33,10 +33,10 @@ public final class GatewayMain {
         final long startedUs = io.realy.common.BenchClock.nowUs();
         String instance = Env.str("HOSTNAME", "gateway");
         FeatureSchema schema = FeatureSchema.load();
-        ScoringConfig cfg = ScoringConfigHolder.defaults();
-        String initial = Env.str("SCORING_CONFIG", "");
-        if (!initial.isEmpty()) cfg = ProtoJson.overlay(cfg, initial);
+        // defaults, then SCORING_CONFIG_FILE, then SCORING_CONFIG; RULES_FILE; both files watched for changes
+        ScoringConfig cfg = ScoringConfigHolder.initial();
         ScoringConfigHolder holder = new ScoringConfigHolder(cfg);
+        holder.watchFiles();
 
         OnlineStore store = "mock".equals(holder.get().cfg().getFeatureSource())
                 ? new MockOnlineStore()
@@ -65,9 +65,19 @@ public final class GatewayMain {
                 .service("/health", (ctx, req) -> HttpResponse.of("ok"))
                 .service("/metrics", (ctx, req) -> HttpResponse.of(HttpStatus.OK, MediaType.PLAIN_TEXT_UTF_8,
                         metrics.registry().scrape()))
+                // readiness: ingress loops polling, the broker answering, store and model reachable
+                .service("/ready", (ctx, req) -> {
+                    var r = Readiness.check(ingress, sink, store, model);
+                    return HttpResponse.of(r.ready() ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE,
+                            MediaType.JSON_UTF_8, r.json());
+                })
                 .service("/admin/config", (ctx, req) -> HttpResponse.of(req.aggregate().thenApply(agg -> {
                     try {
                         String body = agg.contentUtf8();
+                        if (!body.isBlank()) {
+                            String refused = io.realy.common.Profile.adminWriteRefusal(req.headers().get("authorization"));
+                            if (refused != null) return HttpResponse.of(HttpStatus.FORBIDDEN, MediaType.PLAIN_TEXT_UTF_8, refused);
+                        }
                         String out = body.isBlank() ? ProtoJson.print(holder.get().cfg()) : holder.update(body);
                         return HttpResponse.of(HttpStatus.OK, MediaType.JSON_UTF_8, out);
                     } catch (IllegalArgumentException e) {
@@ -92,10 +102,11 @@ public final class GatewayMain {
         });
         LOG.info("gateway {} up on :{} (kafka ingress: {}, store: {}, model: {})", instance, server.activeLocalPort(),
                 ingress.enabled(), holder.get().cfg().getFeatureSource(), Env.str("MODEL_TARGET", "localhost:8001"));
+        // stop taking work, let the decisions in flight become durable, commit, then close the audit producer
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             ingress.close();
             server.stop().join();
             sink.close();
-        }));
+        }, "shutdown"));
     }
 }

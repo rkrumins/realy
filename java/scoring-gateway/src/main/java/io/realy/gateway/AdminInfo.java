@@ -34,7 +34,8 @@ final class AdminInfo {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("service", "gateway");
         out.put("instance", instance);
-        out.put("version", String.valueOf(AdminInfo.class.getPackage().getImplementationVersion()));
+        String v = AdminInfo.class.getPackage().getImplementationVersion();
+        out.put("version", v != null ? v : Env.str("REALY_VERSION", "dev"));
         out.put("pipeline", PipelineBinding.current().name);
         out.put("schema", Map.of("version", schema.version, "features", schema.size(),
                 "sha256", sha256(FeatureSchema.loadText())));

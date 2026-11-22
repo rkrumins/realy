@@ -206,7 +206,7 @@ export default function Live() {
   const [ghostOn, setGhostOn] = React.useState(false);
   const ghostId = finished.find((r) => r.scenario === cur?.scenario && r.run_id !== cur?.run_id)?.run_id ?? null;
   const ghost = useReplay(ghostOn ? ghostId : null);
-  const topo = useTopology(cur?.topology ?? (series.length ? undefined : undefined));
+  const topo = useTopology(cur?.topology ?? (series.length ? undefined : undefined), (cur?.flows?.length ?? 0) > 0);
   const prevRun = React.useRef<string | null>(null);
 
   React.useEffect(() => {

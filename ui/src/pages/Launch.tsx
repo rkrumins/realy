@@ -4,6 +4,7 @@ import * as React from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { EmptyState, ErrorState, PageHeader, StatusBadge, TopologyBadge, topologyLabel } from "@/components/common";
+import { TopologyExplainer } from "@/components/topology-explainer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -179,6 +180,8 @@ export default function Launch() {
                       options={[{ value: "", label: `${topologyLabel(selected.topology)} (scenario)` }, ...TOPOLOGIES.map((t) => ({ value: t, label: topologyLabel(t), hint: t }))]} />
                   </Label>
                 </div>
+                <TopologyExplainer topology={topology || selected.topology || "gateway-kafka"} scenario={selected.name}
+                  flows={selected.flows ?? []} />
                 <Switch checked={verify} onCheckedChange={setVerify} label="Verify correctness after the run" />
                 <div>
                   <div className="mb-1.5 text-[12.5px] font-medium text-muted">When</div>

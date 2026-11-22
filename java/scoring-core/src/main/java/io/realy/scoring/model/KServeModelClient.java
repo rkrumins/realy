@@ -78,6 +78,10 @@ public final class KServeModelClient implements ModelClient {
             width = Integer.parseInt(forced.trim());
         } else if (sv.inputWidth() > 0) {
             width = sv.inputWidth();
+        } else if (io.realy.common.Profile.production()) {
+            // a wrong width makes every call fail or mis-score: never guess it in production
+            throw new IllegalStateException("model " + modelName + " at " + target + ": its input width is unknown ("
+                    + sv.error() + "); set MODEL_INPUT_DIM or make the model's metadata reachable");
         }
         if (width != schemaWidth) {
             org.slf4j.LoggerFactory.getLogger(KServeModelClient.class).info(
@@ -107,6 +111,15 @@ public final class KServeModelClient implements ModelClient {
 
     public Served served() {
         return served;
+    }
+
+    /** At least one channel is not failing (READY, IDLE or CONNECTING): the model server is reachable. */
+    public boolean reachable() {
+        for (ManagedChannel c : channels) {
+            var st = c.getState(false);
+            if (st != io.grpc.ConnectivityState.TRANSIENT_FAILURE && st != io.grpc.ConnectivityState.SHUTDOWN) return true;
+        }
+        return false;
     }
 
     public String target() {
@@ -297,16 +310,27 @@ public final class KServeModelClient implements ModelClient {
         }, MoreExecutors.directExecutor());
     }
 
-    private float[] decode(ModelInferResponse resp, int b) {
+    /**
+     * One score per row, each a finite probability. A short output, NaN or a value outside [0, 1] is a model
+     * error (the orchestrator then decides by its deadline policy), never a silent 0 that would approve.
+     */
+    static float[] decode(ModelInferResponse resp, int b) {
         float[] out = new float[b];
+        int got;
         if (resp.getRawOutputContentsCount() > 0) {
             ByteBuffer bb = resp.getRawOutputContents(0).asReadOnlyByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
-            for (int i = 0; i < b && bb.remaining() >= 4; i++) out[i] = bb.getFloat();
+            got = Math.min(b, bb.remaining() / 4);
+            for (int i = 0; i < got; i++) out[i] = bb.getFloat();
         } else if (resp.getOutputsCount() > 0) {
             var contents = resp.getOutputs(0).getContents();
-            for (int i = 0; i < b && i < contents.getFp32ContentsCount(); i++) out[i] = contents.getFp32Contents(i);
+            got = Math.min(b, contents.getFp32ContentsCount());
+            for (int i = 0; i < got; i++) out[i] = contents.getFp32Contents(i);
         } else {
             throw new IllegalStateException("model returned no outputs");
+        }
+        if (got < b) throw new IllegalStateException("model returned " + got + " scores for " + b + " rows");
+        for (int i = 0; i < b; i++) {
+            if (!(out[i] >= 0f && out[i] <= 1f)) throw new IllegalStateException("model returned score " + out[i] + " (not a probability)");
         }
         return out;
     }

@@ -1,0 +1,59 @@
+# The Flink features job for real payments (Flink Kubernetes Operator >= 1.10): every entity's windows in
+# RocksDB, blobs to Redis, multi-message transactions assembled. Checkpoints and HA on durable storage
+# (replace the bucket); poison records go to the dead-letter topic instead of restart-looping the job.
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: payments-features
+spec:
+  image: realy/flink:dev                       # pin a released tag / digest
+  flinkVersion: v2_2
+  serviceAccount: flink
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "4"
+    classloader.resolve-order: parent-first
+    state.backend.type: rocksdb
+    execution.checkpointing.incremental: "true"
+    execution.checkpointing.dir: s3://REPLACE_BUCKET/payments-scoring/checkpoints
+    execution.checkpointing.savepoint-dir: s3://REPLACE_BUCKET/payments-scoring/savepoints
+    execution.checkpointing.num-retained: "2"
+    execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+    execution.checkpointing.tolerable-failed-checkpoints: "3"
+    state.backend.rocksdb.localdir: /rocksdb
+    state.backend.rocksdb.memory.managed: "true"
+    state.backend.rocksdb.predefined-options: FLASH_SSD_OPTIMIZED
+    taskmanager.memory.managed.fraction: "0.4"
+    restart-strategy.type: exponential-delay
+    restart-strategy.exponential-delay.initial-backoff: 1 s
+    restart-strategy.exponential-delay.max-backoff: 60 s
+    taskmanager.jvm-exit-on-oom: "true"
+    high-availability.type: kubernetes
+    high-availability.storageDir: s3://REPLACE_BUCKET/payments-scoring/ha
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: "9249"
+  jobManager:
+    resource: { cpu: 2, memory: 4g }
+  taskManager:
+    resource: { cpu: 4, memory: 16g }
+    podTemplate:
+      spec:
+        containers:
+          - name: flink-main-container
+            envFrom: [{ configMapRef: { name: pipeline-env } }]
+            env:
+              - { name: REDIS_URI, valueFrom: { secretKeyRef: { name: pipeline-secrets, key: redis-uri } } }
+            volumeMounts:
+              - { name: rocksdb, mountPath: /rocksdb }
+              - { name: secrets, mountPath: /secrets, readOnly: true }
+        volumes:
+          - { name: rocksdb, emptyDir: {} }        # local NVMe on the node pool
+          - { name: secrets, secret: { secretName: pipeline-secrets, defaultMode: 0400 } }
+  job:
+    jarURI: local:///opt/flink/lib/realy/realy-flink-job.jar
+    entryClass: io.realy.flink.FraudJob
+    args: ["--mode", "features", "--parallelism", "24", "--group", "payments-features",
+           "--checkpoint-ms", "10000", "--buffer-timeout-ms", "1", "--max-parallelism", "128",
+           "--assemble", "a2a_transfer,card_payment", "--assembled-topic", "payments.events.assembled"]
+    parallelism: 24
+    upgradeMode: savepoint
+    state: running

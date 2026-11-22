@@ -469,6 +469,7 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                                                          "exact_set_agreement", "within_budget")} for r in runs[:8]],
                         "advice": advice})
         return {"version": doc.get("version"), "capabilities": doc.get("capabilities") or {},
+                "components": doc.get("components") or {}, "advice_by_stage": doc.get("advice") or {},
                 "hybrid": doc.get("hybrid"), "topologies": out}
 
     @app.get("/api/summary")

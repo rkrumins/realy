@@ -40,7 +40,7 @@ spec:
           resources:
             requests: { cpu: "4", memory: 6Gi }
             limits: { cpu: "4", memory: 6Gi }
-          readinessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 3 }
+          readinessProbe: { httpGet: { path: /ready, port: 8080 }, periodSeconds: 3 }   # ingress polling, broker, store, model
           livenessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 10, failureThreshold: 6 }
       volumes: [{ name: spool, emptyDir: { sizeLimit: 2Gi } }]
 ---
