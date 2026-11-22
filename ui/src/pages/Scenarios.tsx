@@ -32,6 +32,7 @@ const TOPO_INFO: Record<string, string> = {
   "gateway-grpc": "Sync rail (card auth style): gRPC Score() into the gateway, audit WAL acked before the reply.",
   "flink-inline": "Flink computes exact features in 7 keyed stages and scores via async I/O; every keyBy is a shuffle.",
   "echo-kafka": "Calibration: the gateway answers immediately, measuring the instrument and Kafka floor.",
+  external: "Your own scorer as a black box: it consumes events.raw and publishes decisions; completeness, latency and the audit are measured.",
 };
 
 type Upd = (path: Path, v: unknown) => void;

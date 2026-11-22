@@ -23,6 +23,7 @@ mk payments.events.raw "$P" compression.type=lz4 retention.ms=21600000
 mk payments.events.assembled "$P" compression.type=lz4 retention.ms=21600000
 mk payments.decisions "$P" message.timestamp.type=LogAppendTime retention.ms=86400000
 mk payments.labels 4 retention.ms=604800000
+mk payments.events.dlq 6 retention.ms=1209600000
 mk bench.control 1 cleanup.policy=compact
 mk bench.metrics 3 retention.ms=86400000
 "$K" --bootstrap-server "$B" --list

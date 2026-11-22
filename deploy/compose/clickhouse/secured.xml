@@ -1,0 +1,11 @@
+<!-- The Kafka engine tables' client settings for the secured overlay (SASL/PLAIN listener). Against a
+     managed cluster use the same keys with your mechanism (SCRAM-SHA-512, ...) and SASL_SSL
+     (docs/real-infrastructure.md, "ClickHouse"). -->
+<clickhouse>
+  <kafka>
+    <security_protocol>SASL_PLAINTEXT</security_protocol>
+    <sasl_mechanism>PLAIN</sasl_mechanism>
+    <sasl_username>pulsebench</sasl_username>
+    <sasl_password from_env="KAFKA_SASL_PASSWORD"/>
+  </kafka>
+</clickhouse>

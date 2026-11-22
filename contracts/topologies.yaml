@@ -190,6 +190,16 @@ components:
       - { key: "MODEL_NAME / MODEL_INPUT_NAME / MODEL_OUTPUT_NAME", in: env (gateway, Flink), default: "fraud_mlp / input__0 / output__0", effect: "the served model and its tensors" }
       - { key: MODEL_WEIGHTS, in: env (model server), default: "the proxy model", effect: "the weights the mock server loads (hot redeploy through the admin API)" }
     extend: "any KServe v2 server (docs/dev/models.md); another protocol through ModelClient"
+  external_scorer:
+    kind: service
+    label: Your scorer
+    what: "the decision service under test, built and run by you (in any language): it consumes the events topic, decides, and publishes one DecisionRecord per event to the decisions topic, with the event's id and the x-bench-trace header it received copied into `trace`"
+    code: "yours; the reference implementation of the contract is python/realy/external_scorer.py"
+    config:
+      - { key: "topics.events, topics.decisions", in: "contracts/pipelines/<pipeline>.yaml", default: "payments.events.raw, payments.decisions", effect: "the two topics your scorer reads and writes" }
+      - { key: x-bench-trace, in: Kafka header on every measured event, default: "a BenchTrace (realy.bench.v1)", effect: "copy it into DecisionRecord.trace: the collector correlates by run id and event id and measures end to end on the driver's clock" }
+      - { key: "DecisionRecord.features (optional)", in: your decisions, default: "absent", effect: "when present (the schema's vector), the Explorer shows it; verify does not recompute a scorer it does not own" }
+    extend: "the contract is two topics and two messages (TransactionEvent in, DecisionRecord out): docs/dev/external-scorer.md"
   collector:
     kind: driver
     label: Collector
@@ -484,6 +494,55 @@ topologies:
     avoid_when:
       - any question about fraud detection
     enhancements: []
+
+  external:
+    title: Your scorer (black box)
+    tagline: >-
+      PulseBench drives the load and measures; your own decision service consumes the events and publishes
+      the decisions. Completeness, duplicates, end-to-end latency and the audit are measured exactly as for
+      the bundled topologies; features, rules and scores are your service's, so they are not recomputed.
+    decides: your service
+    flink: untouched (not part of the run)
+    runtime: { ingress: kafka, scorer: external, flink_mode: none, flows: none, exact_target: null }
+    steps:
+      - { id: emitter, component: emitter, at: [0, 0], rate: "counter:emitter.emitted", p99: emitter.schedule_lag, sub: "open-loop, paced",
+          does: "sends each event at its intended time, with its trace in the x-bench-trace header", to: [{ id: events, label: produce, rate: "counter:emitter.emitted" }] }
+      - { id: events, component: events_topic, at: [1, 0], rate: "counter:emitter.emitted", p99: emitter.produce_ack, sub: Kafka topic,
+          does: "the inbound hop your service consumes", to: [{ id: scorer, label: consume }] }
+      - { id: scorer, component: external_scorer, at: [2, 0], rate: "counter:collector.decided", p99: collector.e2e, sub: black box,
+          does: "decides: whatever your service does (features, model, rules) is inside this box",
+          to: [{ id: decisions, label: publish, rate: "counter:collector.decided" }] }
+      - { id: decisions, component: decisions_topic, at: [3, 0], rate: "counter:collector.decided", p99: collector.egress, sub: decisions,
+          does: "the outbound hop: one DecisionRecord per event", to: [{ id: collector, label: consume, rate: "counter:collector.decided" }] }
+      - { id: collector, component: collector, at: [4, 0], rate: "counter:collector.decided", p99: collector.e2e, sub: end to end,
+          does: "correlates each decision with its event and measures end to end", to: [{ id: clickhouse, label: audit }] }
+      - { id: clickhouse, component: clickhouse, at: [4, 1], sub: audit, does: "the decisions, labels and events your run produced, for the audit check" }
+    capabilities:
+      answers_caller: { status: "no", note: "asynchronous over Kafka (benchmark a synchronous API with your own client against the same scenario)" }
+      owned_features_exact: { status: n/a, note: "your service's features are not recomputed: PulseBench does not know how it computes them" }
+      shared_features_exact: { status: n/a, note: "as above" }
+      multi_message: { status: partial, note: "the parts are emitted as messages; assembling them is your service's job" }
+      rescored_stages: { status: n/a, note: "your service decides which stages it scores" }
+      model_and_rules: { status: n/a, note: "your service's own" }
+      deadline_fallback: { status: n/a, note: "your service's own" }
+      survives_flink_restart: { status: n/a, note: "Flink is not part of the run" }
+      audit: { status: "yes", note: "every decision your service publishes is collected and audited in ClickHouse; missing and duplicate decisions are counted" }
+    scales_by: your service
+    tail: your service (the echo topology gives the instrument's own floor to subtract)
+    choose_when:
+      - "benchmark the platform you built (from this repository or not) under the same load, clock and completeness checks as the bundled topologies"
+      - "compare your service with a bundled topology on the same scenario, seed and host"
+    avoid_when:
+      - "you need feature, rule and score parity proven: that needs the pipeline to be one PulseBench can recompute"
+    enhancements:
+      - title: Reference scorer
+        why: "the contract is easiest to see in code"
+        effect: "python -m realy.external_scorer consumes the events and publishes traced decisions (a fixed rule): a template, and the way to try the topology on the bundled stack"
+        status: available
+      - title: Declared feature parity for your scorer
+        why: "your service may compute features defined in the same schema"
+        effect: "verify would compare the vectors your decisions carry with the reference, as it does for the bundled scorers"
+        status: idea
 
 # The hybrid most institutions end up with, built from the topologies above.
 hybrid: >-

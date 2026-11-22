@@ -125,5 +125,7 @@ def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.n
             i = idx("card_amount_sum_24h")
             x = 0.0 if lim <= 0 or i < 0 else (float(v[i]) / 100.0) / lim
         else:
-            raise ValueError(f"unknown derived fn {fn}")
+            # a plugin function (realy.features.derived_fns): the expression features' `event` view and `f`
+            from . import derived_fns
+            x = float(derived_fns.get(fn)(event_view(ev, txn), {o.name: float(v[o.index]) for o in schema.features}))
         v[s.index] = np.float32(x)

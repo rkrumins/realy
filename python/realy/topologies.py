@@ -23,7 +23,7 @@ PATH = REPO_ROOT / "contracts" / "topologies.yaml"
 # what the runner implements, per runtime choice (a new value is a new component: docs/dev/topologies.md)
 RUNTIME_VALUES = {
     "ingress": ("kafka", "grpc"),                 # how events reach the scorer
-    "scorer": ("gateway", "flink", "echo"),       # who decides
+    "scorer": ("gateway", "flink", "echo", "external"),   # who decides (external: your service, a black box)
     "flink_mode": ("features", "both", "none"),   # the Flink job's mode (none: Flink is not used)
     "flows": ("assembled_topic", "in_job", "none"),   # multi-message transactions: how they reach the scorer
 }
@@ -79,6 +79,11 @@ class Runtime:
     @property
     def echo(self) -> bool:
         return self.scorer == "echo"
+
+    @property
+    def external(self) -> bool:
+        """Your own scorer decides: PulseBench drives and measures, and configures nothing on its path."""
+        return self.scorer == "external"
 
     @property
     def supports_flows(self) -> bool:

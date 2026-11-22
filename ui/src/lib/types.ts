@@ -1,8 +1,8 @@
 /** API types (python/realy/control/app.py + the new console endpoints). u64 ids are strings. */
 
 export type Verdict = "PASS" | "FAIL" | "ABORTED" | "ERROR" | null | undefined;
-export type Topology = "gateway-kafka" | "gateway-grpc" | "flink-inline" | "echo-kafka";
-export const TOPOLOGIES: Topology[] = ["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"];
+export type Topology = "gateway-kafka" | "gateway-grpc" | "flink-inline" | "echo-kafka" | "external";
+export const TOPOLOGIES: Topology[] = ["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka", "external"];
 
 export interface ScenarioListItem {
   name: string;

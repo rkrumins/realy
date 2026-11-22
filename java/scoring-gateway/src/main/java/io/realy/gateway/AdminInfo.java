@@ -41,6 +41,7 @@ final class AdminInfo {
                 "sha256", sha256(FeatureSchema.loadText())));
         Map<String, Object> ext = new LinkedHashMap<>();
         ext.put("aggregations", io.realy.scoring.features.Aggregations.extensions());
+        ext.put("derived_fns", io.realy.scoring.features.DerivedFns.extensions());
         ext.put("plugins_dir", Env.str("PLUGINS_DIR", ""));
         ext.put("jars", io.realy.scoring.Plugins.jars().stream().map(x -> x.getFileName().toString()).toList());
         out.put("extensions", ext);

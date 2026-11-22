@@ -7,24 +7,24 @@ A scenario's `topology:` decides how events travel and who decides. A topology i
 
 ## Key differences
 
-| | [Gateway on Kafka](#gateway-kafka) | [Gateway on gRPC (sync)](#gateway-grpc) | [Flink inline](#flink-inline) | [Echo (calibration)](#echo-kafka) |
-|---|---|---|---|---|
-| Who decides | the scoring gateway (stateless Java service; any number of replicas up to the partition count) | the scoring gateway, behind a load balancer | the Flink job (async scoring operator after the keyed feature stages) | the gateway, without scoring (ScoringConfig.echo) |
-| Events reach the scorer by | kafka | grpc | kafka | kafka |
-| Flink job mode | features | features | both | none |
-| Multi-message transactions | assembled topic | none | in job | none |
-| Verifier's exact-feature target | 98.0% | 98.0% | 99.9% | n/a |
-| Answers the caller synchronously | no | yes | no | no |
-| Customer and card features exact | partly | partly | yes | n/a |
-| Shared-entity features exact | partly | partly | partly | n/a |
-| Transactions formed by several messages | yes | no | yes | no |
-| Lifecycle stages decided again | yes | no | yes | no |
-| Model, rules and policy | yes | yes | yes | no |
-| Answers in budget when a dependency is slow | yes | yes | yes | n/a |
-| Keeps deciding while Flink restarts | yes | yes | no | n/a |
-| Every decision durable before it counts | yes | yes | yes | yes |
-| Scales by | gateway replicas (one consumer group, up to the partition count) and Flink parallelism, independently | gateway replicas behind a load balancer; Flink parallelism independently | Flink parallelism (scorer and state together), up to the partition count for the source | n/a |
-| The tail usually comes from | two Kafka hops (in and out) and the Redis round trip; on a small shared host the broker's produce and fetch tails dominate | the audit write before the reply, then the model call; bidirectional streams avoid per-call overhead | the keyBy shuffles between the keyed stages sit on the decision path | the brokers and the driver themselves |
+| | [Gateway on Kafka](#gateway-kafka) | [Gateway on gRPC (sync)](#gateway-grpc) | [Flink inline](#flink-inline) | [Echo (calibration)](#echo-kafka) | [Your scorer (black box)](#external) |
+|---|---|---|---|---|---|
+| Who decides | the scoring gateway (stateless Java service; any number of replicas up to the partition count) | the scoring gateway, behind a load balancer | the Flink job (async scoring operator after the keyed feature stages) | the gateway, without scoring (ScoringConfig.echo) | your service |
+| Events reach the scorer by | kafka | grpc | kafka | kafka | kafka |
+| Flink job mode | features | features | both | none | none |
+| Multi-message transactions | assembled topic | none | in job | none | none |
+| Verifier's exact-feature target | 98.0% | 98.0% | 99.9% | n/a | n/a |
+| Answers the caller synchronously | no | yes | no | no | no |
+| Customer and card features exact | partly | partly | yes | n/a | n/a |
+| Shared-entity features exact | partly | partly | partly | n/a | n/a |
+| Transactions formed by several messages | yes | no | yes | no | partly |
+| Lifecycle stages decided again | yes | no | yes | no | n/a |
+| Model, rules and policy | yes | yes | yes | no | n/a |
+| Answers in budget when a dependency is slow | yes | yes | yes | n/a | n/a |
+| Keeps deciding while Flink restarts | yes | yes | no | n/a | n/a |
+| Every decision durable before it counts | yes | yes | yes | yes | yes |
+| Scales by | gateway replicas (one consumer group, up to the partition count) and Flink parallelism, independently | gateway replicas behind a load balancer; Flink parallelism independently | Flink parallelism (scorer and state together), up to the partition count for the source | n/a | your service |
+| The tail usually comes from | two Kafka hops (in and out) and the Redis round trip; on a small shared host the broker's produce and fetch tails dominate | the audit write before the reply, then the model call; bidirectional streams avoid per-call overhead | the keyBy shuffles between the keyed stages sit on the decision path | the brokers and the driver themselves | your service (the echo topology gives the instrument's own floor to subtract) |
 
 **The hybrid most institutions end up with.** gateway-grpc on the card authorisation path, gateway-kafka on asynchronous channels, both reading one Flink `features` job through Redis (one set of feature definitions, computed once), and flink-inline only where exact shared-entity features are worth the shuffles on the decision path.
 
@@ -235,6 +235,50 @@ Runtime: events reach the scorer by **kafka**, the **echo** decides, the Flink j
 
 **Bundled scenarios:** `echo-calibration`.
 
+## external
+
+**Your scorer (black box).** PulseBench drives the load and measures; your own decision service consumes the events and publishes the decisions. Completeness, duplicates, end-to-end latency and the audit are measured exactly as for the bundled topologies; features, rules and scores are your service's, so they are not recomputed.
+
+Runtime: events reach the scorer by **kafka**, the **external** decides, the Flink job runs in **none** mode, multi-message transactions: **none**.
+
+### How it is built
+
+1. **Emitter** ([Emitter](#component-emitter)): sends each event at its intended time, with its trace in the x-bench-trace header
+2. **events.raw** ([events.raw](#component-events_topic)): the inbound hop your service consumes
+3. **Your scorer** ([Your scorer](#component-external_scorer)): decides: whatever your service does (features, model, rules) is inside this box
+4. **decisions** ([decisions](#component-decisions_topic)): the outbound hop: one DecisionRecord per event
+5. **Collector** ([Collector](#component-collector)): correlates each decision with its event and measures end to end
+6. **ClickHouse** ([ClickHouse](#component-clickhouse)): the decisions, labels and events your run produced, for the audit check
+
+### What works and what does not
+
+| Capability | | Why |
+|---|---|---|
+| Answers the caller synchronously | no | asynchronous over Kafka (benchmark a synchronous API with your own client against the same scenario) |
+| Customer and card features exact | n/a | your service's features are not recomputed: PulseBench does not know how it computes them |
+| Shared-entity features exact | n/a | as above |
+| Transactions formed by several messages | partly | the parts are emitted as messages; assembling them is your service's job |
+| Lifecycle stages decided again | n/a | your service decides which stages it scores |
+| Model, rules and policy | n/a | your service's own |
+| Answers in budget when a dependency is slow | n/a | your service's own |
+| Keeps deciding while Flink restarts | n/a | Flink is not part of the run |
+| Every decision durable before it counts | yes | every decision your service publishes is collected and audited in ClickHouse; missing and duplicate decisions are counted |
+
+**Choose it when:** benchmark the platform you built (from this repository or not) under the same load, clock and completeness checks as the bundled topologies; compare your service with a bundled topology on the same scenario, seed and host.
+
+**Avoid it when:** you need feature, rule and score parity proven: that needs the pipeline to be one PulseBench can recompute.
+
+**Scales by:** your service. **Tail:** your service (the echo topology gives the instrument's own floor to subtract).
+
+**Bundled scenarios:** `external-smoke`.
+
+### Limits and the enhancements that would lift them
+
+| Enhancement | Why | Effect | Status |
+|---|---|---|---|
+| Reference scorer | the contract is easiest to see in code | python -m realy.external_scorer consumes the events and publishes traced decisions (a fixed rule): a template, and the way to try the topology on the bundled stack | available |
+| Declared feature parity for your scorer | your service may compute features defined in the same schema | verify would compare the vectors your decisions carry with the reference, as it does for the bundled scorers | idea |
+
 ## Components
 
 Every building block a topology's steps use: what it does, where its code is, every setting that controls it (where it is set, and its default), and how to swap or extend it.
@@ -243,7 +287,7 @@ Every building block a topology's steps use: what it does, where its code is, ev
 
 **Emitter** (driver): the open-loop load generator; sends each event at its intended time, so a slow pipeline cannot slow the schedule
 
-Code: `python/realy/emit/driver.py (generator python/realy/gen)`. Used by: [gateway-kafka](#gateway-kafka), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka).
+Code: `python/realy/emit/driver.py (generator python/realy/gen)`. Used by: [gateway-kafka](#gateway-kafka), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka), [external](#external).
 
 | Setting | Set in | Default | Effect |
 |---|---|---|---|
@@ -275,7 +319,7 @@ Code: `java/load-emitter, python/realy/runner/sync.py`. Used by: [gateway-grpc](
 
 **events.raw** (kafka): the inbound topic: every event (and every message of a multi-message transaction), keyed by the pipeline's partition entity so one customer's events are ordered
 
-Code: `contracts/kafka/topics.yaml, deploy/compose/kafka/create-topics.sh`. Used by: [gateway-kafka](#gateway-kafka), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka).
+Code: `contracts/kafka/topics.yaml, deploy/compose/kafka/create-topics.sh`. Used by: [gateway-kafka](#gateway-kafka), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka), [external](#external).
 
 | Setting | Set in | Default | Effect |
 |---|---|---|---|
@@ -315,7 +359,7 @@ Code: `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java (mi
 
 **decisions** (kafka): the audit write-ahead log: every DecisionRecord, durable before the source offset is committed (async) or the reply is sent (sync)
 
-Code: `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java, FraudJob.sink (Flink)`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka).
+Code: `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java, FraudJob.sink (Flink)`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka), [external](#external).
 
 | Setting | Set in | Default | Effect |
 |---|---|---|---|
@@ -423,11 +467,25 @@ Code: `java/mock-model-server, models/`. Used by: [gateway-kafka](#gateway-kafka
 
 **Swap or extend:** any KServe v2 server (docs/dev/models.md); another protocol through ModelClient
 
+### Component `external_scorer`
+
+**Your scorer** (service): the decision service under test, built and run by you (in any language): it consumes the events topic, decides, and publishes one DecisionRecord per event to the decisions topic, with the event's id and the x-bench-trace header it received copied into `trace`
+
+Code: `yours; the reference implementation of the contract is python/realy/external_scorer.py`. Used by: [external](#external).
+
+| Setting | Set in | Default | Effect |
+|---|---|---|---|
+| `topics.events, topics.decisions` | contracts/pipelines/<pipeline>.yaml | payments.events.raw, payments.decisions | the two topics your scorer reads and writes |
+| `x-bench-trace` | Kafka header on every measured event | a BenchTrace (realy.bench.v1) | copy it into DecisionRecord.trace: the collector correlates by run id and event id and measures end to end on the driver's clock |
+| `DecisionRecord.features (optional)` | your decisions | absent | when present (the schema's vector), the Explorer shows it; verify does not recompute a scorer it does not own |
+
+**Swap or extend:** the contract is two topics and two messages (TransactionEvent in, DecisionRecord out): docs/dev/external-scorer.md
+
 ### Component `collector`
 
 **Collector** (driver): the instrument's end of the run: consumes the decisions topic, correlates each decision with its event by id, and records end-to-end latency on the driver's clock
 
-Code: `python/realy/collect/collector.py`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka).
+Code: `python/realy/collect/collector.py`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline), [echo-kafka](#echo-kafka), [external](#external).
 
 | Setting | Set in | Default | Effect |
 |---|---|---|---|
@@ -439,7 +497,7 @@ Code: `python/realy/collect/collector.py`. Used by: [gateway-kafka](#gateway-kaf
 
 **ClickHouse** (sink): the asynchronous audit and analytics store: decisions, labels and raw events through Kafka engines; the training view; independent verification
 
-Code: `contracts/storage/clickhouse (generated by python/realy/codegen.py)`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline).
+Code: `contracts/storage/clickhouse (generated by python/realy/codegen.py)`. Used by: [gateway-kafka](#gateway-kafka), [gateway-grpc](#gateway-grpc), [flink-inline](#flink-inline), [external](#external).
 
 | Setting | Set in | Default | Effect |
 |---|---|---|---|

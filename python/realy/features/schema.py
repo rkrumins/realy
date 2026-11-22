@@ -142,6 +142,11 @@ def _load_schema(path: str) -> FeatureSchema:
             if f.get("expr") is not None:
                 import cel
                 cel.compile(f["expr"])          # fail at load, not on the first event
+            else:
+                from . import derived_fns
+                if not derived_fns.has(f["fn"]):
+                    raise ValueError(f"{f['name']}: unknown derived fn {f['fn']!r} "
+                                     f"(registered: {', '.join(derived_fns.names())})")
             kw.update(fn=f.get("fn"), expr=f.get("expr"))
         else:
             raise ValueError(f"{f['name']}: unknown source {src}")

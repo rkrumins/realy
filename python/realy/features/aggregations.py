@@ -252,30 +252,13 @@ def extensions() -> list[str]:
 
 
 def load_plugins(modules: str | None = None) -> list[str]:
-    """Import the twin modules of plugin aggregations: REALY_AGGREGATION_PLUGINS (comma-separated module
-    names, e.g. `realy.plugin_example`; PLUGINS_DIR/python is on the import path) and the
-    `pulsebench.aggregations` entry points of installed packages. Each module registers its aggregations
-    with `register`. Returns the modules imported."""
-    import importlib
-    import os
-    import sys
-    done = []
-    pdir = os.environ.get("PLUGINS_DIR", "")
-    if pdir and os.path.isdir(os.path.join(pdir, "python")) and os.path.join(pdir, "python") not in sys.path:
-        sys.path.append(os.path.join(pdir, "python"))   # the twins next to the jars (PLUGINS_DIR/python)
-    spec = os.environ.get("REALY_AGGREGATION_PLUGINS", "") if modules is None else modules
-    for m in [x.strip() for x in spec.split(",") if x.strip()]:
-        importlib.import_module(m)
-        done.append(m)
-    if modules is None:
-        try:
-            from importlib.metadata import entry_points
-            for ep in entry_points(group="pulsebench.aggregations"):
-                ep.load()
-                done.append(ep.value)
-        except Exception as e:  # noqa: BLE001 - a broken plugin must say so, not vanish
-            raise RuntimeError(f"an aggregation plugin failed to load: {e}") from e
-    return done
+    """Import the twin modules of plugins (realy.plugins): `modules` (comma-separated) exactly, or
+    REALY_PLUGINS and the `pulsebench.plugins` entry points. Each module registers its aggregations with
+    `register`. Returns the modules imported."""
+    from .. import plugins
+    if modules is not None:
+        return plugins.load([m.strip() for m in modules.split(",") if m.strip()])
+    return plugins.load()
 
 
 

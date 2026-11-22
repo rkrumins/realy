@@ -147,6 +147,9 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         # every traced record the emitter sent expects a decision: the unified events, and a re-scored
         # lifecycle stage of a multi-message transaction (a decision of its own, not an event row)
         n_run_events = int(emitted.num_rows)
+    from ..topologies import runtime as _runtime
+    if _runtime(sc.topology).external:
+        return verify_external(run_dir, sc, dec, n_run_events, clickhouse, schema)
     dec = dec.filter(pa.compute.equal(dec["revision"], 0))
     d_ids = dec["event_id"].to_numpy()
     _, first = np.unique(d_ids, return_index=True)
@@ -337,6 +340,40 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     return out
 
 
+EXTERNAL_NOTE = "your scorer's own (the external topology: PulseBench does not know how it decides)"
+
+
+def verify_external(run_dir: Path, sc: Scenario, dec: pa.Table, expected: int, clickhouse: str | None,
+                    schema) -> dict[str, Any]:
+    """Verify a black-box scorer's run: what can be proved without knowing how it decides. Every expected
+    event has exactly one decision (missing and duplicates counted), the audit in ClickHouse is complete,
+    and every outcome is a valid one. Features, rules and scores are reported as not checkable."""
+    out: dict[str, Any] = {"run_id": run_dir.name, "topology": sc.topology}
+    first = dec.filter(pa.compute.equal(dec["revision"], 0))
+    ids = first["event_id"].to_numpy()
+    uniq = int(np.unique(ids).size)
+    outcomes = first["outcome"].to_numpy()
+    valid = np.isin(outcomes, [1, 2, 3, 4])          # APPROVE, REVIEW, DECLINE, CHALLENGE
+    names = {1: "APPROVE", 2: "REVIEW", 3: "DECLINE", 4: "CHALLENGE"}
+    u, c = np.unique(outcomes, return_counts=True)
+    out["decisions"] = {"expected": expected, "decided_unique": uniq, "missing": max(0, expected - uniq),
+                        "duplicates": int(ids.size - uniq), "invalid_outcomes": int((~valid).sum()),
+                        "outcomes": {names.get(int(k), str(int(k))): int(n) for k, n in zip(u, c)}}
+    out["features"] = {"compared_events": 0, "exact_set_agreement": None, "exact_set_ok": True, "comparable": True,
+                       "note": f"not checked: {EXTERNAL_NOTE}", "worst": [], "not_checkable": EXTERNAL_NOTE}
+    for k in ("rules", "score", "outcome"):
+        out[k] = {"checked": 0, "parity": None, "not_checkable": EXTERNAL_NOTE}
+    ch = clickhouse or os.environ.get("CLICKHOUSE_URL", "http://localhost:8123")
+    try:
+        out["audit"] = audit_checks(ch, run_dir.name, expected, None, None, schema)
+    except Exception as e:  # noqa: BLE001
+        out["audit"] = {"error": f"ClickHouse unavailable or not ingesting: {e}"}
+    out["passed"], out["reasons"] = judge(out)
+    out["inconclusive"] = False
+    (run_dir / "verify.json").write_text(json.dumps(out, indent=1, default=float))
+    return out
+
+
 def _scorer_in_task(topology: str) -> bool:
     from ..topologies import runtime
     return runtime(topology).scorer == "flink"
@@ -475,7 +512,7 @@ def _q(ch: str, sql: str, retries: int = 2) -> list[dict]:
     raise ClickHouseError(f"{last} (query: {' '.join(sql.split())[:160]})")
 
 
-def audit_checks(ch: str, run_id: str, emitted: int, scorer: ProxyScorer, rules: Rules, schema) -> dict[str, Any]:
+def audit_checks(ch: str, run_id: str, emitted: int, scorer: ProxyScorer | None, rules: Rules | None, schema) -> dict[str, Any]:
     import time
     # wait for asynchronous ingestion to catch up (bounded)
     got = 0
@@ -499,7 +536,7 @@ def audit_checks(ch: str, run_id: str, emitted: int, scorer: ProxyScorer, rules:
         WHERE run_id = '{run_id}' AND revision = 0 AND path = 'FULL' AND length(features_raw) = {len(schema.features)}
         ORDER BY cityHash64(event_id) LIMIT 2000""")
     replay_ok = 0
-    if sample and scorer.checkable:
+    if sample and scorer is not None and scorer.checkable:
         X = np.asarray([s["features_raw"] for s in sample], np.float32)
         py = scorer.score(X)
         replay_ok = int(sum(abs(float(p) - float(s["score"])) <= 1e-5 for p, s in zip(py, sample)))
@@ -550,6 +587,12 @@ def judge(v: dict[str, Any]) -> tuple[bool, list[str]]:
     elif not f["exact_set_ok"]:
         reasons.append(f"exact-set feature agreement {(f['exact_set_agreement'] or 0):.4%} below "
                        f"{f['exact_set_target']:.1%}")
+    d = v.get("decisions")
+    if d:
+        if d["missing"]:
+            reasons.append(f"{d['missing']:,} of {d['expected']:,} events have no decision")
+        if d["invalid_outcomes"]:
+            reasons.append(f"{d['invalid_outcomes']:,} decisions carry no valid outcome")
     a = v.get("audit", {})
     if "complete" in a and not a["complete"]:
         reasons.append(f"ClickHouse audit incomplete ({a.get('audited_unique', 0):,} of {a.get('emitted', 0):,} decisions)")
@@ -565,13 +608,21 @@ def render(v: dict[str, Any]) -> str:
               if f.get("comparable", True) else f"NOT JUDGED: {f.get('not_comparable_because')}")
     lines = [f"=== verify {v['run_id']}: {head} ===",
              *(f"  - {r}" for r in v.get("reasons") or []),
-             f"features: {f['compared_events']:,} served vectors vs reference; exact-set agreement "
-             f"{(f['exact_set_agreement'] or 0):.4%} ({judged}; {f['note']})",
-             "  lowest agreement: " + ", ".join(f"{k} {a:.1%}" for k, a in f["worst"]),
-             f"rules parity (Java CEL vs Python CEL): {v['rules']['parity']:.4%} of {v['rules']['checked']:,}",
+             *([f"features: not checkable ({f['not_checkable']})"] if f.get("not_checkable") else
+               [f"features: {f['compared_events']:,} served vectors vs reference; exact-set agreement "
+                f"{(f['exact_set_agreement'] or 0):.4%} ({judged}; {f['note']})",
+                "  lowest agreement: " + ", ".join(f"{k} {a:.1%}" for k, a in f["worst"])]),
+             (f"rules parity (Java CEL vs Python CEL): {v['rules']['parity']:.4%} of {v['rules']['checked']:,}"
+              if v["rules"].get("parity") is not None else f"rules parity: not checkable ({v['rules'].get('not_checkable')})"),
              (f"score parity (proxy model recompute): {v['score']['parity']:.4%} of {v['score']['checked']:,}"
               if v["score"].get("parity") is not None else f"score parity: not checkable ({v['score'].get('not_checkable')})"),
-             f"outcome parity: {v['outcome']['parity']:.4%}"]
+             (f"outcome parity: {v['outcome']['parity']:.4%}"
+              if v["outcome"].get("parity") is not None else f"outcome parity: not checkable ({v['outcome'].get('not_checkable')})")]
+    d = v.get("decisions")
+    if d:
+        lines.insert(1 + len(v.get("reasons") or []), f"decisions: {d['decided_unique']:,} of {d['expected']:,} events decided, missing {d['missing']:,}, "
+                        f"duplicates {d['duplicates']:,}, invalid outcomes {d['invalid_outcomes']:,} "
+                        f"({', '.join(f'{k} {n:,}' for k, n in d['outcomes'].items())})")
     a = v.get("audit", {})
     if "error" in a:
         lines.append(f"audit: {a['error']}")

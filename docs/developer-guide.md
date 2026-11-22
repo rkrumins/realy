@@ -92,6 +92,11 @@ mode, how multi-message transactions are assembled), its steps from the componen
 works and what does not. The runner, the scenario model, the live map and the verifier all read it.
 Step by step, with validation: [building a topology](dev/topologies.md).
 
+### Benchmark a scorer you built
+
+The `external` topology treats your decision service as a black box: two topics, two messages, and the
+trace header copied into each decision ([benchmark your own scorer](dev/external-scorer.md)).
+
 ### Add an aggregation kind
 
 A Java `Aggregation` plugin and its Python twin, proved equal by shared conformance fixtures, deployed as

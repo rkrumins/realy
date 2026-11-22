@@ -12,7 +12,7 @@ changes in the results.
 |---|---|---|
 | **The bundled stack** | nothing: everything runs in Docker or the local cluster | `make up`; `pulsebench run smoke` |
 | **The pipeline on your infrastructure** | Kafka, Redis, model server, ClickHouse (and optionally Flink) | Compose: `docker-compose.external.yml` with `external.env`. Kubernetes: the same environment variables on the gateway, the Flink TaskManagers and the console (the production overlay shows every one) |
-| **Your own scorer** | the decision service too: PulseBench only drives load and measures | planned (a `scorer: external` topology): your service consumes the events topic and publishes `DecisionRecord`s with the trace it received |
+| **Your own scorer** | the decision service too: PulseBench only drives load and measures | the `external` topology: your service consumes the events topic and publishes `DecisionRecord`s with the trace it received ([benchmark your own scorer](dev/external-scorer.md)) |
 
 In every case the benchmark (the emitter, collector, runner, verifier and console) is the instrument, and
 the gateway, the Flink job, the model server and the stores are the system under test.
@@ -164,6 +164,31 @@ The init scripts replace `__KAFKA_BROKERS__` in the DDL with your broker list.
 `PUT /admin/config` changes scoring live (the benchmark uses it to apply a scenario). Set `ADMIN_TOKEN_FILE`
 (or `ADMIN_TOKEN`) on the gateway and the mock model server, and `REALY_ADMIN_TOKEN` on the runner, which
 then sends `Authorization: Bearer <token>`. `ADMIN_WRITE=false` refuses writes altogether.
+
+## Prove it on one host: the secured overlay
+
+Before pointing the pipeline at managed services, run it against production-shaped infrastructure on one
+machine. `deploy/compose/docker-compose.secured.yml` replaces the bundled components' easy settings with
+the ones managed services impose, so every client takes the code path it takes in production:
+
+| Component | Bundled stack | Secured overlay | Code path exercised |
+|---|---|---|---|
+| Kafka | plaintext | a SASL/PLAIN listener (`kafka:29094`) for every client: gateway, Flink source and sink, emitter, collector, control and metrics, ClickHouse's Kafka engine | `KafkaProps.security()` (Java), `common/kafka.py` (Python), ClickHouse `<kafka>` settings (`clickhouse/secured.xml`) |
+| Kafka topics | created by the runner | created by `kafka-init` as an operator would; the runner only checks them (`REALY_KAFKA_TOPICS=verify`) | topic verification, partitions and replication in the preflight |
+| Redis | one node, no password | a three-node Redis Cluster with a password (`redis-c1..3`, formed by `redis-cluster-init`) | Lettuce `RedisClusterClient` with topology refresh (gateway, Flink store writer), redis-py `RedisCluster` (seeding, verify, run lease, `fs:*` reset) |
+| ClickHouse | the default user | a named user with a password (the default user removed) | the credentials headers of every Python query, the init scripts |
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml up -d
+docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml \
+  exec console pulsebench infra check smoke        # Kafka SASL_PLAINTEXT, Redis cluster (3 primaries), ...
+docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml \
+  exec console pulsebench run smoke --verify
+```
+
+The passwords are development defaults (`SECURED_KAFKA_PASSWORD`, `SECURED_REDIS_PASSWORD`,
+`SECURED_CLICKHOUSE_PASSWORD` override them). Return to the bundled stack with a plain `up -d` (the
+ClickHouse container is recreated, so its tables are rebuilt and earlier audit rows are gone).
 
 ## What verification proves against real infrastructure
 

@@ -86,6 +86,8 @@ public final class FeatureSchema {
                     String expr = text(f, "expr");
                     if ((fnName == null) == (expr == null))
                         throw new IllegalArgumentException(name + ": a derived feature needs exactly one of `fn` or `expr`");
+                    if (fnName != null && !DerivedFns.has(fnName))
+                        throw new IllegalArgumentException(name + ": unknown derived fn " + fnName + " (registered: " + DerivedFns.names() + ")");
                     spec = new FeatureSpec(i, name, src, null, null, null, null, 0, 0, def, null, fnName,
                             expr == null ? null : io.realy.scoring.rules.Cel.compileNumeric(expr));
                 }

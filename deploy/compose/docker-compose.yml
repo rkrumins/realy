@@ -254,7 +254,7 @@ services:
       FLINK_CHECKPOINTS_LOCAL: /flink-checkpoints
       # Python twins of plugin aggregations (verify recomputes their features): modules in ./plugins/python
       PLUGINS_DIR: /opt/realy/plugins
-      REALY_AGGREGATION_PLUGINS: ${REALY_AGGREGATION_PLUGINS:-}
+      REALY_PLUGINS: ${REALY_PLUGINS:-}
     stop_grace_period: 75s
     volumes:
       - ./plugins:/opt/realy/plugins:ro

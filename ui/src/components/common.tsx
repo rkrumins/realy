@@ -75,10 +75,11 @@ export function StatusBadge({ status, phase }: { status: string; phase?: string 
 
 const TOPO_LABEL: Record<string, string> = {
   "gateway-kafka": "async gateway", "gateway-grpc": "sync gRPC", "flink-inline": "Flink inline", "echo-kafka": "echo",
+  external: "your scorer",
 };
 export function TopologyBadge({ topology }: { topology?: string | null }) {
   if (!topology) return null;
-  const tone = topology === "flink-inline" ? "info" : topology === "gateway-grpc" ? "accent" : topology === "echo-kafka" ? "neutral" : "neutral";
+  const tone = topology === "flink-inline" ? "info" : topology === "gateway-grpc" ? "accent" : topology === "external" ? "warn" : "neutral";
   return <Badge tone={tone} className="font-mono text-[11px]">{TOPO_LABEL[topology] ?? topology}</Badge>;
 }
 export const topologyLabel = (t?: string | null) => (t ? TOPO_LABEL[t] ?? t : "—");

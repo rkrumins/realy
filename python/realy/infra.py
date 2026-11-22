@@ -227,16 +227,20 @@ def check_gateway_and_model(scorer: str) -> list[dict[str, Any]]:
         if sha and sha != _schema_sha():
             c.add("schema", "fail", "the gateway's feature schema differs from the runner's",
                   "deploy the same contracts to the gateway (image or FEATURE_SCHEMA) as the runner uses")
-        ext = (info.get("extensions") or {}).get("aggregations")
-        if ext is not None:
+        exts = info.get("extensions") or {}
+        if exts:
             from .features import aggregations as _aggs
-            missing = sorted(set(ext) - set(_aggs.names()))
+            from .features import derived_fns as _fns
+            have = {"aggregations": set(_aggs.names()), "derived_fns": set(_fns.names())}
+            plugins = [f"{k[:-1].replace('_', ' ')} {n}" for k in ("aggregations", "derived_fns") for n in exts.get(k) or []]
+            missing = [f"{k[:-1].replace('_', ' ')} {n}" for k in ("aggregations", "derived_fns")
+                       for n in exts.get(k) or [] if n not in have[k]]
             if missing:
-                c.add("extensions", "fail", f"the gateway runs plugin aggregations without a Python twin here: "
-                      f"{', '.join(missing)} (verify cannot recompute their features)",
-                      "install the twin module and set REALY_AGGREGATION_PLUGINS (docs/dev/extending.md)")
-            elif ext:
-                c.add("extensions", "pass", f"plugin aggregations {', '.join(ext)}, each with its Python twin")
+                c.add("extensions", "fail", f"the gateway runs plugins without a Python twin here: {', '.join(missing)} "
+                      "(verify cannot recompute their features)",
+                      "install the twin module and set REALY_PLUGINS (docs/dev/extending.md)")
+            elif plugins:
+                c.add("extensions", "pass", f"plugins {', '.join(plugins)}, each with its Python twin")
         red = info.get("redis") or {}
         if red.get("mode") == "mock":
             c.add("store", "warn", "the gateway uses the mock feature store (scoring.feature_source: mock)",
@@ -310,6 +314,19 @@ def simulated(scenario: Any, model_mock: bool | None) -> list[dict[str, str]]:
     return out
 
 
+def check_external_scorer() -> dict[str, Any]:
+    """Your own scorer is a black box: it is not probed, and nothing on its path is configured by the run.
+    The topics it reads and writes are checked with Kafka; the run's decisions prove it is consuming."""
+    from .bindings import pipeline
+    t = pipeline().topics
+    c = _C("scorer", "Your scorer", "external")
+    c.out["implementation"] = "external"
+    c.add("contract", "pass", f"not probed (a black box): it must consume {t.get('events')} and publish one "
+          f"DecisionRecord per event to {t.get('decisions')}, with the x-bench-trace header copied into `trace`",
+          "docs/dev/external-scorer.md")
+    return c.done()
+
+
 def check(scenario: Any = None, topology: str | None = None) -> dict[str, Any]:
     """Probe every component the topology uses (in parallel). `scenario`: a Scenario (its topology and
     simulated settings), or just `topology`."""
@@ -323,6 +340,8 @@ def check(scenario: Any = None, topology: str | None = None) -> dict[str, Any]:
         jobs.append(check_flink)
     if rt.scorer in ("gateway", "echo"):
         jobs.append(lambda: check_gateway_and_model(rt.scorer))
+    if rt.external:
+        jobs.append(check_external_scorer)
     with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
         results = list(ex.map(lambda f: f(), jobs))
     comps: list[dict[str, Any]] = []

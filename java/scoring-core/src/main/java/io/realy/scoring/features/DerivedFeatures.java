@@ -38,8 +38,12 @@ public final class DerivedFeatures {
                 // expression cost ~0.1 ms of gateway CPU per event with six expressions.)
                 if (vars == null) vars = java.util.Map.of("event", view != null ? view : EventView.of(e), "f", new FeatureMap(schema, v));
                 v[s.index()] = (float) s.expr().eval(vars);
-            } else {
+            } else if (DerivedFns.builtin(s.fn())) {
                 v[s.index()] = (float) value(schema, s.fn(), e, attrs, v);
+            } else {
+                // a plugin function (DerivedFns): the same `event` view and `f` as an expression feature
+                if (view == null) view = EventView.of(e);
+                v[s.index()] = (float) DerivedFns.get(s.fn()).apply(view, new FeatureMap(schema, v));
             }
         }
     }

@@ -100,6 +100,12 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
                    startup: Any = None) -> None:
     from .startup import Startup
     st = startup or Startup(None, lambda _m: None)
+    if runtime(sc.topology).external:
+        # a black box: nothing on its path is PulseBench's to configure (scoring, model, store, Flink)
+        st.skip("config", "your scorer: PulseBench configures nothing on its path")
+        st.skip("store", "your scorer keeps its own state")
+        st.skip("flink", "Flink is not part of this topology")
+        return
     st.start("config")
     scoring = sc.scoring_config()
     model_cfg = sc.model_server_config()
@@ -617,6 +623,18 @@ class _Run:
         return {"mode": self.sc.flink_state, "inherited_runs": int(before.get("count", 0)),
                 "inherited": list(before.get("runs", []))[-10:], "unknown": bool(before.get("unknown"))}
 
+    def _seed_profiles(self, st: Any) -> None:
+        st.start("profiles")
+        try:
+            from .seed import seed_profiles
+            n = seed_profiles(self.world)
+            if n:
+                self.log(f"seeded {n:,} profile blobs into the online store")
+            st.finish("profiles", f"seeded {n:,} customer / merchant profile blobs" if n else "already seeded for this world")
+        except Exception as e:  # noqa: BLE001
+            self.log(f"warn: profile seeding skipped ({e})")
+            st.finish("profiles", f"skipped: {e}", "warn")
+
     # ------------------------------------------------------------------ phases
     def preflight(self) -> None:
         """Check every component the topology uses before anything is sent (realy.infra): record what this
@@ -684,16 +702,10 @@ class _Run:
         if created:
             log(f"created topics: {', '.join(created)}")
         st.finish("topics", f"created {', '.join(created)}" if created else "all present")
-        st.start("profiles")
-        try:
-            from .seed import seed_profiles
-            n = seed_profiles(self.world)
-            if n:
-                log(f"seeded {n:,} profile blobs into the online store")
-            st.finish("profiles", f"seeded {n:,} customer / merchant profile blobs" if n else "already seeded for this world")
-        except Exception as e:  # noqa: BLE001
-            log(f"warn: profile seeding skipped ({e})")
-            st.finish("profiles", f"skipped: {e}", "warn")
+        if runtime(sc.topology).external:
+            st.skip("profiles", "your scorer reads its own reference data")
+        else:
+            self._seed_profiles(st)
         self.check("prepare")
         st.start("provenance", "which world built the running feature state?")
         dec = world_switch_state(sc, self.state_identity(), log, ep.flink_rest)

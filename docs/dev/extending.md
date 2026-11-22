@@ -13,6 +13,7 @@ while you do it.
 | a rule, threshold or step-up policy | `rules/*.yaml`, live config | [rules](../reference/rules.md) |
 | a topology (which components, in which order) | `contracts/topologies.yaml` | [topologies](topologies.md) |
 | **an aggregation kind** (`agg:` other than the eight built-ins) | an `Aggregation` plugin, Java + Python twin | this page |
+| **a scoring-time function** CEL cannot express (`fn:` other than the built-in library) | a `DerivedFn` plugin, Java + Python twin | [derived functions](#derived-functions) |
 | another feature store | `OnlineStore` (Java interface, `io.realy.scoring.store`) | [feature store](../feature-store-and-inference.md) |
 | another model protocol | `ModelClient` (`io.realy.scoring.model`) | [feature store and inference](../feature-store-and-inference.md) |
 
@@ -24,14 +25,17 @@ correctness claims (exact features, rule, score and outcome parity) rest on the 
 extension is accepted only with its Python twin, and both must pass the same fixtures:
 
 - Java: [`AggregationConformance`](../../java/scoring-core/src/main/java/io/realy/scoring/features/AggregationConformance.java)
-  replays a fixture through the registered Java aggregation;
-- Python: [`realy.features.aggregations`](../../python/realy/features/aggregations.py) writes the
-  fixture (`contracts/testdata/aggregations/*.json`) from the twin;
+  and [`DerivedFnConformance`](../../java/scoring-core/src/main/java/io/realy/scoring/features/DerivedFnConformance.java)
+  replay a fixture through the registered Java plugin;
+- Python: [`realy.features.aggregations`](../../python/realy/features/aggregations.py) and
+  [`realy.features.derived_fns`](../../python/realy/features/derived_fns.py) write the fixtures
+  (`contracts/testdata/aggregations/*.json`, `contracts/testdata/derived/*.json`) from the twin;
 - values agree to 1e-9 (relative), which is far stricter than verify's tolerance and only holds when the
   windowing, eviction and fold logic agree exactly.
 
-The preflight enforces the rule at run time: when the gateway reports a plugin aggregation that has no
-Python twin loaded, `pulsebench infra check` fails with the missing names (verify could not check them).
+The preflight enforces the rule at run time: when the gateway reports a plugin (an aggregation or a derived
+function) that has no Python twin loaded, `pulsebench infra check` fails with the missing names. Verify
+could not check them.
 
 ## Aggregations: how the extension point works
 
@@ -109,12 +113,12 @@ or verifies features can load it:
 |---|---|---|
 | gateway | `PLUGINS_DIR` (every `*.jar` in it) | set |
 | Flink JobManager and TaskManagers | `PLUGINS_DIR` (the same jars as the gateway) | set |
-| console, runner, verify | `REALY_AGGREGATION_PLUGINS` (twin module names); `PLUGINS_DIR/python` is on the import path; installed packages can use the `pulsebench.aggregations` entry point group instead | `PLUGINS_DIR` set; set `REALY_AGGREGATION_PLUGINS` when you start the stack |
+| console, runner, verify | `REALY_PLUGINS` (twin module names); `PLUGINS_DIR/python` is on the import path; installed packages can use the `pulsebench.plugins` entry point group instead | `PLUGINS_DIR` set; set `REALY_PLUGINS` when you start the stack |
 
 ```bash
 gradle -p java :plugin-example:jar
 cp java/plugin-example/build/libs/realy-plugin-example.jar deploy/compose/plugins/
-REALY_AGGREGATION_PLUGINS=realy.plugin_example docker compose -f deploy/compose/docker-compose.yml up -d
+REALY_PLUGINS=realy.plugin_example docker compose -f deploy/compose/docker-compose.yml up -d
 ```
 
 In Kubernetes, mount the jars (an init container or a volume) on the gateway and Flink pods, set
@@ -130,6 +134,41 @@ In Kubernetes, mount the jars (an init container or a volume) on the gateway and
 **6. Prove it.** `pulsebench infra check` lists the gateway's plugin aggregations (from `/admin/info`,
 `extensions`) and fails if a twin is missing. A verified run (`pulsebench run smoke --verify`) then
 recomputes the new feature from the event log and compares it with what the pipeline served.
+
+## Derived functions
+
+A `source: derived` feature is either a CEL expression (`expr:`, no code) or a function (`fn:`). The
+built-in library (`amount_usd`, `is_cnp`, `dist_from_home_km`, `amount_to_avg_ratio`, `local_hour`, ...)
+is typed code on the payment message. A plugin function sees what an expression sees:
+
+- `event`: the event's view, with every field by name, enums as their names and integers as Long in Java;
+- `f`: every feature, with those computed before it in schema order already filled.
+
+It runs at scoring time, in the gateway or in Flink when Flink scores. It is never part of the keyed
+state, so adding one changes no state layout. Use it where CEL is not enough: trigonometry, a lookup
+table, a small embedded model.
+
+The example is `log_amount`, log(1 + amount in USD):
+
+```java
+public final class LogAmountFn implements DerivedFn {
+    public String name() { return "log_amount"; }
+    public double apply(Map<String, Object> event, Map<String, Double> f) {
+        Object a = event.get("amount_usd_minor");
+        return Math.log1p(Math.max(0L, a instanceof Number n ? n.longValue() : 0L) / 100.0);
+    }
+}
+```
+
+```python
+from realy.features import derived_fns
+derived_fns.register("log_amount", lambda event, f: math.log1p(max(0, int(event.get("amount_usd_minor", 0))) / 100.0))
+```
+
+Register the Java class in `META-INF/services/io.realy.scoring.features.DerivedFn`, write its fixture
+(`python -m realy.features.derived_fns conformance --plugin realy.plugin_example --fn log_amount`), check
+the Java side with `DerivedFnConformance`, and deploy it as for aggregations. Then use it:
+`- { name: log_amount, source: derived, fn: log_amount }`.
 
 ## Limits
 
@@ -149,6 +188,4 @@ recomputes the new feature from the event log and compares it with what the pipe
 
 ## Planned extension points
 
-- `DerivedFn`, for `fn:` features: today the library functions are Java (`DerivedFeatures`) and Python
-  (`features/derived.py`) code, and CEL `expr:` covers most needs without code.
 - A `DecisionSink` interface for the gateway (today Kafka plus the on-disk spool).

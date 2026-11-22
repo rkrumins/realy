@@ -49,7 +49,7 @@ Everything about the run in progress, refreshed every second over a WebSocket:
 | Panel | Shows |
 |---|---|
 | KPI strip | emitted/s, decided/s, e2e p50 and p99 vs budget, backlog, degraded share, schedule lag (is the emitter on time?) |
-| Pipeline topology | the actual topology of this run (emitter → Kafka → Flink stages → Redis → gateway → model → decisions → ClickHouse), with events/s and p99 on every node and hop. Colour is the share of the e2e budget each hop consumes. It adapts to gateway-kafka, gateway-grpc, flink-inline and echo |
+| Pipeline topology | the actual topology of this run (emitter → Kafka → Flink stages → Redis → gateway → model → decisions → ClickHouse), with events/s and p99 on every node and hop. Colour is the share of the e2e budget each hop consumes. It adapts to every topology in `contracts/topologies.yaml` (gateway-kafka, gateway-grpc, flink-inline, echo-kafka, external) |
 | Throughput funnel | emitted → acked → decided per second; a widening gap is backlog |
 | End-to-end latency | p50 / p99 / p99.9 with the budget band, for the last 1, 5 or 10 minutes |
 | Per-stage p99 | stacked per-stage latency: which stage is eating the tail |

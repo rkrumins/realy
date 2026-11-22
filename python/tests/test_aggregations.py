@@ -74,5 +74,8 @@ def test_schema_accepts_a_registered_plugin(tmp_path):
 
 
 def test_plugins_from_the_environment(monkeypatch):
-    monkeypatch.setenv("REALY_AGGREGATION_PLUGINS", "realy.plugin_example")
+    from realy import plugins
+    plugins.reset()
+    monkeypatch.setenv("REALY_PLUGINS", "realy.plugin_example")
     assert "realy.plugin_example" in A.load_plugins()
+    assert A.load_plugins() == []          # once per process
