@@ -124,27 +124,39 @@ public final class FeatureSchema {
     }
 
     private static volatile FeatureSchema DEFAULT;
+    private static final java.util.concurrent.ConcurrentHashMap<String, FeatureSchema> PARSED =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * The schema YAML this process resolves (FEATURE_SCHEMA path, else the bundled copy). The Flink job
+     * resolves it once in its main and ships the text to every operator ({@link #of}), so TaskManagers
+     * never resolve their own copy and cannot diverge from the job that planned the graph.
+     */
+    public static String loadText() {
+        try {
+            String path = Env.str("FEATURE_SCHEMA", "");
+            if (!path.isEmpty()) return Files.readString(Path.of(path));
+            try (InputStream in = FeatureSchema.class.getClassLoader()
+                    .getResourceAsStream("realy/contracts/features/feature_schema.yaml")) {
+                if (in == null) throw new IllegalStateException("feature_schema.yaml not on classpath");
+                return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The schema of this YAML text, parsed once per process (null = {@link #load()}). */
+    public static FeatureSchema of(String yaml) {
+        if (yaml == null || yaml.isEmpty()) return load();
+        return PARSED.computeIfAbsent(yaml, FeatureSchema::parse);
+    }
 
     /** FEATURE_SCHEMA env/path override, else the copy bundled from contracts/ on the classpath. */
     public static FeatureSchema load() {
         if (DEFAULT == null) {
             synchronized (FeatureSchema.class) {
-                if (DEFAULT == null) {
-                    try {
-                        String path = Env.str("FEATURE_SCHEMA", "");
-                        if (!path.isEmpty()) {
-                            DEFAULT = parse(Files.readString(Path.of(path)));
-                        } else {
-                            try (InputStream in = FeatureSchema.class.getClassLoader()
-                                    .getResourceAsStream("realy/contracts/features/feature_schema.yaml")) {
-                                if (in == null) throw new IllegalStateException("feature_schema.yaml not on classpath");
-                                DEFAULT = parse(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
-                            }
-                        }
-                    } catch (IOException e) {
-                        throw new IllegalStateException(e);
-                    }
-                }
+                if (DEFAULT == null) DEFAULT = parse(loadText());
             }
         }
         return DEFAULT;
@@ -152,6 +164,20 @@ public final class FeatureSchema {
 
     public int size() {
         return features.size();
+    }
+
+    private volatile RowPlan rowPlan;
+
+    /** How events are decoded once for the keyed stages (entity keys and the fields stream features read). */
+    public RowPlan rowPlan() {
+        RowPlan p = rowPlan;
+        if (p == null) {
+            synchronized (this) {
+                if (rowPlan == null) rowPlan = new RowPlan(this);
+                p = rowPlan;
+            }
+        }
+        return p;
     }
 
     public FeatureSpec get(String name) {

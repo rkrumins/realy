@@ -25,9 +25,15 @@ payments.events.raw ─▶ source (uid source) ─▶ features:customer ─▶ f
   Each `keyBy` is a network shuffle, so every event visits each entity's owner in turn and the stage
   sees that entity's events in order. Events without the entity (a transfer has no card) are spread by
   event id instead of piling on key 0, and get the defaults.
-- **The source** parses the protobuf event once, evaluates the CEL feature filters once (`filterMask`)
-  and wraps both in an `Envelope` that travels through the stages: the raw event bytes, every entity
-  id, the filter mask, the feature vector being filled and, in `inline` / `both`, the benchmark spans.
+- **The source** parses the protobuf event once, decodes what the stages need into an `EventRow`
+  (time, location, the key of every entity, and one slot per event field a stream feature reads, laid
+  out by the schema's `RowPlan`), evaluates the CEL feature filters once (`filterMask`) and wraps it all
+  in an `Envelope` that travels through the stages: the raw event bytes, the row, the filter mask, the
+  feature vector being filled and, in `inline` / `both`, the benchmark spans. The keyed stages read the
+  row and never parse the event again; only the scoring operator parses it (once) for the decision.
+- **One schema per job.** The job's main resolves the feature schema (`FEATURE_SCHEMA`, else the
+  bundled copy) and ships its text to every operator in the graph, so a TaskManager never resolves its
+  own copy and cannot run a different schema than the one the graph was planned with.
 - **Modes** (`--mode`): `features` (the gateway topologies: features written to the store), `inline`
   (Flink scores; no store writes), `both` (scores and writes), `echo` (instrument calibration). The
   runner starts the mode the scenario's topology needs and switches with stop-with-savepoint, so the
@@ -141,8 +147,10 @@ JobManager and the TaskManagers) and `flinkConfiguration` in `deploy/k8s/compone
 - **Add a feature**: edit the feature schema; no job code changes (the aggregator is driven by the DSL).
   Prove it with a verified run (`pulsebench run <scenario> --verify`): the Python twin
   (`python/realy/features/engine.py`) must agree exactly.
-- **Add an operator**: give it a stable `.uid(...)` (state is matched by uid on restore; the runner
-  restores with `allowNonRestoredState`, which silently drops the state of an operator whose uid
-  disappeared). Keep the source → features path unchained only where a `keyBy` requires it.
+- **Add an operator**: give it a stable `.uid(...)` (state is matched by uid on restore). The runner
+  restores with `allowNonRestoredState`, which on its own would silently drop the state of an operator
+  whose uid disappeared; so the job record lists the job's stateful uids and, when the new graph lacks
+  one, the runner starts fresh with the reason in the log instead (`runner/flink.py` `dropped_state`).
+  Keep the source → features path unchained only where a `keyBy` requires it.
 - **Test**: `FeatureJobTest` runs the keyed stages on a MiniCluster and checks them against sequential
   per-entity aggregation; `StateCodecTest` checks the state layout; `./gradlew :flink-job:test`.

@@ -60,7 +60,7 @@ class FeatureJobTest {
         env.setParallelism(3);
         List<Envelope> input = new ArrayList<>();
         for (TransactionEvent e : events) {
-            input.add(EventDeserializer.envelope(e, e.toByteArray(), null, false, filters, schema.size(), 1));
+            input.add(EventDeserializer.envelope(e, e.toByteArray(), null, false, schema, filters, 1));
         }
         var out = FraudJob.features(env.fromData(input).setParallelism(1), ents, false).executeAndCollect(10_000);
         assertThat(out).hasSize(events.size());

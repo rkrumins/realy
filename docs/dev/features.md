@@ -61,8 +61,11 @@ shape):
 ## Walkthrough 3: a profile feature
 
 Add the attribute to the world (`world/build.py`), export it in `customer_profile_arrays()` (or the
-merchant one), declare it with `source: profile`, and reseed (`pulsebench seed`, or the next run's
-"profiles" step does it when the world's hash changes).
+merchant one; `World.profile_arrays(entity)` is what the seeder and the verifier read) and declare it
+with `source: profile`. Nothing else: each entity's profiles carry a marker (`pf:_meta:<entity>`) with
+the world's hash and the blob layout's hash, so the next run's "profiles" step (or `pulsebench seed`)
+reseeds exactly the entities whose layout or world changed. An entity with profile features that the
+world cannot supply fails the seeding with its name instead of serving defaults.
 
 ## Prove it
 

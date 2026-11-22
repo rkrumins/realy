@@ -14,16 +14,35 @@ import org.apache.flink.util.Collector;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
 
-/** Parses TransactionEvent + bench trace header, stamps INGEST, evaluates CEL filters once. */
+/**
+ * Parses the TransactionEvent once (the only parse in the feature stages: the keyed stages read the
+ * decoded {@link io.realy.scoring.features.EventRow}), reads the bench trace header, stamps INGEST and
+ * evaluates the CEL filters once.
+ */
 public final class EventDeserializer implements KafkaRecordDeserializationSchema<Envelope> {
+    private final String schemaYaml;
+    private final boolean keepRaw;
     private transient Filters filters;
-    private transient int nFeatures;
+    private transient FeatureSchema schema;
+
+    public EventDeserializer(String schemaYaml) {
+        this(schemaYaml, true);
+    }
+
+    /**
+     * @param keepRaw carry the raw event bytes in the envelope: needed only where the job scores (the
+     *                decision record holds the event); in `features` mode no stage reads them after the
+     *                source, so leaving them out shrinks every shuffle
+     */
+    public EventDeserializer(String schemaYaml, boolean keepRaw) {
+        this.schemaYaml = schemaYaml;
+        this.keepRaw = keepRaw;
+    }
 
     @Override
     public void open(DeserializationSchema.InitializationContext context) {
-        FeatureSchema schema = FeatureSchema.load();
+        schema = FeatureSchema.of(schemaYaml);
         filters = new Filters(schema);
-        nFeatures = schema.size();
     }
 
     @Override
@@ -32,29 +51,24 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
         TransactionEvent e = TransactionEvent.parseFrom(r.value());
         Header th = r.headers().lastHeader("x-bench-trace");
         Envelope env = envelope(e, r.value(), th == null ? null : th.value(), r.headers().lastHeader("x-mirrored") != null,
-                filters, nFeatures, ingest);
+                schema, filters, ingest);
         env.backfill = r.headers().lastHeader("x-backfill") != null;
+        if (!keepRaw) env.event = null;
         out.collect(env);
     }
 
     /** Build an envelope (shared with tests). */
-    public static Envelope envelope(TransactionEvent e, byte[] raw, byte[] trace, boolean mirrored, Filters filters,
-                                    int nFeatures, long ingest) {
+    public static Envelope envelope(TransactionEvent e, byte[] raw, byte[] trace, boolean mirrored, FeatureSchema schema,
+                                    Filters filters, long ingest) {
         Envelope env = new Envelope();
         env.event = raw;
         env.trace = trace;
         env.mirrored = mirrored;
         env.eventId = e.getEventId();
         env.eventTimeUs = e.getEventTimeUs();
-        env.customerId = e.getCustomerId();
-        env.cardId = e.getCardId();
-        env.deviceId = e.getDeviceId();
-        env.ip = Integer.toUnsignedLong(e.getIpV4());
-        env.merchantId = e.getMerchantId();
-        env.terminalId = e.getTerminalId();
-        env.payeeId = e.getPayeeId();
+        env.row = schema.rowPlan().row(e);
         env.filterMask = filters.mask(EventView.of(e));
-        env.features = new float[nFeatures];
+        env.features = new float[schema.size()];
         env.ingestUs = ingest;
         int dom = BenchClock.domain();
         env.span(Stage.INGEST_VALUE, 4, dom, ingest, 0);

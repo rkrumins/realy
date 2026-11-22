@@ -31,7 +31,8 @@ def event_view(ev: dict) -> dict[str, Any]:
     if any(k not in ev for k in LATER_FIELDS):
         ev = {**LATER_FIELDS, **ev}
     for k in INT_FIELDS:
-        v[k] = int(ev[k])
+        x = int(ev[k])
+        v[k] = x - (1 << 64) if x >= 1 << 63 else x   # uint64 reads as signed 64-bit, as in Java
     for k in BOOL_FIELDS:
         v[k] = bool(ev[k])
     for k, names in ENUMS.items():

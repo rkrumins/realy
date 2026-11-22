@@ -35,6 +35,7 @@ import org.apache.flink.streaming.api.functions.async.RichAsyncFunction;
  */
 public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, DecisionBytes> {
     private final String initialConfigJson;
+    private final String schemaYaml;
     private transient ScoringOrchestrator orchestrator;
     private transient KServeModelClient model;
     private transient OnlineStore store;
@@ -43,19 +44,24 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
     private transient String instance;
 
     public ScoringAsyncFunction(String initialConfigJson) {
+        this(initialConfigJson, null);
+    }
+
+    public ScoringAsyncFunction(String initialConfigJson, String schemaYaml) {
+        this.schemaYaml = schemaYaml;
         this.initialConfigJson = initialConfigJson;
     }
 
     @Override
     public void open(OpenContext ctx) {
-        FeatureSchema schema = FeatureSchema.load();
+        FeatureSchema schema = FeatureSchema.of(schemaYaml);
         ScoringConfig cfg = ScoringConfigHolder.defaults();
         if (initialConfigJson != null && !initialConfigJson.isBlank()) cfg = ProtoJson.overlay(cfg, initialConfigJson);
         ScoringConfigHolder holder = new ScoringConfigHolder(cfg);
         store = "mock".equals(holder.get().cfg().getFeatureSource())
                 ? new MockOnlineStore() : RedisOnlineStore.shared(Env.str("REDIS_URI", "redis://localhost:6379"), 4);
-        model = new KServeModelClient(Env.str("MODEL_TARGET", "localhost:8001"), Env.str("MODEL_NAME", "fraud_mlp"),
-                Env.integer("MODEL_INPUT_DIM", schema.size()), 2);
+        model = KServeModelClient.forServedModel(Env.str("MODEL_TARGET", "localhost:8001"), Env.str("MODEL_NAME", "fraud_mlp"),
+                schema.size(), 2);
         model.configure(holder.get().cfg());
         holder.onChange(a -> model.configure(a.cfg()));
         instance = Env.str("HOSTNAME", "flink") + "/" + getRuntimeContext().getTaskInfo().getIndexOfThisSubtask();

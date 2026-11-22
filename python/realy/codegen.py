@@ -24,6 +24,15 @@ STAGES = {11: "queue_wait", 12: "deserialize", 20: "shuffle", 21: "state_feature
           30: "feature_lookup", 31: "feature_assemble", 40: "model_call", 41: "model_batch_wait",
           42: "model_server_queue", 43: "model_server_compute", 50: "rules", 51: "policy",
           81: "async_wait"}
+# FraudLabel columns in field order: (name, Kafka queue type, labels table type). Append a new label field
+# here (after LABEL_COLS_V1, the columns of the original table) and `make migrate` adds it in place.
+LABEL_COLS: list[tuple[str, str, str]] = [
+    ("event_id", "UInt64", "UInt64"), ("label_time_us", "Int64", ""), ("event_time_us", "Int64", ""),
+    ("is_fraud", "UInt8", "UInt8"), ("fraud_type", "Int8", ""), ("campaign_id", "UInt64", "UInt64"),
+    ("source", "Int8", "Int8"), ("customer_id", "UInt64", "UInt64"), ("card_id", "UInt64", "UInt64"),
+    ("amount_usd_minor", "Int64", "Int64"),
+]
+LABEL_COLS_V1 = 10
 DROPPED_COLUMNS = ("lat_feature_store_write_us", "lat_audit_ack_us", "lat_sink_us")   # never populated (see above)
 # columns added to realy.decisions after the first release: re-applying the DDL upgrades in place
 ADDED_COLUMNS = [
@@ -275,10 +284,19 @@ FROM realy.decisions_queue WHERE length(_error) = 0;
 """
 
     # ------------------------------------------------------------------ labels
+    # The Kafka queue and its view hold no data: rebuilt on every apply like the events and decisions
+    # ones (consumer offsets live in the group), so a FraudLabel field added later reaches ClickHouse;
+    # the table gains it by ALTER. LABEL_COLS: (column, queue type, table type).
+    lab_q = ",\n  ".join(f"`{c}` {q}" for c, q, _ in LABEL_COLS)
+    lab_alter = "\n".join(f"ALTER TABLE realy.labels ADD COLUMN IF NOT EXISTS `{c}` {t};"
+                           for c, _, t in LABEL_COLS[LABEL_COLS_V1:])
+    lab_sel = ", ".join(f"`{c}`" for c, _, _ in LABEL_COLS if c not in ("label_time_us", "event_time_us", "fraud_type",
+                                                                         "event_id"))
     files["04_labels.sql"] = HEADER + f"""
-CREATE TABLE IF NOT EXISTS realy.labels_queue (
-  event_id UInt64, label_time_us Int64, event_time_us Int64, is_fraud UInt8, fraud_type Int8,
-  campaign_id UInt64, source Int8, customer_id UInt64, card_id UInt64, amount_usd_minor Int64
+DROP VIEW IF EXISTS realy.labels_mv;
+DROP TABLE IF EXISTS realy.labels_queue;
+CREATE TABLE realy.labels_queue (
+  {lab_q}
 ) ENGINE = Kafka
 {KAFKA.format(topic='payments.labels', group='clickhouse-labels', schema='realy/payments/v1/label.proto:FraudLabel', consumers=1)};
 
@@ -287,11 +305,12 @@ CREATE TABLE IF NOT EXISTS realy.labels (
   fraud_type LowCardinality(String), campaign_id UInt64, source Int8, customer_id UInt64, card_id UInt64,
   amount_usd_minor Int64, ingested_at DateTime64(6) DEFAULT now64(6)
 ) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (run_id, event_id);
+{lab_alter}
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS realy.labels_mv TO realy.labels AS
+CREATE MATERIALIZED VIEW realy.labels_mv TO realy.labels AS
 SELECT arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
        event_id, fromUnixTimestamp64Micro(label_time_us) AS label_time, fromUnixTimestamp64Micro(event_time_us) AS event_time,
-       is_fraud, {_enum('fraud_type', 'fraud_type')} AS fraud_type, campaign_id, source, customer_id, card_id, amount_usd_minor
+       {_enum('fraud_type', 'fraud_type')} AS fraud_type, {lab_sel}
 FROM realy.labels_queue WHERE length(_error) = 0;
 """
 

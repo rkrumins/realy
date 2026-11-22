@@ -55,10 +55,18 @@ class ProxyScorer:
                         return cls(p)
                 except ValueError:
                     continue
-            import warnings
-            warnings.warn(f"no weights for served model {version}: score parity uses the default weights "
-                          "and will not match", stacklevel=2)
+            default = cls()
+            if default.version != version:
+                # a model served from elsewhere (Triton, KServe, a version trained on another machine):
+                # its score cannot be recomputed here, so its parity is reported as not checkable
+                default.checkable = False
+                default.not_checkable = (f"no proxy weights for the served model {version} here "
+                                         "(models/proxy, REALY_MODELS): its scores cannot be recomputed")
+            return default
         return cls()
+
+    checkable = True
+    not_checkable: str | None = None
 
     def __init__(self, path: str | Path | None = None) -> None:
         path = path or os.environ.get("MODEL_WEIGHTS") or REPO_ROOT / "models" / "proxy" / "default.weights.json"
@@ -133,8 +141,6 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
 
     # ------------------------------------------------------------------ 1. features
     world = World.load(sc.world_dir)
-    cp = world.customer_profile_arrays()
-    mp = world.merchant_profile_arrays()
     cols = {c: events[c].to_numpy(zero_copy_only=False) for c in events.column_names
             if c not in ("t_intended_us", "t_intended_offset_us")}
     order = np.lexsort((cols["event_id"], cols["event_time_us"]))
@@ -158,10 +164,10 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
                 missing[int(i)] = np.pad(bits, (0, nf - bits.size)).astype(bool)
     engine = ReferenceEngine(schema, entities)
     filt = [cel.compile(expr) for expr in schema.filters.values()]
-    cust_feats = schema.profile_features("customer")
-    merch_feats = schema.profile_features("merchant")
-    c_rows = world.customer_row(cols["customer_id"])
-    m_ids = cols["merchant_id"]
+    from ..runner.seed import profile_entities
+    # every entity with profile features: (its world columns, its features, the world row of each event)
+    profiles = {e: (world.profile_arrays(e), schema.profile_features(e),
+                    world.profile_rows(e, cols[schema.entities[e]])) for e in profile_entities(schema)}
     names = list(cols)
     lists = {k: cols[k].tolist() for k in names}
     ref: dict[int, np.ndarray] = {}
@@ -181,24 +187,16 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         if eid not in served:
             continue
         v = np.asarray(buf, dtype=np.float64).astype(np.float32)
-        r = int(c_rows[i])
         attrs = None
         mb = missing.get(eid)
-        cust_missing = mb is not None and any(mb[s.index] for s in cust_feats)
-        merch_missing = mb is not None and any(mb[s.index] for s in merch_feats)
-        if cust_missing:
-            r = -1  # the pipeline served defaults (lookup deadline/error): mirror it
-        if r >= 0:
-            for s in cust_feats:
-                v[s.index] = np.float32(cp[s.field][r])
-            attrs = {a: np.float32(cp[a][r]) for a in schema.profile_attributes.get("customer", [])}
-        else:
-            for s in cust_feats:
-                v[s.index] = np.float32(s.default)
-        mid = int(m_ids[i])
-        mr = int(world.merchant_row(np.asarray([mid], np.uint64))[0]) if mid and not merch_missing else -1
-        for s in merch_feats:
-            v[s.index] = np.float32(mp[s.field][mr]) if mr >= 0 else np.float32(s.default)
+        for ent, (arr, specs, rows) in profiles.items():
+            r = int(rows[i]) if arr is not None else -1
+            if mb is not None and any(mb[s.index] for s in specs):
+                r = -1  # the pipeline served defaults (lookup deadline/error): mirror it
+            for s in specs:
+                v[s.index] = np.float32(arr[s.field][r]) if r >= 0 else np.float32(s.default)
+            if ent == "customer" and r >= 0:
+                attrs = {a: np.float32(arr[a][r]) for a in schema.profile_attributes.get("customer", [])}
         compute_derived(schema, ev, attrs, v)
         ref[eid] = v
     common = sorted(set(ref) & set(served))
@@ -262,7 +260,8 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         elif len(rule_mismatch) < 5:
             rule_mismatch.append({"event_id": eid, "python": sorted(h for h, _ in hits), "pipeline": sorted(got)})
         full = int(dd["path"][j]) == 0
-        sc_ = float(py_scores[k]) if full else float("nan")
+        # a model that cannot be recomputed here: the outcome is re-derived from the score it served
+        sc_ = (float(py_scores[k]) if scorer.checkable else float(dd["score"][j])) if full else float("nan")
         if full:
             n_full += 1
             if abs(sc_ - float(dd["score"][j])) <= 1e-5:
@@ -271,7 +270,9 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
             outcome_ok += 1
     m = max(1, len(sample))
     out["rules"] = {"checked": len(sample), "parity": rule_ok / m, "mismatches": rule_mismatch}
-    out["score"] = {"checked": n_full, "parity": score_ok / max(1, n_full), "model_version": scorer.version}
+    out["score"] = ({"checked": n_full, "parity": score_ok / max(1, n_full), "model_version": scorer.version}
+                    if scorer.checkable else
+                    {"checked": 0, "parity": None, "model_version": mv, "not_checkable": scorer.not_checkable})
     out["outcome"] = {"checked": len(sample), "parity": outcome_ok / m}
 
     # ------------------------------------------------------------------ 5. ClickHouse audit
@@ -354,7 +355,7 @@ def audit_checks(ch: str, run_id: str, emitted: int, scorer: ProxyScorer, rules:
         WHERE run_id = '{run_id}' AND revision = 0 AND path = 'FULL' AND length(features_raw) = {len(schema.features)}
         ORDER BY cityHash64(event_id) LIMIT 2000""")
     replay_ok = 0
-    if sample:
+    if sample and scorer.checkable:
         X = np.asarray([s["features_raw"] for s in sample], np.float32)
         py = scorer.score(X)
         replay_ok = int(sum(abs(float(p) - float(s["score"])) <= 1e-5 for p, s in zip(py, sample)))
@@ -395,6 +396,8 @@ def judge(v: dict[str, Any]) -> tuple[bool, list[str]]:
     """Pass only if every check holds; every failure names itself."""
     reasons: list[str] = []
     for k, label in (("rules", "rules"), ("score", "model score"), ("outcome", "outcome")):
+        if v[k]["parity"] is None and v[k].get("not_checkable"):
+            continue   # declared, shown by render(): not a failure of the pipeline
         if v[k]["parity"] != 1.0:
             reasons.append(f"{label} parity {v[k]['parity']:.4%} (must be 100%)")
     f = v["features"]
@@ -422,7 +425,8 @@ def render(v: dict[str, Any]) -> str:
              f"{(f['exact_set_agreement'] or 0):.4%} ({judged}; {f['note']})",
              "  lowest agreement: " + ", ".join(f"{k} {a:.1%}" for k, a in f["worst"]),
              f"rules parity (Java CEL vs Python CEL): {v['rules']['parity']:.4%} of {v['rules']['checked']:,}",
-             f"score parity (proxy model recompute): {v['score']['parity']:.4%} of {v['score']['checked']:,}",
+             (f"score parity (proxy model recompute): {v['score']['parity']:.4%} of {v['score']['checked']:,}"
+              if v["score"].get("parity") is not None else f"score parity: not checkable ({v['score'].get('not_checkable')})"),
              f"outcome parity: {v['outcome']['parity']:.4%}"]
     a = v.get("audit", {})
     if "error" in a:

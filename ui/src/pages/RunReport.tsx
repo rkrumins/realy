@@ -213,7 +213,14 @@ function Detection({ r }: { r: Report }) {
   );
 }
 
-function Parity({ label, checked, parity }: { label: string; checked?: number; parity?: number }) {
+function Parity({ label, checked, parity, notCheckable }: { label: string; checked?: number; parity?: number | null; notCheckable?: string }) {
+  if (notCheckable) return (
+    <div className="rounded-xl border border-border bg-surface-2/40 p-3">
+      <div className="text-[12px] text-muted">{label}</div>
+      <div className="mt-1 text-[15px] font-semibold text-muted">not checkable</div>
+      <div className="text-[11.5px] text-subtle">{notCheckable}</div>
+    </div>
+  );
   if (!isNum(checked)) return null;
   const ok = parity === 1;
   return (
@@ -254,7 +261,7 @@ function Verify({ v }: { v: VerifyResult | null }) {
       )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Parity label="Rule parity (CEL Java vs Python)" checked={v.rules?.checked} parity={v.rules?.parity} />
-        <Parity label="Score parity (proxy recompute)" checked={v.score?.checked} parity={v.score?.parity} />
+        <Parity label="Score parity (proxy recompute)" checked={v.score?.checked} parity={v.score?.parity} notCheckable={v.score?.not_checkable} />
         <Parity label="Outcome re-derivation" checked={v.outcome?.checked} parity={v.outcome?.parity} />
         {f && (
           <div className="rounded-xl border border-border bg-surface-2/40 p-3">

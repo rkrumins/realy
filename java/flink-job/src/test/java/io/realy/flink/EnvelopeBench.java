@@ -28,7 +28,7 @@ class EnvelopeBench {
         TransactionEvent e = TransactionEvent.newBuilder().setEventId(7).setEventTimeUs(1_800_000_000_000_000L)
                 .setPaymentType(PaymentType.CARD_PURCHASE).setCustomerId(11).setCardId(12).setMerchantId(13)
                 .setDeviceId(14).setAmountUsdMinor(1999).setMerchantCountry("GB").setEntryMode(EntryMode.ECOM_3DS).build();
-        return EventDeserializer.envelope(e, e.toByteArray(), new byte[24], false, new Filters(schema), schema.size(), 1);
+        return EventDeserializer.envelope(e, e.toByteArray(), new byte[24], false, schema, new Filters(schema), 1);
     }
 
     @Test
@@ -48,6 +48,12 @@ class EnvelopeBench {
         TypeSerializer<Envelope> ser = TypeInformation.of(Envelope.class).createSerializer(new ExecutionConfig().getSerializerConfig());
         Envelope env = sample();
         for (int i = 0; i < 4; i++) env.span(1, 2, 3, 100, 5);
+        Envelope featuresMode = sample();      // `features` mode: no raw event, no spans
+        featuresMode.event = null;
+        featuresMode.spans = new long[0];
+        DataOutputSerializer fo = new DataOutputSerializer(1024);
+        ser.serialize(featuresMode, fo);
+        System.out.printf("{\"bench\":\"envelope-features-mode\",\"bytes\":%d}%n", fo.length());
         DataOutputSerializer out = new DataOutputSerializer(1024);
         int n = 300_000;
         double us = 0;

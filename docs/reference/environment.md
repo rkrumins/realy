@@ -7,7 +7,7 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | Variable | Default | Read by | Compose sets it in | Where |
 |---|---|---|---|---|
 | `ADMIN_PORT` | `8002` | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
-| `AUDIT_SPOOL` | `/tmp/realy-audit.spool` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
+| `AUDIT_SPOOL` | `/tmp/realy-audit.spool` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
 | `CLICKHOUSE_URL` | `http://localhost:8123` | python (shared), report, verifier | console | `python/realy/acceptance/live.py`<br>`python/realy/report/history.py`<br>`python/realy/verify/verify.py` |
 | `CONTROL_TOPIC` | `bench.control` | every JVM service |  | `java/common/src/main/java/io/realy/common/ControlSubscriber.java` |
 | `DECISIONS_TOPIC` | `payments.decisions` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
@@ -67,7 +67,7 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `MIRROR_TO_KAFKA` | `true` | gateway | gateway | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `MODEL_ADMIN` | `http://localhost:8002` | python (shared), runner | console | `python/realy/cli.py`<br>`python/realy/runner/run.py` |
 | `MODEL_CHANNELS` | `4` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
-| `MODEL_INPUT_DIM` | `schema.size(` | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
+| `MODEL_INPUT_DIM` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
 | `MODEL_INPUT_NAME` | `input__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
 | `MODEL_NAME` | `fraud_mlp` | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `MODEL_OUTPUT_NAME` | `output__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |

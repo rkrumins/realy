@@ -18,6 +18,7 @@ class FraudType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BUST_OUT: _ClassVar[FraudType]
     BOT_ECOM: _ClassVar[FraudType]
     FRIENDLY_FRAUD: _ClassVar[FraudType]
+    INVESTMENT_SCAM: _ClassVar[FraudType]
 
 class LabelSource(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -36,6 +37,7 @@ APP_SCAM_MULE: FraudType
 BUST_OUT: FraudType
 BOT_ECOM: FraudType
 FRIENDLY_FRAUD: FraudType
+INVESTMENT_SCAM: FraudType
 LABEL_SOURCE_UNSPECIFIED: LabelSource
 CHARGEBACK: LabelSource
 CUSTOMER_REPORT: LabelSource

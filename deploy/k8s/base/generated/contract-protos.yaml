@@ -282,17 +282,20 @@ data:
     \ (no leakage); published on\n// `payments.labels` with a simulated chargeback\
     \ / report delay.\nsyntax = \"proto3\";\n\npackage realy.payments.v1;\n\noption\
     \ java_package = \"io.realy.contracts.payments.v1\";\noption java_multiple_files\
-    \ = true;\n\nenum FraudType {\n  FRAUD_TYPE_NONE = 0;\n  CARD_TESTING = 1;\n \
-    \ ACCOUNT_TAKEOVER = 2;\n  LOST_STOLEN = 3;\n  COUNTERFEIT = 4;\n  MERCHANT_BREACH\
-    \ = 5;\n  ATM_CASHOUT = 6;\n  APP_SCAM_MULE = 7;\n  BUST_OUT = 8;\n  BOT_ECOM\
-    \ = 9;\n  FRIENDLY_FRAUD = 10;  // label noise: legitimate transaction charged\
-    \ back\n}\n\nenum LabelSource {\n  LABEL_SOURCE_UNSPECIFIED = 0;\n  CHARGEBACK\
-    \ = 1;\n  CUSTOMER_REPORT = 2;\n  INVESTIGATION = 3;\n}\n\nmessage FraudLabel\
-    \ {\n  fixed64 event_id = 1;\n  sfixed64 label_time_us = 2;   // simulation time\
-    \ at which the label becomes known\n  sfixed64 event_time_us = 3;\n  bool is_fraud\
-    \ = 4;\n  FraudType fraud_type = 5;\n  uint64 campaign_id = 6;\n  LabelSource\
-    \ source = 7;\n  uint64 customer_id = 8;\n  uint64 card_id = 9;\n  int64 amount_usd_minor\
-    \ = 10;\n}\n"
+    \ = true;\n\n// Typology ids. The typology registry (contracts/usecases/typologies/*.yaml)\
+    \ is the source of truth and\n// is open: a user typology takes the next free\
+    \ id, and ClickHouse / reports resolve names from the\n// registry, so an id without\
+    \ a name here is valid. The built-in ones are named for convenience.\nenum FraudType\
+    \ {\n  FRAUD_TYPE_NONE = 0;\n  CARD_TESTING = 1;\n  ACCOUNT_TAKEOVER = 2;\n  LOST_STOLEN\
+    \ = 3;\n  COUNTERFEIT = 4;\n  MERCHANT_BREACH = 5;\n  ATM_CASHOUT = 6;\n  APP_SCAM_MULE\
+    \ = 7;\n  BUST_OUT = 8;\n  BOT_ECOM = 9;\n  FRIENDLY_FRAUD = 10;  // label noise:\
+    \ legitimate transaction charged back\n  INVESTMENT_SCAM = 11;\n}\n\nenum LabelSource\
+    \ {\n  LABEL_SOURCE_UNSPECIFIED = 0;\n  CHARGEBACK = 1;\n  CUSTOMER_REPORT = 2;\n\
+    \  INVESTIGATION = 3;\n}\n\nmessage FraudLabel {\n  fixed64 event_id = 1;\n  sfixed64\
+    \ label_time_us = 2;   // simulation time at which the label becomes known\n \
+    \ sfixed64 event_time_us = 3;\n  bool is_fraud = 4;\n  FraudType fraud_type =\
+    \ 5;\n  uint64 campaign_id = 6;\n  LabelSource source = 7;\n  uint64 customer_id\
+    \ = 8;\n  uint64 card_id = 9;\n  int64 amount_usd_minor = 10;\n}\n"
   realy__payments__v1__transaction.proto: "// Canonical payment event. Production-shaped:\
     \ contains no benchmark fields.\n// Benchmark timing travels separately in the\
     \ `x-bench-trace` Kafka header (realy.bench.v1.BenchTrace).\nsyntax = \"proto3\"\

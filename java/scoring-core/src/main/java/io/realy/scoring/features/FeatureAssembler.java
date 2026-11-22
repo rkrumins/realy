@@ -91,6 +91,7 @@ public final class FeatureAssembler {
         int stateReads = 0;
 
         if (precomputed == null) {
+            EventRow row = null;   // decoded once, only when a state blob is re-windowed
             for (EntityAggregator a : aggregators) {
                 StoreBlob blob = null;
                 long id = EventView.entityKey(e, a.entity());
@@ -108,7 +109,10 @@ public final class FeatureAssembler {
                 }
                 // the lookup itself succeeded (an absent key means the store has never seen the entity)
                 boolean lookedUp = blobs != null && bi >= 0;
-                if (fillStream(a, blob, lookedUp, e, filterMask, selfInclusion, t, v, missing)) stateReads++;
+                if ((blob != null && blob.hasState()) || (blob == null && lookedUp && selfInclusion)) {
+                    if (row == null) row = schema.rowPlan().row(e);
+                }
+                if (fillStream(a, blob, lookedUp, e, row, filterMask, selfInclusion, t, v, missing)) stateReads++;
                 fresh.add(freshness(a.entity(), FeatureSource.STREAM, blob));
             }
         }
@@ -152,19 +156,19 @@ public final class FeatureAssembler {
      *   <li>values blob (v1): the stored values, approximated with the current event's contribution.</li>
      * </ul>
      */
-    private boolean fillStream(EntityAggregator a, StoreBlob blob, boolean lookedUp, TransactionEvent e, long mask,
-                               boolean selfInclusion, long t, float[] v, byte[] missing) {
+    private boolean fillStream(EntityAggregator a, StoreBlob blob, boolean lookedUp, TransactionEvent e, EventRow row,
+                               long mask, boolean selfInclusion, long t, float[] v, byte[] missing) {
         if (blob != null && blob.hasState()) {
             if (blob.lastEventId() == e.getEventId() && blob.values().length == a.featureIndices().length) {
                 int[] idx = a.featureIndices();
                 for (int i = 0; i < idx.length; i++) v[idx[i]] = blob.values()[i];
             } else {
-                a.evaluate(blob.state(), e, mask, v);
+                a.evaluate(blob.state(), row, mask, v);
             }
             return true;
         }
         if (blob == null && lookedUp && selfInclusion) {
-            a.evaluate(null, e, mask, v);
+            a.evaluate(null, row, mask, v);
             return false;
         }
         int[] idx = a.featureIndices();

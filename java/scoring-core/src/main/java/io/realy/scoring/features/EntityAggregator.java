@@ -32,17 +32,33 @@ public final class EntityAggregator {
     private final List<FeatureSpec> specs;
     private final int[] filterBits;
     private final int[] indices;
+    private final RowPlan plan;
+    private final int ordinal;
+    private final int[] slots;   // per feature: its EventRow num or val slot (-1: reads no value)
 
     public EntityAggregator(FeatureSchema schema, String entity) {
         this.entity = entity;
         this.specs = schema.stream(entity);
+        this.plan = schema.rowPlan();
+        this.ordinal = plan.entityOrdinal(entity);
         this.filterBits = new int[specs.size()];
         this.indices = new int[specs.size()];
+        this.slots = new int[specs.size()];
         for (int i = 0; i < specs.size(); i++) {
             FeatureSpec s = specs.get(i);
             filterBits[i] = s.filter() == null ? -1 : schema.filterBit(s.filter());
             indices[i] = s.index();
+            slots[i] = switch (s.agg()) {
+                case "sum", "max", "avg" -> plan.numSlot(s.value());
+                case "distinct", "novel" -> plan.valSlot(s.value());
+                default -> -1;
+            };
         }
+    }
+
+    /** This entity's key on a decoded event (0 = absent). */
+    public long key(EventRow r) {
+        return r.keys[ordinal];
     }
 
     public String entity() {
@@ -68,12 +84,17 @@ public final class EntityAggregator {
      * schema indices. Returns the new state blob.
      */
     public byte[] process(byte[] stateBytes, TransactionEvent e, long filterMask, float[] out) {
+        return process(stateBytes, plan.row(e), filterMask, out);
+    }
+
+    /** {@link #process} on an event decoded once ({@link RowPlan#row}): the keyed stages' path. */
+    public byte[] process(byte[] stateBytes, EventRow r, long filterMask, float[] out) {
         State st = State.decode(stateBytes, specs);
-        long t = e.getEventTimeUs();
+        long t = r.timeUs;
         for (int i = 0; i < specs.size(); i++) {
             FeatureSpec s = specs.get(i);
             boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
-            out[indices[i]] = (float) apply(s, st.feats[i], e, t, match);
+            out[indices[i]] = (float) apply(s, st.feats[i], r, slots[i], t, match);
         }
         st.lastEventUs = Math.max(st.lastEventUs, t);
         return st.encode(specs);
@@ -86,16 +107,20 @@ public final class EntityAggregator {
      * state blob at the event's own time; {@code null} state = an entity never seen before.
      */
     public void evaluate(byte[] stateBytes, TransactionEvent e, long filterMask, float[] out) {
+        evaluate(stateBytes, plan.row(e), filterMask, out);
+    }
+
+    public void evaluate(byte[] stateBytes, EventRow r, long filterMask, float[] out) {
         State st = State.decode(stateBytes, specs);
-        long t = e.getEventTimeUs();
+        long t = r.timeUs;
         for (int i = 0; i < specs.size(); i++) {
             FeatureSpec s = specs.get(i);
             boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
-            out[indices[i]] = (float) apply(s, st.feats[i], e, t, match);
+            out[indices[i]] = (float) apply(s, st.feats[i], r, slots[i], t, match);
         }
     }
 
-    private static double apply(FeatureSpec s, Feat f, TransactionEvent e, long t, boolean match) {
+    private static double apply(FeatureSpec s, Feat f, EventRow e, int slot, long t, boolean match) {
         long g = s.granularityUs();
         long k = Math.floorDiv(t, g);
         long n = s.buckets();
@@ -103,7 +128,7 @@ public final class EntityAggregator {
             case "count", "sum", "max", "avg" -> {
                 f.maxK = Math.max(f.maxK, k);
                 if (match) {
-                    double v = "count".equals(s.agg()) ? 1.0 : EventView.numeric(e, s.value());
+                    double v = "count".equals(s.agg()) ? 1.0 : e.num[slot];
                     f.add(k, v, s.agg());
                 }
                 f.evictBuckets(f.maxK - n);
@@ -131,7 +156,7 @@ public final class EntityAggregator {
             }
             case "distinct" -> {
                 f.maxK = Math.max(f.maxK, k);
-                if (match) f.seen.merge(EventView.valueKey(e, s.value()), k, Math::max);
+                if (match) f.seen.merge(e.val[slot], k, Math::max);
                 f.evictSeen(f.maxK - n);
                 int c = 0;
                 for (long last : f.seen.values()) if (last > k - n) c++;
@@ -141,7 +166,7 @@ public final class EntityAggregator {
                 f.maxK = Math.max(f.maxK, k);
                 f.evictSeen(f.maxK - n);
                 if (!match) return 0.0;
-                long key = EventView.valueKey(e, s.value());
+                long key = e.val[slot];
                 Long last = f.seen.get(key);
                 boolean seen = last != null && last > k - n;
                 f.seen.merge(key, k, Math::max);
@@ -156,14 +181,14 @@ public final class EntityAggregator {
             case "geo_speed_kmh" -> {
                 double v = s.defaultValue();
                 if (match && f.lastTs != NONE && t >= f.lastTs && t - f.lastTs <= s.windowUs()) {
-                    double km = Geo.haversineKm(f.lat, f.lon, e.getLat(), e.getLon());
+                    double km = Geo.haversineKm(f.lat, f.lon, e.lat, e.lon);
                     long dt = Math.max(t - f.lastTs, MIN_GEO_DT_US);
                     v = km / (dt / 3.6e9);
                 }
                 if (match && (f.lastTs == NONE || t >= f.lastTs)) {
                     f.lastTs = t;
-                    f.lat = e.getLat();
-                    f.lon = e.getLon();
+                    f.lat = e.lat;
+                    f.lon = e.lon;
                 }
                 return v;
             }

@@ -54,12 +54,15 @@ public final class FraudJob {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         configure(env, p);
         String bootstrap = p.get("bootstrap", Env.str("KAFKA_BOOTSTRAP", "localhost:9092"));
+        // resolved here, once, and shipped to every operator in the job graph: TaskManagers never read
+        // their own FEATURE_SCHEMA, so the graph and every stage agree on one schema
+        String schemaYaml = FeatureSchema.loadText();
         KafkaSource<Envelope> source = KafkaSource.<Envelope>builder()
                 .setBootstrapServers(bootstrap)
                 .setTopics(p.get("events-topic", "payments.events.raw"))
                 .setGroupId(p.get("group", "realy-flink-" + mode))
                 .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.LATEST))
-                .setDeserializer(new EventDeserializer())
+                .setDeserializer(new EventDeserializer(schemaYaml, !"features".equals(mode)))
                 .setProperty("fetch.max.wait.ms", "100")
                 .setProperty("fetch.min.bytes", "1")
                 .setProperty("max.poll.records", "2000")
@@ -69,7 +72,7 @@ public final class FraudJob {
                 .build();
         DataStream<Envelope> events = env.fromSource(source, WatermarkStrategy.noWatermarks(), "events.raw")
                 .uid("source").name("payments.events.raw");
-        DataStream<DecisionBytes> decisions = build(events, mode, p);
+        DataStream<DecisionBytes> decisions = build(events, mode, p, schemaYaml);
         if (decisions != null) {
             decisions.sinkTo(sink(bootstrap, p)).uid("decisions-sink").name("payments.decisions");
         }
@@ -111,11 +114,17 @@ public final class FraudJob {
 
     /** Builds the processing graph (also used by MiniCluster tests with a bounded source). */
     public static DataStream<DecisionBytes> build(DataStream<Envelope> events, String mode, ParameterTool p) {
+        return build(events, mode, p, null);
+    }
+
+    public static DataStream<DecisionBytes> build(DataStream<Envelope> events, String mode, ParameterTool p,
+                                                  String schemaYaml) {
         if ("echo".equals(mode)) {
             return events.map(FraudJob::echo).returns(TypeInformation.of(DecisionBytes.class)).name("echo");
         }
         boolean writeStore = p.getBoolean("write-store", "features".equals(mode) || "both".equals(mode));
-        List<String> entities = new ArrayList<>(FeatureSchema.load().streamByEntity().keySet());
+        FeatureSchema schema = FeatureSchema.of(schemaYaml);
+        List<String> entities = new ArrayList<>(schema.streamByEntity().keySet());
         String only = p.get("entities", "");
         if (!only.isBlank()) entities.retainAll(Arrays.asList(only.split(",")));
         DataStream<Envelope> s = events;
@@ -127,13 +136,13 @@ public final class FraudJob {
         List<String> stateEntities = Arrays.stream(p.get("store-state", Env.str("STORE_STATE", "customer,card")).split(","))
                 .map(String::trim).filter(x -> !x.isEmpty()).toList();
         // spans travel with the envelope only when a decision will carry them (inline / both)
-        s = features(s, entities, writeStore, stateEntities, !"features".equals(mode));
+        s = features(s, entities, writeStore, stateEntities, !"features".equals(mode), schemaYaml);
         if (!"features".equals(mode)) s = s.filter(e -> !e.backfill).name("skip-backfill");
         if ("features".equals(mode)) {
             s.addSink(new org.apache.flink.streaming.api.functions.sink.legacy.DiscardingSink<>()).name("discard");
             return null;
         }
-        return AsyncDataStream.unorderedWait(s, new ScoringAsyncFunction(p.get("scoring-config", Env.str("SCORING_CONFIG", ""))),
+        return AsyncDataStream.unorderedWait(s, new ScoringAsyncFunction(p.get("scoring-config", Env.str("SCORING_CONFIG", "")), schemaYaml),
                         p.getLong("async-timeout-ms", 1000), TimeUnit.MILLISECONDS, p.getInt("async-capacity", 1000))
                 .uid("scoring").name("score (async I/O)");
     }
@@ -150,10 +159,16 @@ public final class FraudJob {
 
     public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore,
                                                 List<String> stateEntities, boolean spans) {
+        return features(in, entities, writeStore, stateEntities, spans, null);
+    }
+
+    public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore,
+                                                List<String> stateEntities, boolean spans, String schemaYaml) {
+        var plan = FeatureSchema.of(schemaYaml).rowPlan();
         DataStream<Envelope> s = in;
         for (String entity : entities) {
-            s = s.keyBy(new EntityKey(entity))
-                    .process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity), spans))
+            s = s.keyBy(new EntityKey(plan.entityOrdinal(entity)))
+                    .process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity), spans, schemaYaml))
                     .uid("features-" + entity).name("features:" + entity);
         }
         return s;
@@ -161,15 +176,15 @@ public final class FraudJob {
 
     /** Entity key; events lacking the entity are spread by event id (no hot zero key). */
     public static final class EntityKey implements KeySelector<Envelope, Long> {
-        private final String entity;
+        private final int ordinal;
 
-        public EntityKey(String entity) {
-            this.entity = entity;
+        public EntityKey(int ordinal) {
+            this.ordinal = ordinal;
         }
 
         @Override
         public Long getKey(Envelope e) {
-            long k = e.key(entity);
+            long k = e.row.keys[ordinal];
             return k != 0 ? k : -1L - (e.eventId & 0xffff);
         }
     }

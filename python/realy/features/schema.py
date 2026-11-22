@@ -11,7 +11,6 @@ import yaml
 from ..scenario import REPO_ROOT
 
 SCHEMA_PATH = REPO_ROOT / "contracts" / "features" / "feature_schema.yaml"
-ENTITY_ENUM = {"customer": 1, "card": 2, "device": 3, "ip": 4, "merchant": 5, "terminal": 6, "payee": 7}
 _DUR = re.compile(r"^(\d+)(s|m|h|d)$")
 _UNIT_US = {"s": 1_000_000, "m": 60_000_000, "h": 3_600_000_000, "d": 86_400_000_000}
 

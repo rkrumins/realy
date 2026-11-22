@@ -14,14 +14,20 @@ LOCK = REPO_ROOT / "contracts" / "proto" / "compat.lock.json"
 
 
 def snapshot() -> dict:
+    """Every message and enum by its full name (<proto package>.<Name>), so contracts from different
+    packages never collide (two `events.proto` files, two `Status` enums)."""
+    import re
     from .docsgen import _parse_proto
     out: dict = {}
     for f in sorted((REPO_ROOT / "contracts" / "proto").rglob("*.proto")):
-        for b in _parse_proto(f.read_text()):
+        text = f.read_text()
+        m = re.search(r"^package\s+([\w.]+)\s*;", text, re.M)
+        pkg = m.group(1) if m else f.stem
+        for b in _parse_proto(text):
             if b["kind"] == "message":
-                out[f"{f.stem}.{b['name']}"] = {str(i["num"]): {"name": i["name"], "type": i["type"]} for i in b["items"]}
+                out[f"{pkg}.{b['name']}"] = {str(i["num"]): {"name": i["name"], "type": i["type"]} for i in b["items"]}
             elif b["kind"] == "enum":
-                out[f"{f.stem}.{b['name']}"] = {str(i["num"]): {"name": i["name"]} for i in b["items"]}
+                out[f"{pkg}.{b['name']}"] = {str(i["num"]): {"name": i["name"]} for i in b["items"]}
     return out
 
 

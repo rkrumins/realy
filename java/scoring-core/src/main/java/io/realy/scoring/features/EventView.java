@@ -6,7 +6,9 @@ import java.util.Map;
 
 /**
  * CEL binding of a TransactionEvent: field name -> value, enums by name, integers as Long. Must stay
- * in sync with python/realy/features/eventview.py.
+ * in sync with {@code event_view} in python/realy/features/derived.py (`verify` compares them). Shared
+ * rules for both languages: an enum number without a name reads as its decimal string; a uint64 reads as
+ * the signed 64-bit value (Java's long).
  */
 public final class EventView {
     private EventView() {}
@@ -15,11 +17,11 @@ public final class EventView {
         Map<String, Object> m = new HashMap<>(48);
         m.put("event_id", e.getEventId());
         m.put("event_time_us", e.getEventTimeUs());
-        m.put("payment_type", e.getPaymentType().name());
+        m.put("payment_type", name(e.getPaymentType(), e.getPaymentTypeValue()));
         m.put("customer_id", e.getCustomerId());
         m.put("account_id", e.getAccountId());
         m.put("card_id", e.getCardId());
-        m.put("card_type", e.getCardType().name());
+        m.put("card_type", name(e.getCardType(), e.getCardTypeValue()));
         m.put("amount_minor", e.getAmountMinor());
         m.put("currency", e.getCurrency());
         m.put("amount_usd_minor", e.getAmountUsdMinor());
@@ -27,8 +29,8 @@ public final class EventView {
         m.put("mcc", (long) e.getMcc());
         m.put("merchant_country", e.getMerchantCountry());
         m.put("terminal_id", e.getTerminalId());
-        m.put("channel", e.getChannel().name());
-        m.put("entry_mode", e.getEntryMode().name());
+        m.put("channel", name(e.getChannel(), e.getChannelValue()));
+        m.put("entry_mode", name(e.getEntryMode(), e.getEntryModeValue()));
         m.put("card_present", e.getCardPresent());
         m.put("lat", e.getLat());
         m.put("lon", e.getLon());
@@ -41,11 +43,16 @@ public final class EventView {
         m.put("avs_match", e.getAvsMatch());
         m.put("recurring", e.getRecurring());
         m.put("credit_limit_usd", Integer.toUnsignedLong(e.getCreditLimitUsd()));
-        m.put("three_ds", e.getThreeDs().name());
+        m.put("three_ds", name(e.getThreeDs(), e.getThreeDsValue()));
         m.put("pin_verified", e.getPinVerified());
         m.put("cryptogram_valid", e.getCryptogramValid());
         m.put("scheme_score", Integer.toUnsignedLong(e.getSchemeScore()));
         return m;
+    }
+
+    /** Enum value name; a number the contract does not name (a newer producer) reads as its decimal string. */
+    static String name(com.google.protobuf.ProtocolMessageEnum v, int number) {
+        return "UNRECOGNIZED".equals(((Enum<?>) v).name()) ? Integer.toString(number) : ((Enum<?>) v).name();
     }
 
     /** Entity key (0 = entity absent on this event). */

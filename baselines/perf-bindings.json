@@ -39,5 +39,49 @@
   "login_in_flink": "<= 40% of a payment",
   "python_codec_rows_s": ">= 200000",
   "verify_wall_time": "<= before +10%"
+ },
+ "after_s1_decode_once": {
+  "java_hot_path_us": {
+   "parse_us": 1.702,
+   "event_view_us": 0.483,
+   "filter_mask_us": 4.844,
+   "row_decode_us": 0.332,
+   "agg_customer_us": 3.698,
+   "agg_card_us": 7.428,
+   "agg_device_us": 0.76,
+   "agg_ip_us": 0.484,
+   "agg_merchant_us": 1.022,
+   "agg_terminal_us": 0.414,
+   "agg_payee_us": 0.051,
+   "gateway_score_us": 44.174
+  },
+  "flink_envelope": {
+   "bytes_inline_mode": 698,
+   "bytes_features_mode": 511,
+   "round_trip_us": 1.27
+  },
+  "notes": [
+   "Flink: one protobuf parse + one row decode (row_decode_us) per event instead of 8 parses; the keyed stages aggregate on the decoded row (agg_*_us now measured on rows).",
+   "Envelope carries the EventRow (keys, slots); in features mode it drops the raw event bytes (no stage reads them)."
+  ]
+ },
+ "docker_baseline_1k": {
+  "run": "s0-baseline-1k (smoke at 1,000 TPS, 300 s, gateway-kafka, verify PASS 100% parity)",
+  "e2e_ms": {
+   "p50": 52.15,
+   "p99": 240.71,
+   "p99.9": 403.33
+  },
+  "hot_path_p99_ms": 91.16,
+  "within_budget_150ms": 0.9527,
+  "rules_only_fallbacks": 0.048,
+  "cpu_ms_per_event": {
+   "collector": 0.121,
+   "emitter": 0.304,
+   "flink": 0.868,
+   "gateway": 0.663,
+   "model": 0.218
+  },
+  "tail": "ingress 47%, egress 30%, model_call 11%, feature_lookup 8%: Kafka produce ack p99 110 ms, ingress pickup p99 129 ms (I/O-bound host)"
  }
 }

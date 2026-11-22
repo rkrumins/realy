@@ -63,10 +63,20 @@ class HotPathBench {
         out.put("event_view_us", view);
         out.put("filter_mask_us", mask);
 
-        // 2. keyed aggregation per entity (the Flink stages, state in memory instead of RocksDB)
+        // 2. decode once (the Flink source), then keyed aggregation per entity on the decoded rows (the
+        //    Flink stages; state in memory instead of RocksDB)
         float[] buf = new float[schema.size()];
         long[] masks = new long[n];
         for (int i = 0; i < n; i++) masks[i] = filters.mask(EventView.of(events.get(i)));
+        var plan = schema.rowPlan();
+        var rows = new io.realy.scoring.features.EventRow[n];
+        double decode = 0;
+        for (int r = 0; r < rounds; r++) {
+            long t0 = System.nanoTime();
+            for (int i = 0; i < n; i++) rows[i] = plan.row(events.get(i));
+            decode = usPer(t0, n);
+        }
+        out.put("row_decode_us", decode);
         for (String ent : schema.streamByEntity().keySet()) {
             EntityAggregator agg = new EntityAggregator(schema, ent);
             double us = 0;
@@ -74,10 +84,9 @@ class HotPathBench {
                 Map<Long, byte[]> st = new HashMap<>();
                 long t0 = System.nanoTime();
                 for (int i = 0; i < n; i++) {
-                    TransactionEvent e = events.get(i);
-                    long key = EventView.entityKey(e, ent);
+                    long key = agg.key(rows[i]);
                     if (key == 0) continue;
-                    st.put(key, agg.process(st.get(key), e, masks[i], buf));
+                    st.put(key, agg.process(st.get(key), rows[i], masks[i], buf));
                 }
                 us = usPer(t0, n);
             }

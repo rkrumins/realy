@@ -80,9 +80,9 @@ def test_twin_reproduces_java_features_rules_score_and_outcome(recorded, events)
     assert served.shape[0] == n == events["event_id"].shape[0]
     assert [int(r["event_id"]) for r in rows] == events["event_id"].astype(np.uint64).tolist()
     world = build_world(golden.SPEC, golden.SEED, None)
-    cp, mp = world.customer_profile_arrays(), world.merchant_profile_arrays()
-    c_rows = world.customer_row(events["customer_id"])
-    m_rows = world.merchant_row(np.asarray(events["merchant_id"], np.uint64))
+    from realy.runner.seed import profile_entities
+    profiles = {e: (world.profile_arrays(e), schema.profile_features(e),
+                    world.profile_rows(e, events[schema.entities[e]])) for e in profile_entities(schema)}
     engine = ReferenceEngine(schema)
     filt = [cel.compile(x) for x in schema.filters.values()]
     names = [c for c in events if c not in ("t_intended_us", "t_intended_offset_us")]
@@ -105,13 +105,13 @@ def test_twin_reproduces_java_features_rules_score_and_outcome(recorded, events)
         # features are checked on the inputs as served.
         for e in shared:
             v[idx[e]] = served[i][idx[e]]
-        r = int(c_rows[i])
-        for s in schema.profile_features("customer"):
-            v[s.index] = np.float32(cp[s.field][r]) if r >= 0 else np.float32(s.default)
-        attrs = {a: np.float32(cp[a][r]) for a in schema.profile_attributes.get("customer", [])} if r >= 0 else None
-        mr = int(m_rows[i]) if int(ev["merchant_id"]) else -1
-        for s in schema.profile_features("merchant"):
-            v[s.index] = np.float32(mp[s.field][mr]) if mr >= 0 else np.float32(s.default)
+        attrs = None
+        for ent, (arr, specs, prow) in profiles.items():
+            r = int(prow[i])
+            for s in specs:
+                v[s.index] = np.float32(arr[s.field][r]) if r >= 0 else np.float32(s.default)
+            if ent == "customer" and r >= 0:
+                attrs = {a: np.float32(arr[a][r]) for a in schema.profile_attributes.get("customer", [])}
         compute_derived(schema, ev, attrs, v)
         close = np.isclose(served[i], v, rtol=1e-5, atol=1e-5)
         for k in np.flatnonzero(~close):

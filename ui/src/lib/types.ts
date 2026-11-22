@@ -334,7 +334,7 @@ export interface VerifyResult {
     worst: [string, number][]; note: string;
   };
   rules?: { checked: number; parity: number; mismatches: unknown[] };
-  score?: { checked: number; parity: number; model_version?: string | null };
+  score?: { checked: number; parity: number | null; model_version?: string | null; not_checkable?: string };
   outcome?: { checked: number; parity: number };
   audit?: Record<string, number | boolean | string> & { error?: string };
 }

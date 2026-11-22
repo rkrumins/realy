@@ -62,14 +62,29 @@ def _job_key() -> str:
 LINEAGE_KEEP = 50   # run ids kept on the record (the count is exact beyond that)
 
 
-def record_job(jid: str, group: str, world: str | None, r=None, lineage: dict | None = None) -> None:
+def stateful_uids(mode: str | None = None) -> list[str]:
+    """Operator uids holding keyed state in the job FraudJob builds from the feature schema (one keyed
+    stage per entity with stream features, `features-<entity>`)."""
+    from ..features import load_schema
+    return [f"features-{e}" for e in load_schema().stream_entities()]
+
+
+def record_job(jid: str, group: str, world: str | None, r=None, lineage: dict | None = None,
+               uids: list[str] | None = None) -> None:
     """`lineage` is which runs fed events into this state since it last started fresh:
     {"runs": [run ids, oldest first, at most LINEAGE_KEEP], "count": n}. A fresh job starts it empty;
-    a job restored from a savepoint carries the previous job's on."""
+    a job restored from a savepoint carries the previous job's on. `uids` are its stateful operators:
+    a later job restored from its savepoint must have every one of them, or their state is dropped."""
     from .seed import redis_client
     lin = lineage or {"runs": [], "count": 0}
     (r or redis_client()).set(_job_key(), json.dumps({"jid": jid, "group": group, "world": world, "at": time.time(),
-                                                      "lineage": lin}))
+                                                      "lineage": lin, "uids": uids if uids is not None else stateful_uids()}))
+
+
+def dropped_state(prev: dict | None, uids: list[str]) -> list[str]:
+    """Stateful operators of the recorded job that the new job graph would not have: restoring its
+    savepoint with allowNonRestoredState would silently drop their state."""
+    return sorted(set((prev or {}).get("uids") or []) - set(uids))
 
 
 def note_run(run_id: str, r=None) -> dict | None:
@@ -284,6 +299,15 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 savepoint = recovered
                 carried = (prev.get("lineage") or {"runs": [], "count": 0, "unknown": True})
                 log(f"flink: no job running; restoring job {prev['jid'][:8]} from its retained checkpoint {recovered}")
+        lost = dropped_state(prev, stateful_uids()) if savepoint else []
+        if lost:
+            # allowNonRestoredState would drop these operators' state without a word: start fresh instead,
+            # so the lineage and the provenance say what really happened
+            log(f"flink: the new job graph has no {', '.join(lost)}: their state cannot be restored, starting fresh")
+            savepoint, recovered, fresh = None, None, True
+            carried = {"runs": [], "count": 0}
+            from .seed import clear_stream_blobs
+            log(f"flink: cleared {clear_stream_blobs():,} online-store blobs of the old state")
         group = (f"realy-flink-{run_id}" if fresh and run_id
                  else (prev.get("group") if recovered and prev.get("group") else "realy-flink"))
         args = ["--mode", mode, "--parallelism", str(par), "--bootstrap", os.environ.get("FLINK_KAFKA_BOOTSTRAP", "kafka:29092"),

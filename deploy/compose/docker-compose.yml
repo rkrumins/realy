@@ -166,7 +166,11 @@ services:
       INGRESS_KAFKA: "false"
       KAFKA_CONSUMERS: "3"
       MIRROR_TO_KAFKA: "true"
+      # decisions the audit topic could not take are spooled here and replayed on restart (on a volume,
+      # so a container restart keeps them)
+      AUDIT_SPOOL: /spool/realy-audit.spool
       JAVA_OPTS: "-XX:+UseZGC -XX:+ZGenerational -Xmx2g -XX:+ExitOnOutOfMemoryError"
+    volumes: ["gateway-spool:/spool"]
     depends_on:
       kafka: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -282,6 +286,7 @@ services:
 
 volumes:
   flink-checkpoints: {}
+  gateway-spool: {}
   realy-runs: {}
   realy-data: {}
   realy-models: {}

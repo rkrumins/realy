@@ -32,11 +32,17 @@ spec:
             - { name: MIRROR_TO_KAFKA, value: "true" }
             - { name: JAVA_OPTS, value: "-XX:+UseZGC -XX:+ZGenerational -XX:MaxRAMPercentage=70 -XX:+AlwaysPreTouch" }
             - { name: HOSTNAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            # audit spool (decisions the audit topic could not take, replayed on restart): an emptyDir
+            # survives container restarts of the pod, not its deletion; use a StatefulSet + PVC where a
+            # spool must outlive the pod
+            - { name: AUDIT_SPOOL, value: /spool/realy-audit.spool }
+          volumeMounts: [{ name: spool, mountPath: /spool }]
           resources:
             requests: { cpu: "4", memory: 6Gi }
             limits: { cpu: "4", memory: 6Gi }
           readinessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 3 }
           livenessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 10, failureThreshold: 6 }
+      volumes: [{ name: spool, emptyDir: { sizeLimit: 2Gi } }]
 ---
 apiVersion: v1
 kind: Service

@@ -6,8 +6,10 @@ event; works on Redis Cluster because the client pipelines per slot).
 | Key | Writer | Contents |
 |-----|--------|----------|
 | `fs:{entity}:{id}` | Flink feature job (`features` mode) | stream features of that entity |
-| `pf:customer:{id}` | `realy world seed-redis` | customer profile features + attributes |
-| `pf:merchant:{id}` | `realy world seed-redis` | merchant profile features |
+| `pf:customer:{id}` | `pulsebench seed` (and the run's "profiles" step) | customer profile features + attributes |
+| `pf:merchant:{id}` | `pulsebench seed` (and the run's "profiles" step) | merchant profile features |
+| `pf:_meta:{entity}` | the seeder | `{"world": <world hash>, "layout": <blob layout hash>}`: the entity is reseeded when either differs (another world, or a profile feature added, removed or reordered) |
+| `pf:_world` | the seeder | hash of the world whose profiles are seeded (the run's health watch aborts when it disappears: Redis was flushed or restarted) |
 
 `{entity}` is the lowercase entity name from `feature_schema.yaml` (`customer`, `card`, `device`,
 `ip`, `merchant`, `terminal`, `payee`); `{id}` is the decimal entity key.

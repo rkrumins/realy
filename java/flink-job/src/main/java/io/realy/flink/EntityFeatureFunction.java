@@ -4,7 +4,6 @@ import io.realy.common.BenchClock;
 import io.realy.common.Env;
 import io.realy.common.StageMetrics;
 import io.realy.contracts.bench.v1.Stage;
-import io.realy.contracts.payments.v1.TransactionEvent;
 import io.realy.scoring.features.EntityAggregator;
 import io.realy.scoring.features.FeatureAssembler;
 import io.realy.scoring.features.FeatureSchema;
@@ -40,6 +39,7 @@ import org.apache.flink.util.Collector;
 public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Envelope, Envelope>
         implements CheckpointedFunction {
     private final String entity;
+    private final String schemaYaml;   // resolved once by the job's main (null: this process's schema)
     private final boolean writeStore;
     private final boolean storeState;
     private final boolean spans;
@@ -59,10 +59,11 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
     }
 
     public EntityFeatureFunction(String entity, boolean writeStore, boolean storeState) {
-        this(entity, writeStore, storeState, true);
+        this(entity, writeStore, storeState, true, null);
     }
 
-    public EntityFeatureFunction(String entity, boolean writeStore, boolean storeState, boolean spans) {
+    public EntityFeatureFunction(String entity, boolean writeStore, boolean storeState, boolean spans, String schemaYaml) {
+        this.schemaYaml = schemaYaml;
         this.entity = entity;
         this.writeStore = writeStore;
         this.storeState = storeState;
@@ -71,7 +72,7 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
 
     @Override
     public void open(OpenContext ctx) {
-        FeatureSchema schema = FeatureSchema.load();
+        FeatureSchema schema = FeatureSchema.of(schemaYaml);
         agg = new EntityAggregator(schema, entity);
         schemaVersion = schema.version;
         entityEnum = FeatureAssembler.entityEnum(entity).getNumber();
@@ -99,12 +100,11 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
         long start = BenchClock.nowUs();
         int dom = BenchClock.domain();
         if (spans) env.span(Stage.SHUFFLE_VALUE, entityEnum, dom, env.lastEmitUs, start - env.lastEmitUs);
-        long key = env.key(entity);
+        long key = agg.key(env.row);
         if (key == 0) {
             agg.defaults(env.features);
         } else {
-            TransactionEvent e = TransactionEvent.parseFrom(env.event);
-            byte[] next = agg.process(state.value(), e, env.filterMask, env.features);
+            byte[] next = agg.process(state.value(), env.row, env.filterMask, env.features);
             state.update(next);
             if (writeStore) {
                 int[] idx = agg.featureIndices();
@@ -117,7 +117,7 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
                 // write latency must describe live events only (object reuse: read the flag now, not in the callback)
                 String sfx = env.backfill ? "_backfill" : "";
                 StoreBlob blob = storeState
-                        ? new StoreBlob(schemaVersion, asOf, w0, vals, e.getEventId(), next)
+                        ? new StoreBlob(schemaVersion, asOf, w0, vals, env.eventId, next)
                         : new StoreBlob(schemaVersion, asOf, w0, vals);
                 byte[] bytes = blob.encode();
                 metrics.add("store_write_bytes", bytes.length);

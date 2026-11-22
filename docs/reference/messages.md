@@ -322,6 +322,8 @@ Source: `contracts/proto/realy/payments/v1/label.proto`
 
 ### `FraudType` (enum)
 
+Typology ids. The typology registry (contracts/usecases/typologies/*.yaml) is the source of truth and is open: a user typology takes the next free id, and ClickHouse / reports resolve names from the registry, so an id without a name here is valid. The built-in ones are named for convenience.
+
 | Value | Number | Meaning |
 |---|---|---|
 | `FRAUD_TYPE_NONE` | 0 |  |
@@ -335,6 +337,7 @@ Source: `contracts/proto/realy/payments/v1/label.proto`
 | `BUST_OUT` | 8 |  |
 | `BOT_ECOM` | 9 |  |
 | `FRIENDLY_FRAUD` | 10 | label noise: legitimate transaction charged back |
+| `INVESTMENT_SCAM` | 11 |  |
 
 ### `LabelSource` (enum)
 

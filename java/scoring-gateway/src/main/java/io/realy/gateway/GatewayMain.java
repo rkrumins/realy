@@ -41,8 +41,8 @@ public final class GatewayMain {
         OnlineStore store = "mock".equals(holder.get().cfg().getFeatureSource())
                 ? new MockOnlineStore()
                 : new RedisOnlineStore(Env.str("REDIS_URI", "redis://localhost:6379"), Env.integer("REDIS_CONNECTIONS", 4));
-        KServeModelClient model = new KServeModelClient(Env.str("MODEL_TARGET", "localhost:8001"),
-                Env.str("MODEL_NAME", "fraud_mlp"), Env.integer("MODEL_INPUT_DIM", schema.size()), Env.integer("MODEL_CHANNELS", 4));
+        KServeModelClient model = KServeModelClient.forServedModel(Env.str("MODEL_TARGET", "localhost:8001"),
+                Env.str("MODEL_NAME", "fraud_mlp"), schema.size(), Env.integer("MODEL_CHANNELS", 4));
         model.configure(holder.get().cfg());
         holder.onChange(a -> model.configure(a.cfg()));
 

@@ -64,6 +64,54 @@ public final class KServeModelClient implements ModelClient {
         }
     }
 
+    /**
+     * A client whose request rows are as wide as the served model's input. A KServe v2 model (Triton,
+     * ONNX) reads its input positionally, so it must receive exactly the features it was trained on:
+     * features are only ever appended to the schema, so those are the first N of today's vector (a model
+     * wider than the schema, a production-width proxy, gets zeros after them). N comes from
+     * MODEL_INPUT_DIM when set, else from the server's model metadata (input shape [-1, N]), else the
+     * schema width (the mock server binds any row by feature name).
+     */
+    public static KServeModelClient forServedModel(String target, String modelName, int schemaWidth, int channels) {
+        String forced = io.realy.common.Env.str("MODEL_INPUT_DIM", "");
+        int width = schemaWidth;
+        if (!forced.isBlank()) {
+            width = Integer.parseInt(forced.trim());
+        } else {
+            int served = servedInputWidth(target, modelName, io.realy.common.Env.str("MODEL_INPUT_NAME", "input__0"));
+            if (served > 0) width = served;
+        }
+        if (width != schemaWidth) {
+            org.slf4j.LoggerFactory.getLogger(KServeModelClient.class).info(
+                    "model {} reads {} inputs ({} schema features: {})", modelName, width, schemaWidth,
+                    width < schemaWidth ? "sending the first " + width : "zero-padded");
+        }
+        return new KServeModelClient(target, modelName, width, channels);
+    }
+
+    /** Last dimension of the model's input tensor from KServe v2 ModelMetadata, or -1 (unknown / unreachable). */
+    static int servedInputWidth(String target, String modelName, String inputName) {
+        ManagedChannel ch = ManagedChannelBuilder.forTarget(target).usePlaintext().build();
+        try {
+            var md = GRPCInferenceServiceGrpc.newBlockingStub(ch).withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .modelMetadata(io.realy.contracts.kserve.v2.ModelMetadataRequest.newBuilder().setName(modelName).build());
+            for (var in : md.getInputsList()) {
+                if ((in.getName().equals(inputName) || md.getInputsCount() == 1) && in.getShapeCount() > 0) {
+                    long n = in.getShape(in.getShapeCount() - 1);
+                    return n > 0 ? (int) n : -1;
+                }
+            }
+            return -1;
+        } catch (RuntimeException e) {
+            org.slf4j.LoggerFactory.getLogger(KServeModelClient.class).warn(
+                    "model metadata for {} unavailable at {} ({}): sending the full schema width", modelName, target,
+                    e.getMessage());
+            return -1;
+        } finally {
+            ch.shutdownNow();
+        }
+    }
+
     public void configureBatching(int windowUs, int maxBatch) {
         this.windowUs = Math.max(0, windowUs);
         this.maxBatch = Math.max(1, maxBatch);
