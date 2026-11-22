@@ -39,6 +39,27 @@ payments.events.raw ─▶ source (uid source) ─▶ features:customer ─▶ f
   runner starts the mode the scenario's topology needs and switches with stop-with-savepoint, so the
   keyed state carries over (the uids are the same in every mode).
 
+## What makes the job generic
+
+The job has no payment-specific code on the feature path. Everything it computes comes from contracts:
+
+| What | Comes from | Changing it |
+|---|---|---|
+| the keyed stages (one per entity, in order) | the stream features' entities in the feature schema (`--entities` narrows them) | add a feature on a new entity, register the entity (`contracts/entities.yaml`) |
+| the topics read and written | the pipeline binding (`contracts/pipelines/<pipeline>.yaml` `topics`; `--events-topic` / `--decisions-topic` override per job) | edit the pipeline |
+| the Kafka key of every decision | the pipeline's partition entity, from the decoded row | edit the pipeline's `partition` |
+| what the source decodes from each event | `RowPlan`: one slot per event field a stream feature reads, by the aggregation's declared input | nothing: follows the schema |
+| filters | the schema's named CEL predicates, compiled once and evaluated once per event into a bit mask | add a filter (CEL), up to 63 |
+| aggregations | the aggregation registry: the eight built-ins and any [plugin](extending.md) in `PLUGINS_DIR` | add a plugin (Java + Python twin) |
+| the state layout | the aggregation's state shape (buckets, seen keys, last event, last event with location) | nothing: a plugin reuses a shape |
+| multi-message transactions | the transaction contracts named by `--assemble` | a contract, no code ([transactions](transactions.md)) |
+
+What still needs code: a new state shape, a new kind of operator (an enrichment from reference data, a
+second source such as labels), and a non-Kafka source or sink. Limits: at most 63 filters per schema;
+one schema per job (a schema change restarts the job and resets the state of entities whose layout
+changed); and the gateway's fallback for blobs without state only re-adds the current event for the
+built-in aggregations ([extending](extending.md#limits)).
+
 ## State
 
 Each entity stage holds one RocksDB `ValueState<byte[]>` per key: the entity's window buckets
@@ -145,6 +166,8 @@ JobManager and the TaskManagers) and `flinkConfiguration` in `deploy/k8s/compone
 ## Changing the job
 
 - **Add a feature**: edit the feature schema; no job code changes (the aggregator is driven by the DSL).
+- **Add an aggregation kind**: a plugin jar in `PLUGINS_DIR` (JobManager and TaskManagers) plus its
+  Python twin; no job code changes ([extending](extending.md)).
   Prove it with a verified run (`pulsebench run <scenario> --verify`): the Python twin
   (`python/realy/features/engine.py`) must agree exactly.
 - **Add an operator**: give it a stable `.uid(...)` (state is matched by uid on restore). The runner

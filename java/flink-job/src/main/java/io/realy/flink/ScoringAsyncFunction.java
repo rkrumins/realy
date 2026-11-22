@@ -55,6 +55,8 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
     @Override
     public void open(OpenContext ctx) {
         FeatureSchema schema = FeatureSchema.of(schemaYaml);
+        // decisions are keyed by the pipeline's partition entity (the customer for payments), as the events
+        partitionOrdinal = schema.rowPlan().entityOrdinal(io.realy.scoring.binding.PipelineBinding.current().partitionKey);
         ScoringConfig cfg = ScoringConfigHolder.defaults();
         if (initialConfigJson != null && !initialConfigJson.isBlank()) cfg = ProtoJson.overlay(cfg, initialConfigJson);
         ScoringConfigHolder holder = new ScoringConfigHolder(cfg);
@@ -84,8 +86,16 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
         return t;
     }
 
-    static byte[] key(long customerId) {
-        return Long.toUnsignedString(customerId).getBytes(StandardCharsets.UTF_8);
+    private transient int partitionOrdinal = -1;
+
+    static byte[] key(long id) {
+        return Long.toUnsignedString(id).getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** The decision's Kafka key: the event's partition-entity id (from the decoded row). */
+    static byte[] key(Envelope env, int partitionOrdinal, TransactionEvent e) {
+        if (env.row != null && partitionOrdinal >= 0 && partitionOrdinal < env.row.keys.length) return key(env.row.keys[partitionOrdinal]);
+        return key(e.getCustomerId());
     }
 
     @Override
@@ -103,7 +113,7 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
             DecisionRecord out = err == null ? rec : errorRecord(e, t, "PIPELINE_ERROR");
             metrics.inc("decisions");
             metrics.recordUs("hot_path", BenchClock.nowUs() - env.ingestUs);
-            result.complete(List.of(new DecisionBytes(key(e.getCustomerId()), out.toByteArray())));
+            result.complete(List.of(new DecisionBytes(key(env, partitionOrdinal, e), out.toByteArray())));
         });
     }
 
@@ -111,7 +121,7 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
     public void timeout(Envelope env, ResultFuture<DecisionBytes> result) throws Exception {
         TransactionEvent e = TransactionEvent.parseFrom(env.event);
         metrics.inc("async_timeouts");
-        result.complete(List.of(new DecisionBytes(key(e.getCustomerId()), errorRecord(e, trace(env), "ASYNC_TIMEOUT").toByteArray())));
+        result.complete(List.of(new DecisionBytes(key(env, partitionOrdinal, e), errorRecord(e, trace(env), "ASYNC_TIMEOUT").toByteArray())));
     }
 
     private DecisionRecord errorRecord(TransactionEvent e, BenchTrace.Builder t, String reason) {

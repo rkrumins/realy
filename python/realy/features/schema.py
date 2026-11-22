@@ -126,6 +126,12 @@ def _load_schema(path: str) -> FeatureSchema:
             w, g = parse_duration_us(f["window"]), parse_duration_us(f["granularity"])
             if w % g:
                 raise ValueError(f"{f['name']}: window must be a multiple of granularity")
+            from . import aggregations
+            if f.get("agg") not in aggregations.names():
+                raise ValueError(f"{f['name']}: unknown aggregation {f.get('agg')!r} "
+                                 f"(registered: {', '.join(aggregations.names())})")
+            if aggregations.get(f["agg"]).input in ("numeric", "key") and not f.get("value"):
+                raise ValueError(f"{f['name']}: aggregation {f['agg']} needs `value:` (the event field it reads)")
             kw.update(entity=f["entity"], agg=f["agg"], value=f.get("value"), filter=f.get("filter"),
                       window_us=w, granularity_us=g)
         elif src == "profile":

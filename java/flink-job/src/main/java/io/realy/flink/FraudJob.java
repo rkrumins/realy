@@ -59,7 +59,8 @@ public final class FraudJob {
         String schemaYaml = FeatureSchema.loadText();
         KafkaSource<Envelope> source = KafkaSource.<Envelope>builder()
                 .setBootstrapServers(bootstrap)
-                .setTopics(p.get("events-topic", "payments.events.raw"))
+                // topics: the pipeline's (contracts/pipelines/<pipeline>.yaml), overridable per job
+                .setTopics(p.get("events-topic", io.realy.scoring.binding.PipelineBinding.current().topics.getOrDefault("events", "payments.events.raw")))
                 .setGroupId(p.get("group", "realy-flink-" + mode))
                 .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.LATEST))
                 .setDeserializer(new EventDeserializer(schemaYaml, !"features".equals(mode), !p.get("assemble", "").isBlank()))
@@ -296,7 +297,7 @@ public final class FraudJob {
             props.setProperty(kv.getKey(), kv.getValue());
         }
         props.putAll(io.realy.common.KafkaProps.security());
-        String topic = p.get("decisions-topic", "payments.decisions");
+        String topic = p.get("decisions-topic", io.realy.scoring.binding.PipelineBinding.current().topics.getOrDefault("decisions", "payments.decisions"));
         boolean eos = p.getBoolean("exactly-once", false);
         var b = KafkaSink.<DecisionBytes>builder()
                 .setBootstrapServers(bootstrap)

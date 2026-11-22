@@ -8,6 +8,7 @@ include(
     "scoring-gateway",
     "flink-job",
     "load-emitter",
+    "plugin-example",
 )
 
 // MAVEN_MIRROR (env or -PmavenMirror=...): a Maven Central mirror tried first — for corporate

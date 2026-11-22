@@ -141,7 +141,7 @@ components:
       - { key: STORE_STATE, in: env (Flink job), default: "customer,card", effect: "entities written as state blobs (re-windowed exactly at the gateway); the rest as values" }
       - { key: STORE_MAX_IN_FLIGHT, in: env (Flink job), default: "1000", effect: "Redis writes in flight per subtask (backpressure beyond it)" }
       - { key: flink_state, in: scenario, default: warm, effect: "keep the job's state across runs, or start fresh" }
-    extend: "new features, filters, windows and entities are contract edits (docs/dev/features.md); a new aggregation kind is code in EntityAggregator and its Python twin (an Aggregation extension point is planned)"
+    extend: "new features, filters, windows and entities are contract edits (docs/dev/features.md); a new aggregation kind is an Aggregation plugin (a jar in PLUGINS_DIR plus its Python twin, proved by shared fixtures: docs/dev/extending.md)"
   flink_scoring:
     kind: flink
     label: Async scoring

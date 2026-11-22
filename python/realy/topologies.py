@@ -343,19 +343,32 @@ def run_advice(rep: dict[str, Any], summary: dict[str, Any] | None = None, verif
                 "flink-inline computes them in-stream where they must be fresh", 120)
     tx = rep.get("transactions") or {}
     if tx.get("assembled"):
-        pf = tx.get("partial_fraction") or 0.0
-        w = (tx.get("assembly_wait_ms") or {}).get("p99")
-        if pf > 0.02:
-            add("warning", "flows", f"{_pct(pf)} of transactions were decided without a required part",
-                "the part did not arrive within the contract's wait_ms",
-                "find which part is late (the Explorer's transaction view) and raise wait_ms if the budget allows, or "
-                "make the part optional and let a later stage decide again", 220 + pf * 100)
-        if w is not None and budget and w > 0.4 * budget:
-            add("info", "flows", f"waiting for a transaction's parts takes up to {w:.0f} ms (p99)",
-                f"{_pct(w / budget)} of the {budget:.0f} ms budget is spent before scoring starts",
-                "the customer waits for the payee check too: a shorter wait_ms trades completeness for latency"
-                + ("; assembling in the gateway would also remove the assembled topic's hop" if topology == "gateway-kafka" else ""),
-                150, stage="txn_assembly")
+        from .bindings.transactions import transactions as _contracts
+        known = _contracts()
+        per = tx.get("by_contract") or {",".join(tx.get("contracts") or []): tx}
+        for name, c in per.items():
+            pf = c.get("partial_fraction") or 0.0
+            w = (c.get("assembly_wait_ms") or {}).get("p99")
+            waits = bool(getattr(known.get(name), "require", ()))   # does the contract wait for a part at all
+            if pf > 0.02:
+                add("warning", "flows", f"{name}: {_pct(pf)} of transactions were decided without a required part",
+                    "the part did not arrive within the contract's wait_ms",
+                    "find which part is late (the Explorer's transaction view) and raise wait_ms if the budget allows, "
+                    "or make the part optional and let a later stage decide again", 220 + pf * 100)
+            if w is not None and budget and w > 0.4 * budget:
+                if waits:
+                    add("info", "flows", f"{name}: waiting for a transaction's parts takes up to {w:.0f} ms (p99)",
+                        f"{_pct(w / budget)} of the {budget:.0f} ms budget is spent before scoring starts",
+                        "the customer waits for the required part too: a shorter wait_ms trades completeness for latency"
+                        + ("; assembling in the gateway would also remove the assembled topic's hop"
+                           if topology == "gateway-kafka" else ""), 150, stage="txn_assembly")
+                else:
+                    add("warning", "flows", f"{name}: {w:.0f} ms (p99) pass before a transaction is assembled, although "
+                        "it waits for no part", f"{_pct(w / budget)} of the {budget:.0f} ms budget: the messages queue in "
+                        "front of the Flink assembler (source, deserialisation), not in the wait",
+                        "the assembler's input is behind: more Flink source parallelism (up to the partitions), fewer "
+                        "messages per payment (send only the parts the decision needs), or a larger host", 210,
+                        stage="txn_assembly")
     if s.get("verdict") == "PASS" and not any(i["severity"] in ("warning", "critical") for i in out):
         add("good", "latency", f"within budget at {s.get('achieved_emit_tps', 0):,.0f} TPS: e2e p99 {p99 or 0:.0f} ms",
             "no stage stands out", "raise the rate (step-ramp) to find this topology's knee on this host", 10)

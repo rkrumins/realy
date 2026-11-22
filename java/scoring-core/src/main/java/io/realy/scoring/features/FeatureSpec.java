@@ -6,7 +6,7 @@ public record FeatureSpec(
         String name,
         String source,       // stream | profile | derived
         String entity,       // stream/profile
-        String agg,          // count|sum|max|avg|distinct|novel|time_since_last|geo_speed_kmh
+        String agg,          // a registered aggregation (Aggregations): count|sum|max|avg|distinct|novel|time_since_last|geo_speed_kmh, or a plugin
         String value,        // event field for sum/max/avg/distinct/novel
         String filter,       // named filter or null
         long windowUs,

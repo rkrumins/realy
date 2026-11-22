@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, CheckCircle2, Copy, Cpu, FileCode2, Globe2, Loader2, Network, Plus, Rocket, Save, ShieldAlert, Sparkles, Target, Timer, Trash2, Waves,
-} from "lucide-react";
+ RotateCcw } from "lucide-react";
 import * as React from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -177,6 +177,17 @@ export default function Scenarios() {
     onError: (e) => { setErrors(errList(e)); toast.error("Save failed", { description: (e as Error).message }); },
   });
 
+  const current = list.data?.find((s) => s.name === name);
+  const reset = useMutation({
+    mutationFn: () => api.resetScenario(name),
+    onSuccess: () => {
+      toast.success(`Reset ${name} to the bundled version`, { description: "Your edit is kept in the scenario directory's .backup/." });
+      qc.invalidateQueries({ queryKey: ["scenarios"] });
+      qc.invalidateQueries({ queryKey: ["scenario", name] });
+    },
+    onError: (e) => toast.error("Reset failed", { description: (e as Error).message }),
+  });
+
   const traffic = (getIn<Doc>(doc, ["traffic"]) ?? {}) as Doc;
   const duration = Number(traffic.duration_s ?? 60);
   const warmup = Number(traffic.warmup_s ?? 10);
@@ -211,6 +222,8 @@ export default function Scenarios() {
               <button key={s.name} onClick={() => setParams({ name: s.name })}
                 className={cn("flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[12.5px] cursor-pointer", s.name === name ? "bg-accent/12 text-fg" : "text-muted hover:bg-surface-2 hover:text-fg")}>
                 <span className="truncate font-mono">{s.name}</span>
+                {s.update_available ? <span className="size-1.5 shrink-0 rounded-full bg-info" title="the image has a newer version of this bundled scenario" />
+                  : s.edited ? <span className="size-1.5 shrink-0 rounded-full bg-warn" title="edited (kept across upgrades)" /> : null}
                 <span className="ml-auto shrink-0 text-[10.5px] text-subtle">{fmtCompact(s.tps)}</span>
               </button>
             ))}
@@ -224,6 +237,13 @@ export default function Scenarios() {
             <span className="font-mono text-[14px] font-medium">{docName}.yaml</span>
             <TopologyBadge topology={topology} />
             {dirty ? <Badge tone="warn">unsaved changes</Badge> : <Badge>saved</Badge>}
+            {current?.bundled && (current.update_available
+              ? <Badge tone="info" title="you edited this bundled scenario; the image now ships a newer version">newer version available</Badge>
+              : current.edited ? <Badge tone="neutral" title="kept as you edited it when the image is upgraded">edited</Badge> : <Badge tone="neutral">bundled</Badge>)}
+            {current?.bundled && current.edited && (
+              <Button size="sm" variant="ghost" onClick={() => reset.mutate()} disabled={reset.isPending}
+                title="restore the version this image ships (your edit is kept in .backup/)"><RotateCcw />Reset to bundled</Button>
+            )}
             {parseErr && <Badge tone="fail"><AlertTriangle />YAML error</Badge>}
             <span className="ml-auto text-[12px] text-subtle num">{fmtCompact(peakTps)} TPS peak · {fmtDuration(duration)} + {fmtDuration(warmup)} warm-up</span>
             <Button size="sm" variant="ghost" onClick={() => nav(`/launch?scenario=${encodeURIComponent(name)}`)} disabled={dirty}><Rocket />Launch</Button>

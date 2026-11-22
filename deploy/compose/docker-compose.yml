@@ -170,7 +170,9 @@ services:
       # so a container restart keeps them)
       AUDIT_SPOOL: /spool/realy-audit.spool
       JAVA_OPTS: "-XX:+UseZGC -XX:+ZGenerational -Xmx2g -XX:+ExitOnOutOfMemoryError"
-    volumes: ["gateway-spool:/spool"]
+      # extension jars (plugin aggregations): the same ./plugins directory for the gateway and Flink
+      PLUGINS_DIR: /opt/realy/plugins
+    volumes: ["gateway-spool:/spool", "./plugins:/opt/realy/plugins:ro"]
     depends_on:
       kafka: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -187,7 +189,8 @@ services:
     entrypoint: ["bash", "-c", "mkdir -p /checkpoints/savepoints && chown -R flink:flink /checkpoints && exec /docker-entrypoint.sh jobmanager"]
     environment:
       FLINK_PROPERTIES: *flink-common
-    volumes: ["flink-checkpoints:/checkpoints"]
+      PLUGINS_DIR: /opt/realy/plugins
+    volumes: ["flink-checkpoints:/checkpoints", "./plugins:/opt/realy/plugins:ro"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/overview > /dev/null || exit 1"]
       interval: 5s
@@ -210,7 +213,9 @@ services:
       STORE_MAX_IN_FLIGHT: "${STORE_MAX_IN_FLIGHT:-1000}"
       REDIS_COMMAND_TIMEOUT_MS: "${FLINK_REDIS_TIMEOUT_MS:-10000}"
       FLINK_PROPERTIES: *flink-common
-    volumes: ["flink-checkpoints:/checkpoints", "./flink/tm-health.sh:/opt/realy/tm-health.sh:ro"]
+      PLUGINS_DIR: /opt/realy/plugins
+    volumes: ["flink-checkpoints:/checkpoints", "./flink/tm-health.sh:/opt/realy/tm-health.sh:ro",
+              "./plugins:/opt/realy/plugins:ro"]
     restart: unless-stopped
     # alive = registered with the JobManager (a hung JVM keeps the container up but serves nothing)
     healthcheck:
@@ -247,8 +252,12 @@ services:
       REALY_SHUTDOWN_GRACE_S: "60"
       # retained Flink checkpoints, read-only: a job lost with its JobManager restores from the newest one
       FLINK_CHECKPOINTS_LOCAL: /flink-checkpoints
+      # Python twins of plugin aggregations (verify recomputes their features): modules in ./plugins/python
+      PLUGINS_DIR: /opt/realy/plugins
+      REALY_AGGREGATION_PLUGINS: ${REALY_AGGREGATION_PLUGINS:-}
     stop_grace_period: 75s
     volumes:
+      - ./plugins:/opt/realy/plugins:ro
       - realy-runs:/runs
       - realy-data:/data
       - realy-models:/models

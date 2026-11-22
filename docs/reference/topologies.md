@@ -357,7 +357,7 @@ Code: `java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java, j
 | `STORE_MAX_IN_FLIGHT` | env (Flink job) | 1000 | Redis writes in flight per subtask (backpressure beyond it) |
 | `flink_state` | scenario | warm | keep the job's state across runs, or start fresh |
 
-**Swap or extend:** new features, filters, windows and entities are contract edits (docs/dev/features.md); a new aggregation kind is code in EntityAggregator and its Python twin (an Aggregation extension point is planned)
+**Swap or extend:** new features, filters, windows and entities are contract edits (docs/dev/features.md); a new aggregation kind is an Aggregation plugin (a jar in PLUGINS_DIR plus its Python twin, proved by shared fixtures: docs/dev/extending.md)
 
 ### Component `flink_scoring`
 

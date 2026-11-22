@@ -34,9 +34,9 @@ public final class RowPlan {
         List<String> val = new ArrayList<>();
         for (FeatureSpec s : schema.features) {
             if (!s.isStream() || s.value() == null) continue;
-            switch (s.agg()) {
-                case "sum", "max", "avg" -> { if (!num.contains(s.value())) num.add(s.value()); }
-                case "distinct", "novel" -> { if (!val.contains(s.value())) val.add(s.value()); }
+            switch (Aggregations.get(s.agg()).input()) {   // what the aggregation reads (built-in or plugin)
+                case NUMERIC -> { if (!num.contains(s.value())) num.add(s.value()); }
+                case KEY -> { if (!val.contains(s.value())) val.add(s.value()); }
                 default -> { }
             }
         }

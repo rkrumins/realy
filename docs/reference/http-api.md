@@ -69,6 +69,7 @@ The console UI is a client of this API; scripts and CI can use it too. Live Open
 | `GET` | `/api/env/clickhouse` |  |  | Clickhouse Detail |
 | `GET` | `/api/env/flink` |  |  | Flink Detail |
 | `GET` | `/api/env/kafka` |  |  | Kafka Detail |
+| `GET` | `/api/env/preflight` | `?scenario, ?topology` |  | The preflight a run starts with (realy.infra): every component the scenario's (or the topology's) path uses, bundled / mock / external, with pass / warn / fail checks and their fixes, and what the scenario would simulate. |
 | `GET` | `/api/env/redis` |  |  | Redis Detail |
 | `GET` | `/api/env` |  |  | Environment |
 

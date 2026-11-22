@@ -39,6 +39,11 @@ final class AdminInfo {
         out.put("pipeline", PipelineBinding.current().name);
         out.put("schema", Map.of("version", schema.version, "features", schema.size(),
                 "sha256", sha256(FeatureSchema.loadText())));
+        Map<String, Object> ext = new LinkedHashMap<>();
+        ext.put("aggregations", io.realy.scoring.features.Aggregations.extensions());
+        ext.put("plugins_dir", Env.str("PLUGINS_DIR", ""));
+        ext.put("jars", io.realy.scoring.Plugins.jars().stream().map(x -> x.getFileName().toString()).toList());
+        out.put("extensions", ext);
         Map<String, Object> kafka = new LinkedHashMap<>();
         kafka.put("bootstrap", Env.str("KAFKA_BOOTSTRAP", "localhost:9092"));
         kafka.put("security_protocol", Env.str("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"));

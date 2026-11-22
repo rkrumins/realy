@@ -73,6 +73,7 @@ export const api = {
   scenario: (name: string) => request<{ name: string; yaml: string; scenario: Record<string, unknown> }>(`/api/scenarios/${enc(name)}`),
   validate: (yaml: string) => request<{ ok: boolean; scenario: Record<string, unknown>; fingerprint: string }>("/api/scenarios/validate", { method: "POST", json: { yaml } }),
   saveScenario: (name: string, yaml: string) => request<{ ok: boolean }>(`/api/scenarios/${enc(name)}`, { method: "PUT", json: { yaml } }),
+  resetScenario: (name: string) => request<{ ok: boolean }>(`/api/scenarios/${enc(name)}/reset`, { method: "POST" }),
   budget: (name: string, body: { overrides?: Record<string, unknown>; yaml?: string; samples?: number }) =>
     request<BudgetCheck>(`/api/scenarios/${enc(name)}/budget`, { method: "POST", json: body }),
   // runs

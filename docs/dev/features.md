@@ -11,7 +11,7 @@ list of every feature is [reference/features.md](../reference/features.md).
 
 | Source | Computed by | Example |
 |---|---|---|
-| `stream` | Flink, per entity, over event-time windows (`count`, `sum`, `max`, `avg`, `distinct`, `novel`, `time_since_last`, `geo_speed_kmh`), optionally behind a named `filter` | `card_small_cnp_count_10m`: small card-not-present payments on the card in 10 minutes |
+| `stream` | Flink, per entity, over event-time windows (`count`, `sum`, `max`, `avg`, `distinct`, `novel`, `time_since_last`, `geo_speed_kmh`, or a [plugin aggregation](extending.md)), optionally behind a named `filter` | `card_small_cnp_count_10m`: small card-not-present payments on the card in 10 minutes |
 | `profile` | seeded from the world into Redis (`pf:<entity>:<id>`) | `cust_tenure_days` |
 | `derived` with `fn:` | a built-in function at scoring time (Java `DerivedFeatures`, Python `features/derived.py`) | `dist_from_home_km` |
 | `derived` with `expr:` | a CEL expression over `event` and the features computed before it (`f.<name>`) | `cvv_mismatch` |
@@ -58,6 +58,14 @@ shape):
   the Flink state fresh, warmed with history (the state layout hash is part of the provenance identity).
   Plan a history replay (`traffic.backfill_days`) long enough for the window.
 
+## A new aggregation kind
+
+The eight built-ins cover counts, sums, averages, maxima, distinct counts, novelty, recency and speed.
+Anything else (a minimum, a weighted sum, a ratio of two windows) is an `Aggregation` plugin: one Java
+class and its Python twin, proved equal by shared fixtures. It reuses one of the four state shapes, so
+the state codec and the online-store layout stay as they are. Walkthrough and rules:
+[extending the platform](extending.md#walkthrough-add-min).
+
 ## Walkthrough 3: a profile feature
 
 Add the attribute to the world (`world/build.py`), export it in `customer_profile_arrays()` (or the
@@ -84,7 +92,8 @@ world cannot supply fails the seeding with its name instead of serving defaults.
 | Concern | Java | Python twin |
 |---|---|---|
 | Schema loading | `scoring-core/.../features/FeatureSchema.java` | `features/schema.py` |
-| Stream aggregation | `EntityAggregator.java` | `features/engine.py` |
+| Aggregations (registry, built-ins, plugins) | `Aggregations.java`, `Aggregation.java` | `features/aggregations.py` |
+| Stream aggregation (state, codec, stages) | `EntityAggregator.java` | `features/engine.py` |
 | Derived and CEL features | `DerivedFeatures.java` | `features/derived.py` |
 | Event view (what CEL sees) | `EventView.java` | `event_view` in `features/derived.py` |
 | Assembly at scoring time | `FeatureAssembler.java` | `verify/verify.py` |

@@ -18,6 +18,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/controls";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip } from "@/components/ui/tooltip";
+import { RichText } from "@/components/rich-text";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { fmtCompact, fmtMs, fmtPct, isNum } from "@/lib/format";
@@ -61,7 +62,7 @@ export function fitOf(t: TopologyInfo, needs: string[], caps: TopologiesResponse
 function CapCell({ status, note }: { status: CapStatus | undefined; note?: string }) {
   const s = STATUS[status ?? "n/a"];
   return (
-    <Tooltip content={<span className="block max-w-[320px] text-[12px] leading-5">{note ?? "not stated"}</span>}>
+    <Tooltip content={<span className="block max-w-[320px] text-[12px] leading-5"><RichText text={note ?? "not stated"} /></span>}>
       <span className={cn("inline-flex cursor-help items-center gap-1.5 text-[12.5px]",
         s.tone === "pass" && "text-pass", s.tone === "warn" && "text-warn", s.tone === "fail" && "text-fail", s.tone === "neutral" && "text-subtle")}>
         <s.Icon className="size-4 shrink-0" aria-hidden />{s.label}
@@ -105,7 +106,7 @@ function TopologyCard({ t, caps, needs, selected, onSelect }: {
           : fit.partly.length ? <Badge tone="warn">partly meets {fit.partly.length}</Badge>
             : <Badge tone="pass">meets all {needs.length}</Badge>)}
       </div>
-      <p className="mt-1.5 text-[13px] leading-5 text-muted">{t.tagline}</p>
+      <p className="mt-1.5 text-[13px] leading-5 text-muted"><RichText text={t.tagline} /></p>
       {needs.length > 0 && fit.missed.length > 0 && (
         <p className="mt-1.5 text-[12px] text-fail">Cannot: {fit.missed.join("; ")}</p>
       )}
@@ -196,7 +197,7 @@ function Steps({ steps, comps }: { steps: TopologyStep[]; comps: TopologiesRespo
                 {s.for_each && <Badge tone="neutral">one per entity with stream features</Badge>}
                 <span className="font-mono text-[11px] text-subtle">{c?.kind}</span>
               </div>
-              <p className="mt-0.5 text-[12.5px] leading-5 text-muted">{s.does}</p>
+              <p className="mt-0.5 text-[12.5px] leading-5 text-muted"><RichText text={s.does} /></p>
             </div>
           </li>
         );
@@ -214,7 +215,7 @@ function Detail({ t, data }: { t: TopologyInfo; data: TopologiesResponse }) {
   return (
     <Card id="detail" className="scroll-mt-20">
       <CardHeader title={<span className="flex items-center gap-2">{t.title} <TopologyBadge topology={t.id} /></span>}
-        subtitle={`${t.decides}. Flink: ${t.flink}`} icon={<Network className="size-4" />}
+        subtitle={<><RichText text={t.decides} />. Flink: <RichText text={t.flink} /></>} icon={<Network className="size-4" />}
         actions={t.steps_with_flows?.length ? (
           <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-muted">
             <input type="checkbox" checked={flows} onChange={(e) => setFlows(e.target.checked)} className="accent-[var(--accent)]" />
@@ -266,7 +267,7 @@ function Detail({ t, data }: { t: TopologyInfo; data: TopologiesResponse }) {
                   <div className="border-b border-border px-3 py-2">
                     <div className="flex flex-wrap items-center gap-2"><span className="text-[13px] font-semibold">{c.label}</span>
                       <span className="font-mono text-[11px] text-subtle">{cid} · {c.kind}</span></div>
-                    <p className="mt-0.5 text-[12.5px] text-muted">{c.what}</p>
+                    <p className="mt-0.5 text-[12.5px] text-muted"><RichText text={c.what} /></p>
                     <p className="mt-0.5 font-mono text-[11px] text-subtle">{c.code}</p>
                   </div>
                   {c.config?.length ? (
@@ -278,12 +279,12 @@ function Detail({ t, data }: { t: TopologyInfo; data: TopologiesResponse }) {
                             <td className="px-3 py-1.5 font-mono text-[11.5px]">{k.key}</td>
                             <td className="px-3 py-1.5 text-muted">{k.in}</td>
                             <td className="px-3 py-1.5 font-mono text-[11.5px] text-muted">{k.default ?? ""}</td>
-                            <td className="px-3 py-1.5 text-muted">{k.effect}</td>
+                            <td className="px-3 py-1.5 text-muted"><RichText text={k.effect} /></td>
                           </tr>))}</tbody>
                       </table>
                     </div>
                   ) : null}
-                  <p className="px-3 py-2 text-[12px]"><span className="text-subtle">Swap or extend:</span> {c.extend}</p>
+                  <p className="px-3 py-2 text-[12px]"><span className="text-subtle">Swap or extend:</span> <RichText text={c.extend} /></p>
                 </div>
               );
             })}
@@ -298,7 +299,7 @@ function Detail({ t, data }: { t: TopologyInfo; data: TopologiesResponse }) {
                       <Badge tone={e.status === "available" ? "pass" : e.status === "planned" ? "info" : "neutral"}>{e.status}</Badge>
                     </div>
                     <p className="mt-1 text-[12.5px] text-muted"><span className="text-subtle">Why:</span> {e.why}</p>
-                    <p className="mt-0.5 text-[12.5px]"><span className="text-subtle">Effect:</span> {e.effect}</p>
+                    <p className="mt-0.5 text-[12.5px]"><span className="text-subtle">Effect:</span> <RichText text={e.effect} /></p>
                   </div>
                 ))}
               </div>
@@ -375,7 +376,7 @@ export default function Topologies() {
               <Rocket className="mt-0.5 size-4 shrink-0 text-accent" />
               <div>
                 <div className="text-[13px] font-semibold">The hybrid most institutions end up with</div>
-                <p className="mt-1 text-[13px] leading-5 text-muted">{data.hybrid}</p>
+                <p className="mt-1 text-[13px] leading-5 text-muted"><RichText text={data.hybrid} /></p>
               </div>
             </div>
           </Card>

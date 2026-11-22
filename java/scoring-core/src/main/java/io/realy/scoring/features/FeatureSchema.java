@@ -71,7 +71,13 @@ public final class FeatureSchema {
                     long w = parseDurationUs(f.get("window").asText());
                     long g = parseDurationUs(f.get("granularity").asText());
                     if (w % g != 0) throw new IllegalArgumentException(name + ": window must be a multiple of granularity");
-                    spec = new FeatureSpec(i, name, src, entity, f.get("agg").asText(), text(f, "value"), filter, w, g, def, null, null, null);
+                    String agg = text(f, "agg");
+                    if (agg == null || !Aggregations.has(agg))
+                        throw new IllegalArgumentException(name + ": unknown aggregation " + agg + " (registered: " + Aggregations.names() + ")");
+                    Aggregation.Input in = Aggregations.get(agg).input();
+                    if ((in == Aggregation.Input.NUMERIC || in == Aggregation.Input.KEY) && text(f, "value") == null)
+                        throw new IllegalArgumentException(name + ": aggregation " + agg + " needs `value:` (the event field it reads)");
+                    spec = new FeatureSpec(i, name, src, entity, agg, text(f, "value"), filter, w, g, def, null, null, null);
                 }
                 case "profile" -> spec = new FeatureSpec(i, name, src, f.get("entity").asText(), null, null, null, 0, 0, def,
                         f.get("field").asText(), null, null);

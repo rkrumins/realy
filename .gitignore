@@ -15,3 +15,4 @@ python/realy/control/static/
 *.spool
 .DS_Store
 deploy/compose/external.env
+deploy/compose/plugins/*.jar

@@ -26,7 +26,6 @@ public final class EntityAggregator {
     private static final byte STATE_V2 = 2;
     private static final byte STATE_VERSION = STATE_V2;
     private static final long NONE = Long.MIN_VALUE;
-    private static final long MIN_GEO_DT_US = 60_000_000L;
 
     private final String entity;
     private final List<FeatureSpec> specs;
@@ -35,6 +34,8 @@ public final class EntityAggregator {
     private final RowPlan plan;
     private final int ordinal;
     private final int[] slots;   // per feature: its EventRow num or val slot (-1: reads no value)
+    private final Aggregation[] aggs;       // per feature: its aggregation (Aggregations registry)
+    private final Aggregation.Shape[] shapes;
 
     public EntityAggregator(FeatureSchema schema, String entity) {
         this.entity = entity;
@@ -44,13 +45,17 @@ public final class EntityAggregator {
         this.filterBits = new int[specs.size()];
         this.indices = new int[specs.size()];
         this.slots = new int[specs.size()];
+        this.aggs = new Aggregation[specs.size()];
+        this.shapes = new Aggregation.Shape[specs.size()];
         for (int i = 0; i < specs.size(); i++) {
             FeatureSpec s = specs.get(i);
             filterBits[i] = s.filter() == null ? -1 : schema.filterBit(s.filter());
             indices[i] = s.index();
-            slots[i] = switch (s.agg()) {
-                case "sum", "max", "avg" -> plan.numSlot(s.value());
-                case "distinct", "novel" -> plan.valSlot(s.value());
+            aggs[i] = Aggregations.get(s.agg());
+            shapes[i] = aggs[i].shape();
+            slots[i] = switch (aggs[i].input()) {
+                case NUMERIC -> plan.numSlot(s.value());
+                case KEY -> plan.valSlot(s.value());
                 default -> -1;
             };
         }
@@ -89,15 +94,14 @@ public final class EntityAggregator {
 
     /** {@link #process} on an event decoded once ({@link RowPlan#row}): the keyed stages' path. */
     public byte[] process(byte[] stateBytes, EventRow r, long filterMask, float[] out) {
-        State st = State.decode(stateBytes, specs);
+        State st = State.decode(stateBytes, shapes);
         long t = r.timeUs;
         for (int i = 0; i < specs.size(); i++) {
-            FeatureSpec s = specs.get(i);
             boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
-            out[indices[i]] = (float) apply(s, st.feats[i], r, slots[i], t, match);
+            out[indices[i]] = (float) aggs[i].apply(specs.get(i), st.feats[i], r, slots[i], t, match);
         }
         st.lastEventUs = Math.max(st.lastEventUs, t);
-        return st.encode(specs);
+        return st.encode(shapes);
     }
 
     /**
@@ -111,12 +115,11 @@ public final class EntityAggregator {
     }
 
     public void evaluate(byte[] stateBytes, EventRow r, long filterMask, float[] out) {
-        State st = State.decode(stateBytes, specs);
+        State st = State.decode(stateBytes, shapes);
         long t = r.timeUs;
         for (int i = 0; i < specs.size(); i++) {
-            FeatureSpec s = specs.get(i);
             boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
-            out[indices[i]] = (float) apply(s, st.feats[i], r, slots[i], t, match);
+            out[indices[i]] = (float) aggs[i].apply(specs.get(i), st.feats[i], r, slots[i], t, match);
         }
     }
 
@@ -127,151 +130,22 @@ public final class EntityAggregator {
      * {@code stateBytes} is not modified. Mirrors {@code _read} in python/realy/features/engine.py.
      */
     public void read(byte[] stateBytes, EventRow r, long filterMask, float[] out) {
-        State st = State.decode(stateBytes, specs);
+        State st = State.decode(stateBytes, shapes);
         long t = r.timeUs;
         for (int i = 0; i < specs.size(); i++) {
-            FeatureSpec s = specs.get(i);
             boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
-            out[indices[i]] = (float) read(s, st.feats[i], r, slots[i], t, match);
-        }
-    }
-
-    private static double read(FeatureSpec s, Feat f, EventRow e, int slot, long t, boolean match) {
-        long g = s.granularityUs();
-        long k = Math.floorDiv(t, g);
-        long n = s.buckets();
-        switch (s.agg()) {
-            case "count", "sum", "max", "avg" -> {
-                double a = 0;
-                double b = 0;
-                boolean any = false;
-                double max = 0;
-                for (int j = 0; j < f.size; j++) {
-                    long idx = f.idx[j];
-                    if (idx > k - n && idx <= k) {
-                        if ("max".equals(s.agg())) {
-                            max = any ? Math.max(max, f.a[j]) : f.a[j];
-                        } else {
-                            a += f.a[j];
-                            b += f.b[j];
-                        }
-                        any = true;
-                    }
-                }
-                return switch (s.agg()) {
-                    case "max" -> any ? max : s.defaultValue();
-                    case "avg" -> b > 0 ? a / b : s.defaultValue();
-                    default -> a;
-                };
-            }
-            case "distinct" -> {
-                int c = 0;
-                for (long last : f.seen.values()) if (last > k - n) c++;
-                return c;
-            }
-            case "novel" -> {
-                if (!match) return 0.0;
-                Long last = f.seen.get(e.val[slot]);
-                return last != null && last > k - n ? 0.0 : 1.0;
-            }
-            case "time_since_last" -> {
-                return (f.lastTs != NONE && t >= f.lastTs && t - f.lastTs <= s.windowUs()) ? (t - f.lastTs) / 1e6 : s.defaultValue();
-            }
-            case "geo_speed_kmh" -> {
-                if (match && f.lastTs != NONE && t >= f.lastTs && t - f.lastTs <= s.windowUs()) {
-                    double km = Geo.haversineKm(f.lat, f.lon, e.lat, e.lon);
-                    return km / (Math.max(t - f.lastTs, MIN_GEO_DT_US) / 3.6e9);
-                }
-                return s.defaultValue();
-            }
-            default -> throw new IllegalArgumentException("unknown agg " + s.agg());
-        }
-    }
-
-    private static double apply(FeatureSpec s, Feat f, EventRow e, int slot, long t, boolean match) {
-        long g = s.granularityUs();
-        long k = Math.floorDiv(t, g);
-        long n = s.buckets();
-        switch (s.agg()) {
-            case "count", "sum", "max", "avg" -> {
-                f.maxK = Math.max(f.maxK, k);
-                if (match) {
-                    double v = "count".equals(s.agg()) ? 1.0 : e.num[slot];
-                    f.add(k, v, s.agg());
-                }
-                f.evictBuckets(f.maxK - n);
-                double a = 0;
-                double b = 0;
-                boolean any = false;
-                double max = 0;
-                for (int j = 0; j < f.size; j++) {
-                    long idx = f.idx[j];
-                    if (idx > k - n && idx <= k) {
-                        if ("max".equals(s.agg())) {
-                            max = any ? Math.max(max, f.a[j]) : f.a[j];
-                        } else {
-                            a += f.a[j];
-                            b += f.b[j];
-                        }
-                        any = true;
-                    }
-                }
-                return switch (s.agg()) {
-                    case "max" -> any ? max : s.defaultValue();
-                    case "avg" -> b > 0 ? a / b : s.defaultValue();
-                    default -> a;
-                };
-            }
-            case "distinct" -> {
-                f.maxK = Math.max(f.maxK, k);
-                if (match) f.seen.merge(e.val[slot], k, Math::max);
-                f.evictSeen(f.maxK - n);
-                int c = 0;
-                for (long last : f.seen.values()) if (last > k - n) c++;
-                return c;
-            }
-            case "novel" -> {
-                f.maxK = Math.max(f.maxK, k);
-                f.evictSeen(f.maxK - n);
-                if (!match) return 0.0;
-                long key = e.val[slot];
-                Long last = f.seen.get(key);
-                boolean seen = last != null && last > k - n;
-                f.seen.merge(key, k, Math::max);
-                return seen ? 0.0 : 1.0;
-            }
-            case "time_since_last" -> {
-                double v = (f.lastTs != NONE && t >= f.lastTs && t - f.lastTs <= s.windowUs())
-                        ? (t - f.lastTs) / 1e6 : s.defaultValue();
-                if (match && (f.lastTs == NONE || t >= f.lastTs)) f.lastTs = t;
-                return v;
-            }
-            case "geo_speed_kmh" -> {
-                double v = s.defaultValue();
-                if (match && f.lastTs != NONE && t >= f.lastTs && t - f.lastTs <= s.windowUs()) {
-                    double km = Geo.haversineKm(f.lat, f.lon, e.lat, e.lon);
-                    long dt = Math.max(t - f.lastTs, MIN_GEO_DT_US);
-                    v = km / (dt / 3.6e9);
-                }
-                if (match && (f.lastTs == NONE || t >= f.lastTs)) {
-                    f.lastTs = t;
-                    f.lat = e.lat;
-                    f.lon = e.lon;
-                }
-                return v;
-            }
-            default -> throw new IllegalArgumentException("unknown agg " + s.agg());
+            out[indices[i]] = (float) aggs[i].read(specs.get(i), st.feats[i], r, slots[i], t, match);
         }
     }
 
     /** Re-encode a state blob in the v1 layout (tests: state written by earlier releases). */
     public byte[] toV1(byte[] stateBytes) {
-        return State.decode(stateBytes, specs).encodeV1(specs);
+        return State.decode(stateBytes, shapes).encodeV1(shapes);
     }
 
     /** Decode any supported layout and re-encode in the current one. */
     public byte[] reencode(byte[] stateBytes) {
-        return State.decode(stateBytes, specs).encode(specs);
+        return State.decode(stateBytes, shapes).encode(shapes);
     }
 
     /** Last event time seen in a state blob (the online-store `as_of`). */
@@ -281,7 +155,8 @@ public final class EntityAggregator {
     }
 
     // ------------------------------------------------------------------------------------- state
-    static final class Feat {
+    /** One feature's state; the {@link Aggregation.Window} its aggregation reads and updates. */
+    static final class Feat implements Aggregation.Window {
         long maxK = NONE;
         int size;
         long[] idx = new long[4];
@@ -292,17 +167,44 @@ public final class EntityAggregator {
         double lat;
         double lon;
 
-        void add(long k, double v, String agg) {
+        @Override
+        public long maxK() {
+            return maxK;
+        }
+
+        @Override
+        public void maxK(long k) {
+            maxK = k;
+        }
+
+        @Override
+        public int size() {
+            return size;
+        }
+
+        @Override
+        public long bucket(int j) {
+            return idx[j];
+        }
+
+        @Override
+        public double a(int j) {
+            return a[j];
+        }
+
+        @Override
+        public double b(int j) {
+            return b[j];
+        }
+
+        @Override
+        public void addToBucket(long k, double v, java.util.function.DoubleBinaryOperator merge, boolean countMerge) {
             int pos = size;
             while (pos > 0 && idx[pos - 1] > k) pos--;
             if (pos > 0 && idx[pos - 1] == k) {
                 int j = pos - 1;
-                if ("max".equals(agg)) {
-                    a[j] = Math.max(a[j], v);
-                } else {
-                    a[j] += v;
-                    b[j] += 1;
-                }
+                a[j] = merge.applyAsDouble(a[j], v);
+                if (countMerge) b[j] += 1;
                 return;
             }
             if (size == idx.length) {
@@ -319,7 +221,8 @@ public final class EntityAggregator {
             size++;
         }
 
-        void evictBuckets(long upTo) {
+        @Override
+        public void evictBuckets(long upTo) {
             int drop = 0;
             while (drop < size && idx[drop] <= upTo) drop++;
             if (drop == 0) return;
@@ -329,10 +232,42 @@ public final class EntityAggregator {
             size -= drop;
         }
 
-        void evictSeen(long upTo) {
+        @Override
+        public Map<Long, Long> seen() {
+            return seen;
+        }
+
+        @Override
+        public void evictSeen(long upTo) {
             for (Iterator<Long> it = seen.values().iterator(); it.hasNext(); ) {
                 if (it.next() <= upTo) it.remove();
             }
+        }
+
+        @Override
+        public long lastTs() {
+            return lastTs;
+        }
+
+        @Override
+        public void lastTs(long t) {
+            lastTs = t;
+        }
+
+        @Override
+        public double lat() {
+            return lat;
+        }
+
+        @Override
+        public double lon() {
+            return lon;
+        }
+
+        @Override
+        public void location(double lat, double lon) {
+            this.lat = lat;
+            this.lon = lon;
         }
     }
 
@@ -340,13 +275,12 @@ public final class EntityAggregator {
         Feat[] feats;
         long lastEventUs = NONE;
 
-        static State decode(byte[] bytes, List<FeatureSpec> specs) {
+        static State decode(byte[] bytes, Aggregation.Shape[] specs) {
             State st = new State();
-            st.feats = new Feat[specs.size()];
-            for (int i = 0; i < specs.size(); i++) {
+            st.feats = new Feat[specs.length];
+            for (int i = 0; i < specs.length; i++) {
                 st.feats[i] = new Feat();
-                String agg = specs.get(i).agg();
-                if ("distinct".equals(agg) || "novel".equals(agg)) st.feats[i].seen = new HashMap<>();
+                if (specs[i] == Aggregation.Shape.SEEN) st.feats[i].seen = new HashMap<>();
             }
             if (bytes == null || bytes.length == 0) return st;
             if (bytes[0] == STATE_V2) return decodeV2(st, bytes, specs);
@@ -355,12 +289,12 @@ public final class EntityAggregator {
                 in.readByte();
                 st.lastEventUs = in.readLong();
                 int nf = in.readUnsignedShort();
-                if (nf != specs.size()) return new State().fresh(specs); // schema changed: reset state
+                if (nf != specs.length) return new State().fresh(specs); // schema changed: reset state
                 for (int i = 0; i < nf; i++) {
                     Feat f = st.feats[i];
                     f.maxK = in.readLong();
-                    switch (specs.get(i).agg()) {
-                        case "count", "sum", "max", "avg" -> {
+                    switch (specs[i]) {
+                        case BUCKETS -> {
                             int n = in.readInt();
                             f.idx = new long[Math.max(4, n)];
                             f.a = new double[Math.max(4, n)];
@@ -372,17 +306,16 @@ public final class EntityAggregator {
                             }
                             f.size = n;
                         }
-                        case "distinct", "novel" -> {
+                        case SEEN -> {
                             int n = in.readInt();
                             for (int j = 0; j < n; j++) f.seen.put(in.readLong(), in.readLong());
                         }
-                        case "time_since_last" -> f.lastTs = in.readLong();
-                        case "geo_speed_kmh" -> {
+                        case LAST -> f.lastTs = in.readLong();
+                        case LAST_GEO -> {
                             f.lastTs = in.readLong();
                             f.lat = in.readDouble();
                             f.lon = in.readDouble();
                         }
-                        default -> throw new IllegalStateException("unknown agg");
                     }
                 }
             } catch (IOException e) {
@@ -391,18 +324,18 @@ public final class EntityAggregator {
             return st;
         }
 
-        private static State decodeV2(State st, byte[] bytes, List<FeatureSpec> specs) {
+        private static State decodeV2(State st, byte[] bytes, Aggregation.Shape[] specs) {
             var in = new Reader(bytes, 1);
             st.lastEventUs = in.fixedLong();
             int nf = (int) in.varLong();
-            if (nf != specs.size()) return new State().fresh(specs);
+            if (nf != specs.length) return new State().fresh(specs);
             long base = st.lastEventUs;
             for (int i = 0; i < nf; i++) {
                 Feat f = st.feats[i];
                 long mk = in.varLong();
                 f.maxK = mk == 0 ? NONE : unzig(mk - 1);
-                switch (specs.get(i).agg()) {
-                    case "count", "sum", "max", "avg" -> {
+                switch (specs[i]) {
+                    case BUCKETS -> {
                         int n = (int) in.varLong();
                         f.idx = new long[Math.max(4, n)];
                         f.a = new double[Math.max(4, n)];
@@ -416,7 +349,7 @@ public final class EntityAggregator {
                         }
                         f.size = n;
                     }
-                    case "distinct", "novel" -> {
+                    case SEEN -> {
                         int n = (int) in.varLong();
                         long key = 0;
                         for (int j = 0; j < n; j++) {
@@ -424,34 +357,33 @@ public final class EntityAggregator {
                             f.seen.put(key, base - unzig(in.varLong()));
                         }
                     }
-                    case "time_since_last" -> f.lastTs = in.optTime(base);
-                    case "geo_speed_kmh" -> {
+                    case LAST -> f.lastTs = in.optTime(base);
+                    case LAST_GEO -> {
                         f.lastTs = in.optTime(base);
                         f.lat = in.rawDouble();
                         f.lon = in.rawDouble();
                     }
-                    default -> throw new IllegalStateException("unknown agg");
                 }
             }
             return st;
         }
 
-        private State fresh(List<FeatureSpec> specs) {
+        private State fresh(Aggregation.Shape[] specs) {
             return decode(null, specs);
         }
 
         /** The v1 layout (kept to test that state written by earlier releases still decodes identically). */
-        byte[] encodeV1(List<FeatureSpec> specs) {
+        byte[] encodeV1(Aggregation.Shape[] specs) {
             var bos = new java.io.ByteArrayOutputStream(64);
             try (var out = new java.io.DataOutputStream(bos)) {
                 out.writeByte(STATE_V1);
                 out.writeLong(lastEventUs);
-                out.writeShort(specs.size());
-                for (int i = 0; i < specs.size(); i++) {
+                out.writeShort(specs.length);
+                for (int i = 0; i < specs.length; i++) {
                     Feat f = feats[i];
                     out.writeLong(f.maxK);
-                    switch (specs.get(i).agg()) {
-                        case "count", "sum", "max", "avg" -> {
+                    switch (specs[i]) {
+                        case BUCKETS -> {
                             out.writeInt(f.size);
                             for (int j = 0; j < f.size; j++) {
                                 out.writeLong(f.idx[j]);
@@ -459,20 +391,19 @@ public final class EntityAggregator {
                                 out.writeDouble(f.b[j]);
                             }
                         }
-                        case "distinct", "novel" -> {
+                        case SEEN -> {
                             out.writeInt(f.seen.size());
                             for (var en : f.seen.entrySet()) {
                                 out.writeLong(en.getKey());
                                 out.writeLong(en.getValue());
                             }
                         }
-                        case "time_since_last" -> out.writeLong(f.lastTs);
-                        case "geo_speed_kmh" -> {
+                        case LAST -> out.writeLong(f.lastTs);
+                        case LAST_GEO -> {
                             out.writeLong(f.lastTs);
                             out.writeDouble(f.lat);
                             out.writeDouble(f.lon);
                         }
-                        default -> throw new IllegalStateException("unknown agg");
                     }
                 }
             } catch (IOException ex) {
@@ -481,17 +412,17 @@ public final class EntityAggregator {
             return bos.toByteArray();
         }
 
-        byte[] encode(List<FeatureSpec> specs) {
-            var out = new Writer(48 + specs.size() * 6);
+        byte[] encode(Aggregation.Shape[] specs) {
+            var out = new Writer(48 + specs.length * 6);
             out.u8(STATE_VERSION);
             out.fixedLong(lastEventUs);
-            out.varLong(specs.size());
+            out.varLong(specs.length);
             long base = lastEventUs;
-            for (int i = 0; i < specs.size(); i++) {
+            for (int i = 0; i < specs.length; i++) {
                 Feat f = feats[i];
                 out.varLong(f.maxK == NONE ? 0 : zig(f.maxK) + 1);
-                switch (specs.get(i).agg()) {
-                    case "count", "sum", "max", "avg" -> {
+                switch (specs[i]) {
+                    case BUCKETS -> {
                         out.varLong(f.size);
                         for (int j = 0; j < f.size; j++) {
                             out.varLong(j == 0 ? zig(f.idx[0] - (f.maxK == NONE ? 0 : f.maxK)) : f.idx[j] - f.idx[j - 1]);
@@ -499,7 +430,7 @@ public final class EntityAggregator {
                             out.num(f.b[j]);
                         }
                     }
-                    case "distinct", "novel" -> {
+                    case SEEN -> {
                         int n = f.seen.size();
                         out.varLong(n);
                         long[] keys = new long[n];
@@ -511,13 +442,12 @@ public final class EntityAggregator {
                             out.varLong(zig(base - f.seen.get(keys[j])));
                         }
                     }
-                    case "time_since_last" -> out.optTime(f.lastTs, base);
-                    case "geo_speed_kmh" -> {
+                    case LAST -> out.optTime(f.lastTs, base);
+                    case LAST_GEO -> {
                         out.optTime(f.lastTs, base);
                         out.rawDouble(f.lat);
                         out.rawDouble(f.lon);
                     }
-                    default -> throw new IllegalStateException("unknown agg");
                 }
             }
             return out.toByteArray();

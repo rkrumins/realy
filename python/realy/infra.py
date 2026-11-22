@@ -217,7 +217,7 @@ def check_gateway_and_model(scorer: str) -> list[dict[str, Any]]:
             return
         info = r.json()
         c.out["version"] = info.get("version")
-        c.out["facts"] = {k: info.get(k) for k in ("pipeline", "schema", "kafka", "redis", "audit", "simulated")}
+        c.out["facts"] = {k: info.get(k) for k in ("pipeline", "schema", "extensions", "kafka", "redis", "audit", "simulated")}
         c.add("reachable", "pass", f"pipeline {info.get('pipeline')}, {info.get('schema', {}).get('features')} features")
         from .bindings import pipeline
         if info.get("pipeline") != pipeline().name:
@@ -227,6 +227,16 @@ def check_gateway_and_model(scorer: str) -> list[dict[str, Any]]:
         if sha and sha != _schema_sha():
             c.add("schema", "fail", "the gateway's feature schema differs from the runner's",
                   "deploy the same contracts to the gateway (image or FEATURE_SCHEMA) as the runner uses")
+        ext = (info.get("extensions") or {}).get("aggregations")
+        if ext is not None:
+            from .features import aggregations as _aggs
+            missing = sorted(set(ext) - set(_aggs.names()))
+            if missing:
+                c.add("extensions", "fail", f"the gateway runs plugin aggregations without a Python twin here: "
+                      f"{', '.join(missing)} (verify cannot recompute their features)",
+                      "install the twin module and set REALY_AGGREGATION_PLUGINS (docs/dev/extending.md)")
+            elif ext:
+                c.add("extensions", "pass", f"plugin aggregations {', '.join(ext)}, each with its Python twin")
         red = info.get("redis") or {}
         if red.get("mode") == "mock":
             c.add("store", "warn", "the gateway uses the mock feature store (scoring.feature_source: mock)",
@@ -263,6 +273,20 @@ def check_gateway_and_model(scorer: str) -> list[dict[str, Any]]:
 
 
 # ------------------------------------------------------------------------------------------- all
+def _dist(d: Any) -> str:
+    """A latency distribution (scenario LatencyDist) in words: 'lognormal, median 8 ms, p99 25 ms'."""
+    if not isinstance(d, dict) or not d:
+        return str(d)
+    kind, p = next(iter(d.items()))
+    if not isinstance(p, dict):
+        return f"{kind} {p}"
+    parts = []
+    for k, v in p.items():
+        name = "" if k == "ms" else k.removesuffix("_ms").replace("_", " ") + " "
+        parts.append(f"{name}{v:g} ms" if (k == "ms" or k.endswith("_ms")) and isinstance(v, (int, float)) else f"{name}{v}")
+    return f"{kind}, " + ", ".join(parts)
+
+
 def simulated(scenario: Any, model_mock: bool | None) -> list[dict[str, str]]:
     """What in this run is simulated rather than measured on real infrastructure."""
     out = []
@@ -276,13 +300,13 @@ def simulated(scenario: Any, model_mock: bool | None) -> list[dict[str, str]]:
     if model_mock and not rt.echo:
         st = (sc.model_server or {}).get("service_time")
         out.append({"what": "model latency", "detail": "the mock model server: inference time is drawn from "
-                    + (f"model_server.service_time {st}" if st else "its default service time") + ", not computed"})
+                    + (f"model_server.service_time ({_dist(st)})" if st else "its default service time") + ", not computed"})
     scoring = sc.scoring or {}
     if scoring.get("feature_source") == "mock":
         out.append({"what": "features", "detail": "scoring.feature_source: mock (no online store)"})
     for k, what in (("feature_lookup_delay", "feature-lookup latency"), ("model_extra_delay", "model-call latency")):
         if scoring.get(k):
-            out.append({"what": what, "detail": f"scoring.{k} adds injected latency {scoring[k]}"})
+            out.append({"what": what, "detail": f"scoring.{k} adds injected latency ({_dist(scoring[k])})"})
     return out
 
 

@@ -101,11 +101,13 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `ON_PIPELINE_ERROR` | `REVIEW` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/Pipeline.java` |
 | `PARALLELISM` | `4` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
 | `PIPELINE` | `payments` | gateway + Flink (scoring core), python (shared) |  | `python/realy/bindings/pipeline.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/binding/PipelineBinding.java` |
+| `PLUGINS_DIR` |  | gateway, gateway + Flink (scoring core), python (shared) | console, flink-jobmanager, flink-taskmanager, gateway | `python/realy/features/aggregations.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/Plugins.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java` |
 | `PORT` | `8080` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `PROMETHEUS_URL` |  | console | console | `python/realy/control/env.py` |
 | `READY_POLL_MS` | `10_000` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/Readiness.java` |
 | `REALY_ABORT_DRAIN_S` | `20` | runner |  | `python/realy/runner/run.py` |
 | `REALY_ADMIN_TOKEN` |  | runner |  | `python/realy/runner/run.py` |
+| `REALY_AGGREGATION_PLUGINS` |  | python (shared) | console | `python/realy/features/aggregations.py` |
 | `REALY_ALLOW_CONCURRENT` | `0` | runner |  | `python/realy/runner/lifecycle.py` |
 | `REALY_AUTO_PRIME` | `1` | runner |  | `python/realy/runner/run.py` |
 | `REALY_BACKFILL_TIMEOUT_S` | `900` | runner |  | `python/realy/runner/run.py` |
@@ -171,4 +173,4 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `STORE_STATE` | `customer,card` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
 | `TXN_TTL_DAYS` | `2` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/AssembleFunction.java` |
 
-164 variables.
+166 variables.
