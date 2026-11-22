@@ -145,6 +145,36 @@ class AssemblyTest {
         assertThat(partial).isGreaterThan(0);
     }
 
+    @Test
+    void aScoredStageIsTimedFromItsOwnMessage() throws Exception {
+        var a = new Assembly(io.realy.scoring.binding.TransactionContract.load("a2a_transfer"), MATCHER);
+        TxnState.Builder st = TxnState.newBuilder().setTxnId(77);
+        long t0 = 1_800_000_000_000_000L;
+        byte[] init = io.realy.contracts.flows.v1.PaymentInitiation.newBuilder().setEventId(77).setEventTimeUs(t0)
+                .setPaymentId(77).setCustomerId(5).setPayeeId(9).build().toByteArray();
+        byte[] check = io.realy.contracts.flows.v1.PayeeCheck.newBuilder().setEventId(78).setEventTimeUs(t0 + 50_000)
+                .setPaymentId(77).setCustomerId(5).setPayeeId(9).build().toByteArray();
+        byte[] sub = io.realy.contracts.flows.v1.PaymentSubmission.newBuilder().setEventId(79).setEventTimeUs(t0 + 9_000_000)
+                .setPaymentId(77).setCustomerId(5).setPayeeId(10).build().toByteArray();
+        byte[] trInit = {1, 2, 3};
+        byte[] trSub = {4, 5, 6};
+        assertThat(a.onPart(st, "initiation", init, t0, trInit, 100, 0, false)).isEmpty();
+        var asm = a.onPart(st, "payee_check", check, t0 + 50_000, null, 0, 0, false);
+        assertThat(asm).hasSize(1);
+        assertThat(asm.get(0).trace()).isEqualTo(trInit);            // the transaction: from its trigger
+        assertThat(asm.get(0).ingestUs()).isEqualTo(100);
+        var stage = a.onPart(st, "submission", sub, t0 + 9_000_000, trSub, 900, 0, false);
+        assertThat(stage).hasSize(1);
+        assertThat(stage.get(0).kind()).isEqualTo("stage");
+        assertThat(stage.get(0).readOnly()).isTrue();
+        assertThat(stage.get(0).trace()).isEqualTo(trSub);            // the stage: from its own message
+        assertThat(stage.get(0).ingestUs()).isEqualTo(900);
+        assertThat(stage.get(0).event().getEventId()).isEqualTo(79);
+        assertThat(stage.get(0).event().getPayeeId()).isEqualTo(10);
+        // state keeps no traces of recorded parts (only a held stage message needs one)
+        assertThat(st.getLatestList()).allMatch(p -> p.getTrace().isEmpty());
+    }
+
     static List<String> iter(java.util.Iterator<String> it) {
         List<String> out = new ArrayList<>();
         it.forEachRemaining(out::add);

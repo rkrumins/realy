@@ -485,6 +485,8 @@ The assembler's state of one open transaction (Flink keyed state, keyed by the p
 | 1 | `role` | `string` |  |
 | 2 | `payload` | `bytes` | the message as received |
 | 3 | `event_time_us` | `sfixed64` |  |
+| 4 | `trace` | `bytes` | its x-bench-trace (a scored stage is timed from its own message) |
+| 5 | `ingest_us` | `sfixed64` |  |
 
 ## `realy.payments.v1` (label.proto)
 

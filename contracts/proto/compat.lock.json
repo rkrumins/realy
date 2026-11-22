@@ -971,6 +971,14 @@
   "3": {
    "name": "event_time_us",
    "type": "sfixed64"
+  },
+  "4": {
+   "name": "trace",
+   "type": "bytes"
+  },
+  "5": {
+   "name": "ingest_us",
+   "type": "sfixed64"
   }
  },
  "realy.payments.v1.CardType": {

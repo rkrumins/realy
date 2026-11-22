@@ -43,14 +43,18 @@ class TxnContext(_message.Message):
 class TxnState(_message.Message):
     __slots__ = ("transaction", "txn_id", "latest", "first", "counts", "arrived", "assembled", "partial", "stage", "trigger_time_us", "deadline_wall_us", "trigger_trace", "trigger_ingest_us", "backfill", "held")
     class Part(_message.Message):
-        __slots__ = ("role", "payload", "event_time_us")
+        __slots__ = ("role", "payload", "event_time_us", "trace", "ingest_us")
         ROLE_FIELD_NUMBER: _ClassVar[int]
         PAYLOAD_FIELD_NUMBER: _ClassVar[int]
         EVENT_TIME_US_FIELD_NUMBER: _ClassVar[int]
+        TRACE_FIELD_NUMBER: _ClassVar[int]
+        INGEST_US_FIELD_NUMBER: _ClassVar[int]
         role: str
         payload: bytes
         event_time_us: int
-        def __init__(self, role: _Optional[str] = ..., payload: _Optional[bytes] = ..., event_time_us: _Optional[int] = ...) -> None: ...
+        trace: bytes
+        ingest_us: int
+        def __init__(self, role: _Optional[str] = ..., payload: _Optional[bytes] = ..., event_time_us: _Optional[int] = ..., trace: _Optional[bytes] = ..., ingest_us: _Optional[int] = ...) -> None: ...
     class CountsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]

@@ -69,17 +69,20 @@ public final class Assembly {
                             long ingestUs, long nowWallUs, boolean backfill) {
         List<Out> out = new ArrayList<>();
         if (st.getTransaction().isEmpty()) st.setTransaction(contract.name);
-        TxnState.Part part = TxnState.Part.newBuilder().setRole(role).setPayload(ByteString.copyFrom(payload))
-                .setEventTimeUs(eventTimeUs).build();
+        TxnState.Part.Builder pb = TxnState.Part.newBuilder().setRole(role).setPayload(ByteString.copyFrom(payload))
+                .setEventTimeUs(eventTimeUs);
+        if (trace != null) pb.setTrace(ByteString.copyFrom(trace)).setIngestUs(ingestUs);
+        TxnState.Part part = pb.build();
         if (st.getAssembled() && contract.isStageRole(role)) {
-            record(st, part);
-            out.addAll(stage(st, role, payload));
+            record(st, part.toBuilder().clearTrace().build());
+            out.addAll(stage(st, role, payload, trace, ingestUs));
             return out;
         }
         if (!st.getAssembled() && !contract.isAssemblyRole(role)) {
             st.addHeld(part);            // a lifecycle message before assembly: applied right after it
             return out;
         }
+        part = part.toBuilder().clearTrace().build();   // only a stage needs its own trace
         record(st, part);
         if (st.getAssembled()) return out;   // a late part: later stages' context sees it
         if (role.equals(contract.trigger)) {
@@ -142,13 +145,15 @@ public final class Assembly {
         List<TxnState.Part> held = new ArrayList<>(st.getHeldList());
         st.clearHeld();
         for (TxnState.Part p : held) {
-            record(st, p);
-            out.addAll(stage(st, p.getRole(), p.getPayload().toByteArray()));
+            record(st, p.toBuilder().clearTrace().build());
+            out.addAll(stage(st, p.getRole(), p.getPayload().toByteArray(),
+                    p.getTrace().isEmpty() ? null : p.getTrace().toByteArray(), p.getIngestUs()));
         }
         return out;
     }
 
-    private List<Out> stage(TxnState.Builder st, String role, byte[] payload) {
+    /** A lifecycle message: moves the stage; a scored stage is decided again, timed from its own message. */
+    private List<Out> stage(TxnState.Builder st, String role, byte[] payload, byte[] trace, long ingestUs) {
         List<Out> out = new ArrayList<>();
         for (TransactionContract.Stage s : contract.stages) {
             if (!s.role().equals(role)) continue;
@@ -163,7 +168,7 @@ public final class Assembly {
             if (s.scored()) {
                 TransactionEvent base = unified(st, contract.fields, null);
                 TransactionEvent ev = unified(st, s.fields(), base);
-                out.add(new Out("stage", ev, context(st), true, null, 0, st.getBackfill()));
+                out.add(new Out("stage", ev, context(st), true, trace, ingestUs, st.getBackfill()));
             }
             break;
         }

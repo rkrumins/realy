@@ -27,6 +27,8 @@ message TxnState {
     string role = 1;
     bytes payload = 2;             // the message as received
     sfixed64 event_time_us = 3;
+    bytes trace = 4;               // its x-bench-trace (a scored stage is timed from its own message)
+    sfixed64 ingest_us = 5;
   }
   string transaction = 1;
   fixed64 txn_id = 2;
