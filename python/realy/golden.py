@@ -152,20 +152,38 @@ def write_flows(out: Path = FLOWS) -> dict[str, Any]:
     from .bindings.codec import message_class
     from .bindings.transactions import Assembler, transaction
     out.mkdir(parents=True, exist_ok=True)
+    import cel
+
+    from .features import load_schema
+    from .features.derived import event_view
+    from .features.engine import ReferenceEngine
     records = generate_flows()
     a = Assembler([transaction("a2a_transfer")])
     pay = event_type("payment").codec
     pay_cls = message_class(pay.full_name)
     expected = []
+    # customer and card features in the twin's order: assembled and passed-through events are folded into
+    # state, re-scored stages only read it (the Flink job must give exactly these)
+    schema = load_schema()
+    engine = ReferenceEngine(schema, ["customer", "card"])
+    filters = [cel.compile(x) for x in schema.filters.values()]
+    watched = [f for f in schema.features if f.source == "stream" and f.entity in ("customer", "card")]
+    buf = [0.0] * len(schema.features)
 
     def emit(outs):
         for o in outs:
             row = {f.name: (o.row[f.name].item() if hasattr(o.row[f.name], "item") else o.row[f.name])
                    for f in pay.fields}
+            ctx = cel.Context()
+            ctx.add_variable("event", event_view(row, o.context))
+            ctx.add_variable("f", {})
+            mask = sum(1 << b for b, p in enumerate(filters) if p.execute(ctx))
+            (engine.read if o.read_only else engine.process)(row, mask, buf)
             expected.append({"kind": o.kind, "event_id": int(row["event_id"]), "transaction": o.transaction,
                              "stage": o.stage, "parts_present": o.parts_present, "partial": o.partial,
                              "read_only": o.read_only, "event": pay_cls(**row).SerializeToString().hex(),
-                             "context": o.context})
+                             "context": o.context,
+                             "features": {f.name: float(np.float32(buf[f.index])) for f in watched}})
     with gzip.GzipFile(out / "records.bin.gz", "wb", mtime=0) as f:
         for r in records:
             t = r.type.encode()

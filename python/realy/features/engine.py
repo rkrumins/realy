@@ -111,6 +111,48 @@ def _apply(s: FeatureSpec, f: _Feat, ev: dict, t: int, match: bool) -> float:
     raise ValueError(f"unknown agg {agg}")
 
 
+def _read(s: FeatureSpec, f: _Feat, ev: dict, t: int, match: bool) -> float:
+    """The feature as of t for an event that is not folded into state (a re-scored lifecycle stage of a
+    multi-message transaction, already counted when it was assembled): windows without it; novelty,
+    time since the last event and speed against the previous events, without recording it. Nothing in
+    `f` changes. Mirrors EntityAggregator.read (Java)."""
+    g = s.granularity_us
+    k = t // g
+    n = s.window_us // g if g else 0
+    agg = s.agg
+    if agg in ("count", "sum", "max", "avg"):
+        a = bsum = 0.0
+        mx = None
+        for idx, (x, y) in f.buckets.items():
+            if k - n < idx <= k:
+                if agg == "max":
+                    mx = x if mx is None else max(mx, x)
+                else:
+                    a += x
+                    bsum += y
+        if agg == "max":
+            return mx if mx is not None else s.default
+        if agg == "avg":
+            return a / bsum if bsum > 0 else s.default
+        return a
+    if agg == "distinct":
+        return float(sum(1 for last in f.seen.values() if last > k - n))
+    if agg == "novel":
+        if not match:
+            return 0.0
+        last = f.seen.get(ev[s.value])
+        return 0.0 if (last is not None and last > k - n) else 1.0
+    if agg == "time_since_last":
+        return ((t - f.last_ts) / 1e6 if f.last_ts is not None and t >= f.last_ts and t - f.last_ts <= s.window_us
+                else s.default)
+    if agg == "geo_speed_kmh":
+        if match and f.last_ts is not None and t >= f.last_ts and t - f.last_ts <= s.window_us:
+            km = haversine_km(f.lat, f.lon, ev["lat"], ev["lon"])
+            return km / (max(t - f.last_ts, MIN_GEO_DT_US) / 3.6e9)
+        return s.default
+    raise ValueError(f"unknown agg {agg}")
+
+
 class ReferenceEngine:
     """Stateful per-entity aggregation over events processed in order."""
 
@@ -138,3 +180,18 @@ class ReferenceEngine:
             for s, f in zip(specs, feats):
                 match = s.filter is None or bool(filter_mask >> self.filter_index[s.filter] & 1)
                 out[s.index] = _apply(s, f, ev, t, match)
+
+    def read(self, ev: dict, filter_mask: int, out: list[float]) -> None:
+        """Stream features of an event that is not folded into state (a re-scored stage), as of its time."""
+        t = int(ev["event_time_us"])
+        for ent in self.entities:
+            specs = self.specs[ent]
+            key = int(ev[self.schema.entities[ent]])
+            feats = self.state[ent].get(key) if key else None
+            for i, s in enumerate(specs):
+                if key == 0:
+                    out[s.index] = s.default
+                    continue
+                f = feats[i] if feats is not None else _Feat()
+                match = s.filter is None or bool(filter_mask >> self.filter_index[s.filter] & 1)
+                out[s.index] = _read(s, f, ev, t, match)

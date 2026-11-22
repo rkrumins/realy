@@ -103,6 +103,9 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
         long key = agg.key(env.row);
         if (key == 0) {
             agg.defaults(env.features);
+        } else if (env.readOnly) {
+            // a re-scored stage of a transaction already folded in when it was assembled: read only
+            agg.read(state.value(), env.row, env.filterMask, env.features);
         } else {
             byte[] next = agg.process(state.value(), env.row, env.filterMask, env.features);
             state.update(next);

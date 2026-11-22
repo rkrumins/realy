@@ -75,8 +75,10 @@ class Generator:
                 raise ValueError("one flow per run for now (traffic.flows)")
             # a stream of its own (spawned children are index-keyed: the three above are unchanged)
             r_flow = np.random.Generator(np.random.PCG64(ss.spawn(1)[0]))
-            self.flows = FlowExpander(transaction(scenario.traffic.flows[0]), r_flow,
-                                      self.reg.fraud_type_names(), shard)
+            tx = transaction(scenario.traffic.flows[0])
+            # a scored lifecycle stage (the submission) is a decision of its own: traced, expected
+            self.flows = FlowExpander(tx, r_flow, self.reg.fraud_type_names(), shard,
+                                      score_stages=any(st.scored for st in tx.stages))
         self.pending = make_chunk(0)
         self.seq = 0
         self.order = 1 << 40

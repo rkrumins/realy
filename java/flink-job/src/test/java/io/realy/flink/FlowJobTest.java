@@ -61,6 +61,16 @@ class FlowJobTest {
 
     @Test
     void assemblesTheGoldenStreamAndComputesFeaturesInItsOrder() throws Exception {
+        run(false);
+    }
+
+    /** Re-scored stages too: read-only, their features must be the twin's read of the state. */
+    @Test
+    void scoredStagesReadTheirFeaturesWithoutFoldingThemIn() throws Exception {
+        run(true);
+    }
+
+    void run(boolean scoreStages) throws Exception {
         Path d = dir();
         FeatureSchema schema = FeatureSchema.load();
         Filters filters = new Filters(schema);
@@ -81,33 +91,9 @@ class FlowJobTest {
             for (String line : new String(in.readAllBytes(), StandardCharsets.UTF_8).split("\n")) {
                 if (line.isBlank()) continue;
                 JsonNode w = om.readTree(line);
-                if (!"stage".equals(w.get("kind").asText())) want.add(w);
+                if (scoreStages || !"stage".equals(w.get("kind").asText())) want.add(w);
             }
         }
-        // sequential reference: customer and card features over the twin's order
-        Map<Long, float[]> expected = new HashMap<>();
-        Map<String, Map<Long, byte[]>> st = new HashMap<>();
-        for (JsonNode w : want) {
-            TransactionEvent e = TransactionEvent.parseFrom(HexFormat.of().parseHex(w.get("event").asText()));
-            TxnContext ctx = null;
-            if (!"passthrough".equals(w.get("kind").asText())) {
-                ctx = TxnContext.newBuilder().setTransaction("a2a_transfer").build();   // filters do not read txn here
-            }
-            float[] v = new float[schema.size()];
-            long mask = filters.mask(EventView.of(e, io.realy.scoring.binding.TxnContexts.view(ctx)));
-            for (String ent : List.of("customer", "card")) {
-                var agg = new EntityAggregator(schema, ent);
-                var m = st.computeIfAbsent(ent, k -> new HashMap<>());
-                long key = EventView.entityKey(e, ent);
-                if (key == 0) {
-                    agg.defaults(v);
-                    continue;
-                }
-                m.put(key, agg.process(m.get(key), e, mask, v));
-            }
-            expected.put(e.getEventId(), v);
-        }
-
         Configuration conf = new Configuration();
         conf.setString("state.backend.type", "rocksdb");
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
@@ -115,13 +101,14 @@ class FlowJobTest {
         int custOrd = schema.rowPlan().entityOrdinal("customer");
         var assembled = env.fromData(input).setParallelism(1)
                 .keyBy(new FraudJob.EntityKey(custOrd))
-                .process(new AssembleFunction(List.of("a2a_transfer"), null, false)).uid("assemble");
+                .process(new AssembleFunction(List.of("a2a_transfer"), null, scoreStages)).uid("assemble");
         var out = FraudJob.features(assembled, List.of("customer", "card"), false, List.of(), false, null, "customer")
                 .executeAndCollect(100_000);
 
         assertThat(out).hasSameSizeAs(want);
         Map<Long, Envelope> byId = new HashMap<>();
         for (Envelope o : out) byId.put(o.eventId, o);
+        assertThat(byId).hasSameSizeAs(want);   // event ids are unique (a stage decision has its own)
         int transfers = 0;
         for (JsonNode w : want) {
             long id = w.get("event_id").asLong();
@@ -129,7 +116,7 @@ class FlowJobTest {
             assertThat(o).as("event " + id).isNotNull();
             TransactionEvent we = TransactionEvent.parseFrom(HexFormat.of().parseHex(w.get("event").asText()));
             assertThat(TransactionEvent.parseFrom(o.event)).as("event " + id).isEqualTo(we);
-            if ("assembled".equals(w.get("kind").asText())) {
+            if (!"passthrough".equals(w.get("kind").asText())) {
                 transfers++;
                 TxnContext c = TxnContext.parseFrom(o.txn);
                 assertThat(c.getPartsPresent()).as("parts of " + id).isEqualTo(w.get("parts_present").asInt());
@@ -139,13 +126,16 @@ class FlowJobTest {
             } else {
                 assertThat(o.txn).isNull();
             }
-            float[] exp = expected.get(id);
+            assertThat(o.readOnly).as("read-only " + id).isEqualTo(w.get("read_only").asBoolean());
+            // the twin's customer and card features (a stage only reads them)
+            var feats = w.get("features");
             for (String ent : List.of("customer", "card")) {
                 for (var s : schema.stream(ent)) {
-                    assertThat(o.features[s.index()]).as(s.name() + " of event " + id).isEqualTo(exp[s.index()]);
+                    assertThat(o.features[s.index()]).as(s.name() + " of " + w.get("kind").asText() + " event " + id)
+                            .isEqualTo((float) feats.get(s.name()).asDouble());
                 }
             }
         }
-        assertThat(transfers).isGreaterThan(500);
+        assertThat(transfers).isGreaterThan(scoreStages ? 1000 : 500);
     }
 }

@@ -89,6 +89,15 @@ public final class FeatureAssembler {
     /** {@code view}: the event's CEL view (event.txn included), shared with the rules; null builds one. */
     public Assembled assemble(TransactionEvent e, long filterMask, float[] precomputed, Lookup lk, byte[][] blobs,
                               boolean selfInclusion, Map<String, Object> view) {
+        return assemble(e, filterMask, precomputed, lk, blobs, selfInclusion, view, false);
+    }
+
+    /**
+     * @param readOnly a re-scored lifecycle stage of a transaction already counted when it was assembled:
+     *                 stream features read the stored state at its time without including it
+     */
+    public Assembled assemble(TransactionEvent e, long filterMask, float[] precomputed, Lookup lk, byte[][] blobs,
+                              boolean selfInclusion, Map<String, Object> view, boolean readOnly) {
         int n = schema.size();
         float[] v = precomputed != null ? precomputed.clone() : new float[n];
         byte[] missing = new byte[(n + 7) / 8];
@@ -119,7 +128,12 @@ public final class FeatureAssembler {
                 if ((blob != null && blob.hasState()) || (blob == null && lookedUp && selfInclusion)) {
                     if (row == null) row = schema.rowPlan().row(e);
                 }
-                if (fillStream(a, blob, lookedUp, e, row, filterMask, selfInclusion, t, v, missing)) stateReads++;
+                // (an entity never seen reads empty windows; a failed lookup falls back to the defaults below)
+                if (readOnly && (blob != null ? blob.hasState() : lookedUp)) {
+                    if (row == null) row = schema.rowPlan().row(e);
+                    a.read(blob == null ? null : blob.state(), row, filterMask, v);
+                    if (blob != null) stateReads++;
+                } else if (fillStream(a, blob, lookedUp, e, row, filterMask, selfInclusion && !readOnly, t, v, missing)) stateReads++;
                 fresh.add(freshness(a.entity(), FeatureSource.STREAM, blob));
             }
         }

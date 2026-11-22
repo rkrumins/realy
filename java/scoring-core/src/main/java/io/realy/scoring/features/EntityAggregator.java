@@ -120,6 +120,74 @@ public final class EntityAggregator {
         }
     }
 
+    /**
+     * The features of an event that is not folded into state (a re-scored lifecycle stage of a
+     * multi-message transaction, already counted when it was assembled), as of its time: windows without
+     * it; novelty, time since the last event and speed against the previous events, without recording it.
+     * {@code stateBytes} is not modified. Mirrors {@code _read} in python/realy/features/engine.py.
+     */
+    public void read(byte[] stateBytes, EventRow r, long filterMask, float[] out) {
+        State st = State.decode(stateBytes, specs);
+        long t = r.timeUs;
+        for (int i = 0; i < specs.size(); i++) {
+            FeatureSpec s = specs.get(i);
+            boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
+            out[indices[i]] = (float) read(s, st.feats[i], r, slots[i], t, match);
+        }
+    }
+
+    private static double read(FeatureSpec s, Feat f, EventRow e, int slot, long t, boolean match) {
+        long g = s.granularityUs();
+        long k = Math.floorDiv(t, g);
+        long n = s.buckets();
+        switch (s.agg()) {
+            case "count", "sum", "max", "avg" -> {
+                double a = 0;
+                double b = 0;
+                boolean any = false;
+                double max = 0;
+                for (int j = 0; j < f.size; j++) {
+                    long idx = f.idx[j];
+                    if (idx > k - n && idx <= k) {
+                        if ("max".equals(s.agg())) {
+                            max = any ? Math.max(max, f.a[j]) : f.a[j];
+                        } else {
+                            a += f.a[j];
+                            b += f.b[j];
+                        }
+                        any = true;
+                    }
+                }
+                return switch (s.agg()) {
+                    case "max" -> any ? max : s.defaultValue();
+                    case "avg" -> b > 0 ? a / b : s.defaultValue();
+                    default -> a;
+                };
+            }
+            case "distinct" -> {
+                int c = 0;
+                for (long last : f.seen.values()) if (last > k - n) c++;
+                return c;
+            }
+            case "novel" -> {
+                if (!match) return 0.0;
+                Long last = f.seen.get(e.val[slot]);
+                return last != null && last > k - n ? 0.0 : 1.0;
+            }
+            case "time_since_last" -> {
+                return (f.lastTs != NONE && t >= f.lastTs && t - f.lastTs <= s.windowUs()) ? (t - f.lastTs) / 1e6 : s.defaultValue();
+            }
+            case "geo_speed_kmh" -> {
+                if (match && f.lastTs != NONE && t >= f.lastTs && t - f.lastTs <= s.windowUs()) {
+                    double km = Geo.haversineKm(f.lat, f.lon, e.lat, e.lon);
+                    return km / (Math.max(t - f.lastTs, MIN_GEO_DT_US) / 3.6e9);
+                }
+                return s.defaultValue();
+            }
+            default -> throw new IllegalArgumentException("unknown agg " + s.agg());
+        }
+    }
+
     private static double apply(FeatureSpec s, Feat f, EventRow e, int slot, long t, boolean match) {
         long g = s.granularityUs();
         long k = Math.floorDiv(t, g);

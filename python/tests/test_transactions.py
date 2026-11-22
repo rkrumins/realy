@@ -174,8 +174,12 @@ def test_verifier_replays_the_assembly_order_and_contexts(tmp_path):
     for eid, row in rows_as_assembled.items():
         if not ctx[eid]["parts"] & 0b10:
             assert row["device_id"] == 0
-    assert sorted(order.tolist()) == list(range(len(rows)))           # every event exactly once
-    assert set(ctx) == set(transfers) and info["assembled"] == len(transfers)
+    n_stage = info["stage_decisions"]
+    assert n_stage > 100                                              # re-scored submissions, read-only
+    assert sorted(order.tolist()) == list(range(len(rows) + n_stage))  # every event exactly once
+    stage_ids = [int(e) for e in cols["event_id"][len(rows):]]
+    assert all(ctx[e]["stage"] == "submitted" for e in stage_ids)
+    assert set(ctx) == set(transfers) | set(int(e) for e in cols["event_id"][len(rows):]) and info["assembled"] == len(transfers)
     assert ctx[forced_id]["partial"] is True and ctx[forced_id]["parts"] & 0b101 == 0b001   # no payee check
     assert info["partial_replayed_from_decisions"] == 1
     # a card payment keeps its place relative to its own customer's other events

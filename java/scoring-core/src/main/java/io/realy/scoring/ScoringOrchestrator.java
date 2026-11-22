@@ -144,7 +144,10 @@ public final class ScoringOrchestrator {
                 c.fallbackReason = isTimeout(err) ? FB_FEATURE_TIMEOUT : FB_FEATURE_ERROR;
                 blobs = null;
             }
-            c.features = assembler.assemble(r.event(), c.mask, r.precomputed(), lk, blobs, c.a.cfg().getSelfInclusion(), c.view);
+            // a re-scored stage of an assembled transaction reads its features without counting itself again
+            boolean readOnly = r.txn() != null && !r.txn().getStage().isEmpty() && !"assembled".equals(r.txn().getStage());
+            c.features = assembler.assemble(r.event(), c.mask, r.precomputed(), lk, blobs, c.a.cfg().getSelfInclusion(),
+                    c.view, readOnly);
             var m = metrics;
             if (m != null) {
                 m.add("store_read_bytes", c.features.storeBytes());

@@ -193,7 +193,8 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         ev = {k: lists[k][i] for k in names}
         # an assembled transaction as the pipeline saw it: a part that came too late is absent from it
         ev.update(assembled_rows.get(int(ev["event_id"]), {}))
-        view = event_view(ev, txn_ctx.get(int(ev["event_id"])))
+        tctx = txn_ctx.get(int(ev["event_id"]))
+        view = event_view(ev, tctx)
         ctx = cel.Context()
         ctx.add_variable("event", view)
         ctx.add_variable("f", {})
@@ -201,7 +202,11 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         for b, p in enumerate(filt):
             if p.execute(ctx):
                 mask |= 1 << b
-        engine.process(ev, mask, buf)
+        # a re-scored stage of an assembled transaction reads its features, it is not counted again
+        if tctx is not None and tctx.get("stage") not in ("", "assembled"):
+            engine.read(ev, mask, buf)
+        else:
+            engine.process(ev, mask, buf)
         eid = int(ev["event_id"])
         if eid not in served:
             continue
@@ -366,6 +371,7 @@ def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table
     out_idx: list[int] = []
     ctx: dict[int, dict] = {}
     rows: dict[int, dict] = {}
+    stage_rows: list[dict] = []
     n_asm = n_partial = 0
 
     def take(outs):
@@ -373,7 +379,11 @@ def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table
         for o in outs:
             eid = int(o.row["event_id"])
             if o.kind == "stage":
-                continue                        # re-scored stages: decisions of their own (not in the event log)
+                # a re-scored stage: a decision of its own, not in the event log; read-only
+                stage_rows.append({k: (v.item() if hasattr(v, "item") else v) for k, v in o.row.items()})
+                out_idx.append(-len(stage_rows))
+                ctx[eid] = o.context
+                continue
             i = idx_of.get(eid)
             if i is None:
                 continue
@@ -392,9 +402,32 @@ def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table
     take(a.close())
     seen = set(out_idx)
     rest = [i for i in np.lexsort((cols["event_id"], cols["event_time_us"])).tolist() if i not in seen]
+    # re-scored stages become rows after the event log's (their ground truth is their transaction's)
+    n0 = cols["event_id"].shape[0]
+    if stage_rows:
+        by_customer: dict[int, list[int]] = {}
+        for i in range(n0):
+            by_customer.setdefault(int(cols["customer_id"][i]), []).append(i)
+        extra: dict[str, list] = {k: [] for k in cols}
+        for r in stage_rows:
+            # its transaction's unified row (same customer, the closest earlier transfer) for the columns a
+            # stage does not carry (ground truth, labels)
+            cand = [i for i in by_customer.get(int(r["customer_id"]), []) if int(cols["payment_type"][i]) == 3
+                    and int(cols["event_time_us"][i]) <= int(r["event_time_us"])]
+            base = max(cand, key=lambda i: int(cols["event_time_us"][i])) if cand else None
+            for k in cols:
+                if k in r:
+                    extra[k].append(r[k])
+                elif base is not None:
+                    extra[k].append(cols[k][base])
+                else:
+                    extra[k].append(np.zeros(1, cols[k].dtype)[0] if cols[k].dtype.kind != "O" else "")
+        for k in cols:
+            cols[k] = np.concatenate([cols[k], np.asarray(extra[k], dtype=cols[k].dtype)])
+    order = [i if i >= 0 else n0 + (-i - 1) for i in out_idx]
     info = {"contracts": txns, "parts": len(ptypes), "assembled": n_asm, "partial": n_partial,
-            "partial_replayed_from_decisions": forced, "not_assembled": len(rest)}
-    return np.asarray(out_idx + rest, np.int64), ctx, info, rows
+            "stage_decisions": len(stage_rows), "partial_replayed_from_decisions": forced, "not_assembled": len(rest)}
+    return np.asarray(order + rest, np.int64), ctx, info, rows
 
 
 class ClickHouseError(RuntimeError):

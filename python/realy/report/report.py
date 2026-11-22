@@ -67,6 +67,12 @@ def transactions_summary(run_dir: Path) -> dict[str, Any] | None:
     idx = [i for i, n in enumerate(names) if n]
     if not idx:
         return None
+    stages: dict[str, int] = {}
+    for i in idx:
+        st = names[i].split("/", 1)[1] if "/" in names[i] else ""
+        stages[st] = stages.get(st, 0) + 1
+    # the transaction's own decision (at assembly); re-scored stages are counted under `stages`
+    idx = [i for i in idx if names[i].endswith("/assembled")] or idx
     sub = dec.take(pa.array(idx))
     ctx = [(_json.loads(x) if x else {}) for x in sub["txn_context"].to_pylist()]
     partial = sub["txn_partial"].to_numpy(zero_copy_only=False)
@@ -94,7 +100,7 @@ def transactions_summary(run_dir: Path) -> dict[str, Any] | None:
             parts_sent += int(_json.loads(Path(f).read_text()).get("parts_sent") or 0)
         except (OSError, ValueError):
             pass
-    return {"contracts": sorted({n.split("/", 1)[0] for n in names if n}), "assembled": len(idx),
+    return {"contracts": sorted({n.split("/", 1)[0] for n in names if n}), "assembled": len(idx), "stages": stages,
             "partial": int(partial.sum()), "partial_fraction": float(partial.mean()) if partial.size else 0.0,
             "parts_sent": parts_sent,
             "assembly_wait_ms": _pct(_ms(wait)) if wait.size else None,
@@ -828,7 +834,9 @@ def render_text(rep: dict[str, Any]) -> str:
         w = tx.get("assembly_wait_ms") or {}
         lines.append(f"transactions ({', '.join(tx['contracts'])}): {tx['assembled']:,} assembled from {tx['parts_sent']:,} more "
                      f"messages; {tx['partial']:,} without a required part ({tx['partial_fraction']:.2%}); "
-                     f"assembly wait p50 {_f(w.get('p50'))} ms p99 {_f(w.get('p99'))} ms")
+                     f"assembly wait p50 {_f(w.get('p50'))} ms p99 {_f(w.get('p99'))} ms"
+                     + (f"; decided again at {', '.join(f'{k} {v:,}' for k, v in tx['stages'].items() if k != 'assembled')}"
+                        if any(k != "assembled" for k in tx.get("stages", {})) else ""))
         for k, b in (tx.get("by_payee_check") or {}).items():
             lines.append(f"  payee check {k:24s} {b['decided']:6,} decided, {b['stopped']:5,} stopped; "
                          f"fraud {b['fraud']:4,} ({b['fraud_stopped']:,} stopped)")

@@ -318,7 +318,10 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 "--exactly-once", "true" if sc.exactly_once else "false"]
         if flows:
             from ..bindings import pipeline
+            from ..bindings.transactions import transaction
             args += ["--assemble", ",".join(flows)]
+            if any(st.scored for n in flows for st in transaction(n).stages):
+                args += ["--score-stages", "true"]   # a scored lifecycle stage is decided again (read-only)
             if mode == "features":
                 args += ["--assembled-topic", pipeline().topics["assembled"]]
         # online-store blobs carrying aggregator state (exact gateway features); "none" = values only

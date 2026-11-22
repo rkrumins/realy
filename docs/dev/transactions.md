@@ -27,7 +27,7 @@ what only the flow knows, as `event.txn.*`.
 | `device` | `DeviceContext`: device, IP, session age, remote access, on a call, emulator | optional |
 | `payee_check` | `PayeeCheck` (confirmation of payee): match, close match, no match, not checked | required |
 | `authentication` | `ScaResult`: method, passed, attempt | lifecycle stage |
-| `submission` | `PaymentSubmission` (pacs.008-like): may name another payee | stage (`scored` in the contract) |
+| `submission` | `PaymentSubmission` (pacs.008-like): may name another payee | stage, decided again |
 | `status` | `PaymentStatus` (pacs.002 / pacs.004-like): settled, rejected, returned, recalled | terminal stage |
 
 The context (`event.txn.*`) includes `payee_check`, `new_payee`, `remote_access`, `on_call`,
@@ -48,10 +48,12 @@ payment reads every name's default. `rules/baseline-flows.yaml` uses it:
   trigger means the transaction is assembled without it (`on_timeout: score_partial`), and its decision
   says so (`txn.partial`, `txn.parts_present`).
 - **Lifecycle.** Messages after assembly move the stage and update the context. A stage marked
-  `scored` (the submission) is produced by both assemblers: the assembled event with that stage's field
-  overrides, flagged read-only. The pipeline does not score it yet: the job's `--score-stages` stays off
-  until the read-only feature path (read the features without counting the transaction twice) lands
-  in both languages. Today every transaction is decided once, at assembly.
+  `scored` (the submission) is decided again. It is scored as the assembled event with that stage's field
+  overrides (its own event id and time, the payee it was really submitted to), flagged read-only. Its
+  features read the state as of its time without counting it: the transaction was counted once, when
+  it was assembled. That holds in Flink (`EntityAggregator.read`), at the gateway (read-only stage
+  decisions re-window the stored state without self-inclusion) and in the Python twin
+  (`ReferenceEngine.read`). A bank that scores at initiation and again before release is exactly this.
 - **Where.** In the Flink job, keyed by the pipeline's partition entity (the customer), before the
   feature stages. Every message of one customer is on one Kafka partition (the emitter and the payment
   hub key them by customer), so they arrive in one order. Assembly is therefore a pure function of that
@@ -74,7 +76,7 @@ payment reads every name's default. `rules/baseline-flows.yaml` uses it:
 |---|---|
 | `tests/test_transactions.py` | the contract is valid; assembly, optional and required parts, stages, holding a stage that came first, the deadline, a replayed partial; the generated parts assemble back into exactly the transfers the generator drew; the verifier replays a run in the pipeline's order |
 | `AssemblyTest` (Java) | the Java assembler equals the Python twin on the golden stream (`contracts/testdata/golden/flows`: 8,918 messages, 6,581 outputs): every unified event, context, stage and parts mask |
-| `FlowJobTest` (Flink MiniCluster, RocksDB, parallelism 2) | the real job graph assembles the golden stream as the twin does, and customer and card features equal sequential aggregation in that order |
+| `FlowJobTest` (Flink MiniCluster, RocksDB, parallelism 2) | the real job graph assembles the golden stream as the twin does, and every output's customer and card features (re-scored stages read-only) equal the twin's |
 | `pulsebench run flows-smoke --verify` / `flows-inline` | the whole stack: rules, score and outcome parity, exact customer and card features, a complete audit |
 
 Measured on this stack (4 vCPU, 500 TPS, 2026-11-22):
