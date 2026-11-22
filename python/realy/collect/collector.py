@@ -77,6 +77,33 @@ class _Cols:
         return t
 
 
+class SeenIds:
+    """First-decision dedup over event ids, as dense bitmaps: one per id range, which is the generator
+    (bits 48+) and whether it is a message of a multi-message transaction (bit 47; those are numbered
+    from 0 on their own, and a re-scored lifecycle stage carries one). Memory follows the events sent,
+    not the id's magnitude."""
+
+    def __init__(self) -> None:
+        self._arrays: dict[int, np.ndarray] = {}
+
+    def add(self, eid: int) -> bool:
+        """True the first time an id is seen."""
+        key, s = eid >> 47, eid & 0x7FFFFFFFFFFF
+        arr = self._arrays.get(key)
+        if arr is None or s >= arr.shape[0]:
+            na = np.zeros(max(1 << 16, (s + 1) * 2), np.bool_)
+            if arr is not None:
+                na[: arr.shape[0]] = arr
+            self._arrays[key] = arr = na
+        if arr[s]:
+            return False
+        arr[s] = True
+        return True
+
+    def nbytes(self) -> int:
+        return sum(a.nbytes for a in self._arrays.values())
+
+
 def collector_main(run_id: str, run_dir: str, index: int, ready, drain, expected, results,
                    group: str | None = None, idle_timeout_s: float = 10.0, drain_timeout_s: float = 60.0,
                    read_committed: bool = False, drain_limit=None) -> None:
@@ -116,7 +143,7 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
     feats_ids: list[int] = []
     feats_vals: list[list[float]] = []
     feats_missing: list[bytes] = []
-    seen: dict[int, np.ndarray] = {}
+    seen = SeenIds()
     dups = 0
     foreign = 0
     received = 0
@@ -193,17 +220,9 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             if d.revision > 0:
                 finals += 1
             else:
-                arr = seen.get(g)
-                if arr is None or s >= arr.shape[0]:
-                    size = max(1 << 16, (s + 1) * 2)
-                    na = np.zeros(size, np.bool_)
-                    if arr is not None:
-                        na[: arr.shape[0]] = arr
-                    seen[g] = arr = na
-                if arr[s]:
+                if not seen.add(eid):
                     dups += 1
                     continue
-                arr[s] = True
                 unique += 1
             t_ingest = -1
             t_dec = -1
