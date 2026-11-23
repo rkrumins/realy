@@ -10,9 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/controls";
 import { api, isNotFound } from "@/lib/api";
-import { fmtAgo, fmtCompact, fmtMs, fmtNum, fmtPct, isNum } from "@/lib/format";
+import { fmtAgo, fmtCompact, fmtDuration, fmtMs, fmtNum, fmtPct, isNum } from "@/lib/format";
 import { activeRun, useEnv, useLiveSeries, useStatus } from "@/lib/hooks";
-import type { RunSummary, SummaryResponse } from "@/lib/types";
+import { STAGE_LABEL, useServerNow } from "@/lib/timeline";
+import type { CurrentRun, RunSummary, SummaryResponse } from "@/lib/types";
 
 function fromRuns(history: RunSummary[]): SummaryResponse {
   const done = history.filter((r) => r.verdict);
@@ -28,6 +29,21 @@ function fromRuns(history: RunSummary[]): SummaryResponse {
   };
 }
 
+/** Time since launch and the estimated time left (the server's clock and estimate). */
+function RunClock({ cur }: { cur: CurrentRun }) {
+  const now = useServerNow(cur.server_now ?? null);
+  const at = cur.timeline?.launched_at;
+  if (!at) return null;
+  const left = cur.eta && cur.eta.finish_at > now ? cur.eta.finish_at - now : null;
+  return (
+    <div className="text-[13px] text-muted" title={cur.eta ? `estimate: ${cur.eta.basis}` : undefined}>
+      <div className="text-[11px] uppercase tracking-wider text-subtle">since launch</div>
+      <span className="text-[18px] font-semibold text-fg num">{fmtDuration(now - at)}</span>
+      {left !== null && <> · ~{fmtDuration(left)} left</>}
+    </div>
+  );
+}
+
 function NowRunning() {
   const status = useStatus();
   const cur = activeRun(status);
@@ -36,19 +52,22 @@ function NowRunning() {
   const last = series.filter((p) => p.emitted !== null).slice(-5);
   const tps = last.length ? last.reduce((a, p) => a + (p.emitted ?? 0), 0) / last.length : null;
   const p99 = [...series].reverse().find((p) => p.e2e_p99 !== null)?.e2e_p99 ?? null;
+  const tl = cur.timeline;
+  const stage = tl ? STAGE_LABEL[tl.stage].toLowerCase() : cur.phase?.toLowerCase();
   return (
     <Link to="/live" className="group mb-6 block overflow-hidden rounded-2xl border border-accent/30 bg-[linear-gradient(110deg,color-mix(in_oklab,var(--accent)_14%,var(--card))_0%,var(--card)_60%)] shadow-card">
       <div className="flex flex-wrap items-center gap-x-8 gap-y-3 px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="flex size-10 items-center justify-center rounded-xl bg-accent/15 text-accent"><Radio className="size-5" /></div>
           <div>
-            <div className="flex items-center gap-2 text-[11.5px] font-semibold uppercase tracking-[0.12em] text-accent"><Dot tone="accent" pulse />Running now · {cur.phase?.toLowerCase()}</div>
+            <div className="flex items-center gap-2 text-[11.5px] font-semibold uppercase tracking-[0.12em] text-accent"><Dot tone="accent" pulse />Running now · {stage}</div>
             <div className="mt-0.5 font-mono text-[14px] font-medium text-fg">{cur.scenario}</div>
             <ActiveStartupStep startup={status?.pipeline?.startup} />
           </div>
         </div>
         <div className="text-[13px] text-muted"><div className="text-[11px] uppercase tracking-wider text-subtle">throughput</div><span className="text-[18px] font-semibold text-fg num">{fmtNum(tps)}</span> TPS</div>
         <div className="text-[13px] text-muted"><div className="text-[11px] uppercase tracking-wider text-subtle">e2e p99</div><span className="text-[18px] font-semibold text-fg num">{fmtMs(p99)}</span>{cur.budget && <> / {fmtMs(cur.budget.e2e_p99_ms)}</>}</div>
+        <RunClock cur={cur} />
         <div className="hidden h-12 min-w-40 flex-1 md:block"><Sparkline data={series.map((p) => p.emitted)} /></div>
         <span className="ml-auto inline-flex items-center gap-1 text-[13px] font-medium text-accent">Open live view<ArrowRight className="size-4 transition group-hover:translate-x-0.5" /></span>
       </div>
@@ -101,7 +120,7 @@ export default function Overview() {
 
       <div className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
         <Card>
-          <CardHeader title="Recent runs" subtitle="Newest first. Click a run for its full report."
+          <CardHeader title="Recent runs" subtitle="Newest launch first. Click a run for its full report."
             actions={<Button variant="ghost" size="sm" onClick={() => nav("/runs")}>All runs<ArrowRight /></Button>} />
           <div className="overflow-x-auto">
             {!s ? <div className="space-y-2 px-5 pb-5">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-9" />)}</div>

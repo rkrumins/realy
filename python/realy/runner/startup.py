@@ -1,8 +1,8 @@
 """The startup sequence of a run, as structured steps.
 
 Everything a run does before its measured window (world, topics, state provenance, the Flink job,
-history replay, feature catch-up, scoring-path prime, warm-up) is recorded here with a status,
-timings and progress. The same record feeds three consumers, so they can never disagree:
+history replay, feature catch-up, scoring-path prime, warm-up) and after it (drain, report, verify)
+is recorded here with a status, timings and progress. The same record feeds three consumers, so they can never disagree:
 
   * the run log: one consistent line per transition / progress update (`[startup 9/12] ...`);
   * `startup.json` in the run directory, rewritten atomically (throttled): the console reads it for
@@ -37,6 +37,12 @@ STEPS: list[tuple[str, str]] = [
     ("warmup", "Warm-up"),
     ("measure", "Measure"),
 ]
+# after the traffic: the same record times them, so a run's whole wall time is accounted for
+FINISH_STEPS: list[tuple[str, str]] = [
+    ("drain", "Drain"),
+    ("report", "Report"),
+    ("verify", "Verify"),
+]
 TERMINAL = ("done", "skipped", "failed", "warn")
 
 
@@ -61,10 +67,11 @@ class Startup:
         self.write_every_s = write_every_s
         self.log_progress_every_s = log_progress_every_s
         self.t0 = time.time()
-        self.steps: dict[str, dict[str, Any]] = {
-            sid: {"id": sid, "label": label, "index": i + 1, "status": "pending", "detail": "",
-                  "started_at": None, "ended_at": None, "progress": None}
-            for i, (sid, label) in enumerate(STEPS)}
+        self.steps: dict[str, dict[str, Any]] = {}
+        for group, steps in (("startup", STEPS), ("finish", FINISH_STEPS)):
+            for i, (sid, label) in enumerate(steps):
+                self.steps[sid] = {"id": sid, "label": label, "group": group, "index": i + 1, "status": "pending",
+                                   "detail": "", "started_at": None, "ended_at": None, "progress": None}
         self._lock = threading.Lock()
         self._last_write = 0.0
         self._last_progress_log: dict[str, float] = {}
@@ -106,6 +113,20 @@ class Startup:
     def skip(self, sid: str, why: str) -> None:
         self.finish(sid, why, "skipped")
 
+    @classmethod
+    def resume(cls, run_dir: Path, log: Callable[[str], None] = print) -> "Startup":
+        """The record of a run that has already ended its traffic, reopened to time what comes after it (a
+        verification run by the console or by `realy verify`, possibly in another process)."""
+        st = cls(run_dir, log)
+        old = read(run_dir) or {}
+        if old.get("started_at"):
+            st.t0 = float(old["started_at"])
+        for s in old.get("steps") or []:
+            if s.get("id") in st.steps:
+                keep = {k: s.get(k) for k in ("status", "detail", "started_at", "ended_at", "progress")}
+                st.steps[s["id"]].update(keep)
+        return st
+
     def fail_running(self, why: str) -> None:
         """An aborted / failed run: whatever was running did not finish."""
         for sid, s in self.steps.items():
@@ -123,6 +144,10 @@ class Startup:
         active = next((s for s in steps if s["status"] == "running"), None)
         return {"started_at": self.t0, "updated_at": now, "active": active["id"] if active else None, "steps": steps}
 
+    def write(self) -> None:
+        """Write the record now (a step without progress updates otherwise keeps its last written time)."""
+        self._write(force=True)
+
     def summary(self) -> dict[str, float]:
         """Seconds per finished step (report)."""
         return {s["id"]: s["duration_s"] for s in self.snapshot()["steps"] if s.get("duration_s") is not None}
@@ -136,7 +161,8 @@ class Startup:
             dur = f" in {s['ended_at'] - s['started_at']:.1f} s"
         state = "" if s["status"] == "running" else f" {s['status']}{dur}"
         text = " · ".join(x for x in (prog, s["detail"]) if x)
-        return f"[startup {s['index']}/{len(STEPS)}] {s['label'].lower()}{state}" + (f": {text}" if text else "")
+        group, n = (("startup", len(STEPS)) if s.get("group", "startup") == "startup" else ("finish", len(FINISH_STEPS)))
+        return f"[{group} {s['index']}/{n}] {s['label'].lower()}{state}" + (f": {text}" if text else "")
 
     def _log_line(self, sid: str) -> None:
         try:
@@ -161,6 +187,28 @@ class Startup:
             os.replace(tmp, self.path)
         except OSError:
             pass
+
+
+class timed_step:
+    """Time a step of a run that has ended its traffic (verify), in any process: `with timed_step(run_dir,
+    "verify") as t: ... t.detail = "PASS"`. A failure marks the step failed and propagates."""
+
+    def __init__(self, run_dir: Path, sid: str, detail: str = "", log: Callable[[str], None] = lambda _l: None) -> None:
+        self.st = Startup.resume(Path(run_dir), log)
+        self.sid, self.detail, self.status = sid, detail, "done"
+
+    def __enter__(self) -> "timed_step":
+        s = self.st.steps[self.sid]
+        s.update(started_at=None, ended_at=None)     # a repeated verification is timed afresh
+        self.st.start(self.sid, self.detail)
+        return self
+
+    def __exit__(self, et, ev, tb) -> bool:
+        if et is not None:
+            self.st.finish(self.sid, f"failed: {ev}"[:300], "failed")
+        else:
+            self.st.finish(self.sid, self.detail, self.status)
+        return False
 
 
 def read(run_dir: Path) -> dict[str, Any] | None:

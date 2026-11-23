@@ -172,8 +172,9 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         shows its progress, startup, charts and log the same way."""
         cur = st.get("current")
         if cur:
-            return {**cur, "local": True, "owner": (lease or {}).get("owner"),
-                    "measure_started_at": _measure_start(cur.get("run_id"), cur.get("phase"))}
+            return _timed({**cur, "local": True, "owner": (lease or {}).get("owner"),
+                           "measure_started_at": _measure_start(cur.get("run_id"), cur.get("phase"))},
+                          bool(cur.get("verify")))
         if not lease or not lease.get("run_id"):
             return None
         rid = str(lease["run_id"])
@@ -191,17 +192,46 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                 "flows": list((sc.get("traffic") or {}).get("flows") or [])}}
         hb = _json(rd / "heartbeat") or {}
         phase = hb.get("phase") or lease.get("phase") or "PREPARE"
-        return {"job_id": None, "run_id": rid, "scenario": lease.get("scenario") or hit["man"].get("scenario"),
-                "phase": phase, "abort_reason": None, "abort_kind": None,
-                "started_at": lease.get("started_at") or hit["man"].get("created_at"), "rate_multiplier": 1.0,
-                **hit["info"], "local": False, "owner": lease.get("owner"), "measure_started_at": _measure_start(rid, phase)}
+        return _timed({"job_id": None, "run_id": rid, "scenario": lease.get("scenario") or hit["man"].get("scenario"),
+                       "phase": phase, "abort_reason": None, "abort_kind": None,
+                       "started_at": hit["man"].get("created_at") or lease.get("started_at"), "rate_multiplier": 1.0,
+                       **hit["info"], "local": False, "owner": lease.get("owner"),
+                       "measure_started_at": _measure_start(rid, phase)}, False)
+
+    timing_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    def _timed(a: dict[str, Any], verify: bool) -> dict[str, Any]:
+        """The active run with its timeline (runner/timeline.py), its estimated finish (report/eta.py) and the
+        server's clock, so a browser with a skewed clock still shows the right elapsed times."""
+        rid = a.get("run_id")
+        a["server_now"] = time.time()
+        if not rid or not (runs_dir / rid).is_dir():
+            return a
+        hit = timing_cache.get(rid)
+        if hit is None or time.time() - hit[0] > 1.0:
+            from ..report.eta import estimate
+            from ..runner.timeline import timeline
+            job = {"status": "running", "verify": verify, "started_at": a.get("started_at")}
+            try:
+                t = {"timeline": timeline(runs_dir / rid, job=job, live=True),
+                     "eta": estimate(runs_dir / rid, runs_dir, verify)}
+            except Exception:  # noqa: BLE001 - timing never breaks the status
+                t = {}
+            hit = timing_cache[rid] = (time.time(), t)
+        a.update(hit[1])
+        tl = a.get("timeline") or {}
+        if tl.get("launched_at"):
+            a["started_at"] = tl["launched_at"]
+        if a.get("phase") == "VERIFY" and tl:
+            tl["stage"] = "verify"
+        return a
 
     measure_cache: dict[str, tuple[float, float | None]] = {}
 
     def _measure_start(run_id: str | None, phase: str | None = None) -> float | None:
         """When live traffic started (t_start_us in the manifest): warm-up and measurement are timed from
-        here, not from the launch (a 2M-customer world spends minutes preparing first). Before warm-up the
-        manifest holds a provisional value (replaced when traffic really starts), so nothing is reported."""
+        here, not from the launch (a 2M-customer world spends minutes preparing first). The manifest holds
+        it only once the gates pass, so a run aborted while preparing reports none."""
         if not run_id or (phase or "").upper() in ("PREPARE", "BACKFILL", ""):
             return None
         hit = measure_cache.get(run_id)
@@ -405,10 +435,52 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         worker.wake.set()
         return job
 
+    launch_cache: dict[str, float] = {}
+
+    def _launched(d: Path) -> float:
+        """When the run was launched (manifest created_at; never changes), so lists keep their order when a
+        run is verified or its report rebuilt later."""
+        k = str(d)
+        v = launch_cache.get(k)
+        if v is None:
+            v = float((_json(d / "manifest.json") or {}).get("created_at") or 0.0)
+            if not v:
+                try:
+                    v = d.stat().st_ctime
+                except OSError:
+                    v = 0.0
+            else:
+                launch_cache[k] = v
+        return v
+
+    def _runs_newest_first() -> list[Path]:
+        return sorted((d for d in runs_dir.iterdir() if d.is_dir() and (d / "manifest.json").exists()),
+                      key=_launched, reverse=True)
+
+    def _queue() -> list[dict[str, Any]]:
+        """Queued jobs with their expected start and wall time (after the current run and the jobs ahead)."""
+        from ..report.eta import scenario_estimate
+        q = store.queued()
+        cur = worker.status()["current"]
+        t = time.time()
+        if cur:
+            act = _active({"current": cur}, None) or {}
+            t += float((act.get("eta") or {}).get("remaining_s") or 0.0)
+        out = []
+        for j in q:
+            try:
+                sc = yaml.safe_load(_scenario_path(j["scenario"]).read_text()) or {}
+            except Exception:  # noqa: BLE001
+                sc = {}
+            est = scenario_estimate(runs_dir, j["scenario"], sc.get("topology"),
+                                    float(((sc.get("traffic") or {}).get("duration_s")) or 60.0), bool(j.get("verify")))
+            out.append({**j, "expected_start": t, "expected_total_s": est["total_s"], "estimate_basis": est["basis"]})
+            t += est["total_s"]
+        return out
+
     @app.get("/api/runs")
     def list_runs(limit: int = 100) -> dict[str, Any]:
-        dirs = sorted((d for d in runs_dir.iterdir() if d.is_dir() and (d / "manifest.json").exists()),
-                      key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
+        dirs = _runs_newest_first()[:limit]
         history = [_summary(d) for d in dirs]
         jobs = store.jobs(limit)
         by_run = {j["run_id"]: j for j in jobs if j.get("run_id")}
@@ -424,9 +496,11 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         if cur:
             for h in history:
                 if h["run_id"] == cur["run_id"]:
-                    h["status"] = "running"
-                    h["phase"] = cur["phase"]
-        return {"queue": store.queued(), "jobs": jobs[:50], "history": history, "current": cur,
+                    a = _active(st, None) or {}
+                    tl = a.get("timeline") or {}
+                    h.update(status="running", phase=cur["phase"], stage=tl.get("stage"),
+                             total_s=(tl.get("durations") or {}).get("total_s"), eta=a.get("eta"))
+        return {"queue": _queue(), "jobs": jobs[:50], "history": history, "current": cur,
                 "blocked_by": st["blocked_by"], "lease": _lease_holder()}
 
     @app.get("/api/topologies")
@@ -447,8 +521,7 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                 {"name": p.stem, "description": d.get("description", ""),
                  "flows": (d.get("traffic") or {}).get("flows") or [],
                  "tps": ((d.get("traffic") or {}).get("profile") or {}).get("tps")})
-        dirs = sorted((d for d in runs_dir.iterdir() if d.is_dir() and (d / "manifest.json").exists()),
-                      key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
+        dirs = _runs_newest_first()[:limit]
         by_topo: dict[str, list[dict[str, Any]]] = {}
         for d in dirs:
             sm = _summary(d)
@@ -474,8 +547,7 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
 
     @app.get("/api/summary")
     def summary(limit: int = 12) -> dict[str, Any]:
-        dirs = sorted((d for d in runs_dir.iterdir() if d.is_dir() and (d / "manifest.json").exists()),
-                      key=lambda d: d.stat().st_mtime, reverse=True)
+        dirs = _runs_newest_first()
         rows = [_summary(d) for d in dirs]
         done = [r for r in rows if r.get("verdict")]
         return {"runs_total": len(rows), "runs_pass": sum(r["verdict"] == "PASS" for r in done),
@@ -492,9 +564,19 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         rep = _json(d / "report.json")
         if rep:
             rep.pop("text", None)
-        return {"run_id": run_id, "summary": _summary(d), "manifest": _json(d / "manifest.json"), "report": rep,
+        sm = dict(_summary(d))
+        cur = worker.status()["current"]
+        job = next((j for j in store.jobs(200) if j.get("run_id") == run_id), None)
+        from ..runner.timeline import timeline
+        live = bool(cur and cur.get("run_id") == run_id)
+        tl = timeline(d, job=job, live=live or None)
+        if live:
+            sm.update(status="running", phase=cur.get("phase"))
+        sm["verify_requested"] = bool(job and job.get("verify"))
+        sm["stage"] = tl["stage"]
+        return {"run_id": run_id, "summary": sm, "manifest": _json(d / "manifest.json"), "report": rep,
                 "verify": _json(d / "verify.json"), "run": _json(d / "run.json"), "scenario": _json(d / "scenario.json"),
-                "logs": _run_logs(run_id, d)}
+                "timeline": tl, "logs": _run_logs(run_id, d), "server_now": time.time()}
 
     def _run_logs(run_id: str, d: Path) -> list[str]:
         """The console's own log of the run, else the runner's persisted run.log (a run started elsewhere,
@@ -668,8 +750,12 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             active = _active(st, lease)
         except Exception:  # noqa: BLE001
             active = st.get("current")
-        return {**st, "active": active, "kafka": hub.connected, "kafka_error": hub.last_error, "lease": lease,
-                "pipeline": pipe}
+        try:
+            queue = _queue()
+        except Exception:  # noqa: BLE001
+            queue = st.get("queue")
+        return {**st, "queue": queue, "active": active, "kafka": hub.connected, "kafka_error": hub.last_error,
+                "lease": lease, "pipeline": pipe, "server_now": time.time()}
 
     @app.get("/api/live/history")
     def live_history(run_id: str | None = None, seconds: int = 300) -> dict[str, Any]:

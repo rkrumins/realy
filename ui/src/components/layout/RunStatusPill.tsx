@@ -1,7 +1,8 @@
 import { Link } from "react-router";
 import { cn } from "@/lib/cn";
 import { fmtDuration, fmtMs, fmtNum } from "@/lib/format";
-import { activeRun, useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
+import { activeRun, useLiveSeries, useStatus } from "@/lib/hooks";
+import { STAGE_LABEL, useServerNow } from "@/lib/timeline";
 import { Dot } from "../ui/badge";
 import { Tooltip } from "../ui/tooltip";
 
@@ -15,9 +16,13 @@ export function RunStatusPill({ compact }: { compact?: boolean }) {
   const status = useStatus();
   const cur = activeRun(status);
   const series = useLiveSeries(30, cur?.run_id ?? null);
-  // timed from the start of live traffic; while preparing the pill names the startup step instead
-  const elapsed = useElapsed(cur?.measure_started_at ?? null);
-  const step = status?.pipeline?.startup?.steps?.find((s) => s.status === "running");
+  // the whole run, from its launch, on the server's clock; with the estimated time left
+  const now = useServerNow(cur?.server_now ?? null);
+  const tl = cur?.timeline;
+  const elapsed = tl?.launched_at ? Math.max(0, now - tl.launched_at) : null;
+  const left = cur?.eta && cur.eta.finish_at > now ? cur.eta.finish_at - now : null;
+  const steps = status?.pipeline?.startup?.steps?.filter((s) => (s.group ?? "startup") === "startup");
+  const step = tl?.stage === "prepare" ? steps?.find((s) => s.status === "running") : undefined;
   const queued = status?.queue?.length ?? 0;
 
   if (!cur) {
@@ -34,7 +39,7 @@ export function RunStatusPill({ compact }: { compact?: boolean }) {
   const p99 = [...series].reverse().find((p) => p.e2e_p99 !== null)?.e2e_p99 ?? null;
   const budget = cur.budget?.e2e_p99_ms ?? null;
   const over = p99 !== null && budget !== null && p99 > budget;
-  const phase = (cur.phase || "running").toLowerCase();
+  const phase = tl ? STAGE_LABEL[tl.stage].toLowerCase() : (cur.phase || "running").toLowerCase();
 
   return (
     <Tooltip content={<span>{cur.scenario} · {cur.run_id ?? "preparing"}{queued ? ` · ${queued} queued` : ""}</span>} side="bottom">
@@ -53,9 +58,10 @@ export function RunStatusPill({ compact }: { compact?: boolean }) {
             <span className={cn("num", over ? "text-fail" : "text-fg")}>
               p99 {fmtMs(p99)}{budget !== null && <span className="text-subtle"> / {fmtNum(budget)}</span>}
             </span>
-            {elapsed !== null ? <span className="num text-subtle">{fmtDuration(elapsed)}</span>
-              : step ? <span className="max-w-[160px] truncate text-subtle">{step.index}/{status!.pipeline!.startup!.steps.length} {step.label.toLowerCase()}
-                {step.progress?.total ? ` ${Math.min(100, Math.round((100 * (step.progress.done ?? 0)) / step.progress.total))}%` : ""}</span> : null}
+            {step && <span className="max-w-[160px] truncate text-subtle">{step.index}/{steps!.length} {step.label.toLowerCase()}
+                {step.progress?.total ? ` ${Math.min(100, Math.round((100 * (step.progress.done ?? 0)) / step.progress.total))}%` : ""}</span>}
+            {elapsed !== null && <span className="num text-subtle" title={cur.eta ? `estimate: ${cur.eta.basis}` : undefined}>
+              {fmtDuration(elapsed)}{left !== null ? ` · ~${fmtDuration(left)} left` : ""}</span>}
           </>
         )}
       </Link>

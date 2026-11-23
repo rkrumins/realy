@@ -15,7 +15,7 @@ import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { fmtAgo, fmtCompact, fmtDuration, fmtMs, fmtNum, fmtPct, fmtTime } from "@/lib/format";
+import { fmtAgo, fmtCompact, fmtDuration, fmtMs, fmtNum, fmtPct, fmtTime, isNum } from "@/lib/format";
 import { TOPOLOGIES, type Job, type RunSummary, type Schedule } from "@/lib/types";
 
 const th = "px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-subtle whitespace-nowrap";
@@ -31,7 +31,8 @@ function HistoryTable({ rows, selected, toggle }: { rows: RunSummary[]; selected
             <th className={th}>Verdict</th><th className={th}>Run</th><th className={th}>Topology</th>
             <th className={cn(th, "text-right")}>TPS</th><th className={cn(th, "text-right")}>p50</th><th className={cn(th, "text-right")}>p99</th>
             <th className={cn(th, "text-right")}>In budget</th><th className={cn(th, "text-right")}>Decided</th><th className={th}>Verify</th>
-            <th className={cn(th, "pr-5 text-right")}>Started</th>
+            <th className={cn(th, "text-right")} title="launch to finish: preparation, traffic, drain, report and verification">Duration</th>
+            <th className={cn(th, "pr-5 text-right")}>Launched</th>
           </tr>
         </thead>
         <tbody>
@@ -58,6 +59,10 @@ function HistoryTable({ rows, selected, toggle }: { rows: RunSummary[]; selected
                   {r.verify_passed === true ? <Badge tone="pass"><ShieldCheck />verified</Badge>
                     : r.verify_passed === false ? <Badge tone="fail"><ShieldX />mismatch</Badge> : <span className="text-subtle">—</span>}
                 </td>
+                <td className="px-3 py-2.5 text-right num text-muted" title={runTimes(r)}>
+                  {r.status === "running" ? <span className="text-fg">{fmtDuration(r.total_s)}{r.eta?.remaining_s ? <span className="text-subtle"> · ~{fmtDuration(r.eta.remaining_s)} left</span> : null}</span>
+                    : fmtDuration(r.total_s)}
+                </td>
                 <td className="px-3 py-2.5 pr-5 text-right text-muted" title={fmtTime(r.started_at)}>{fmtAgo(r.started_at)}</td>
               </tr>
             );
@@ -66,6 +71,13 @@ function HistoryTable({ rows, selected, toggle }: { rows: RunSummary[]; selected
       </table>
     </div>
   );
+}
+
+/** Where a run's time went, for the Duration cell's tooltip. */
+function runTimes(r: RunSummary): string {
+  const parts: [string, number | null | undefined][] = [["prepare", r.prepare_s], ["measured", r.measured_s], ["drain", r.drain_s],
+    ["report", r.report_s], ["verify", r.verify_s]];
+  return parts.filter(([, v]) => isNum(v)).map(([k, v]) => `${k} ${fmtDuration(v)}`).join(" · ") || "—";
 }
 
 function JobRow({ j, onAbort, selected, onSelect, phase }: {
@@ -80,7 +92,11 @@ function JobRow({ j, onAbort, selected, onSelect, phase }: {
       {Object.keys(j.overrides || {}).length > 0 && <span className="truncate font-mono text-[11px] text-subtle">{JSON.stringify(j.overrides)}</span>}
       {j.error && <span className="text-[12px] text-fail">{j.error}</span>}
       {!j.error && j.abort_reason && j.status !== "queued" && <span className="text-[12px] text-warn">{j.abort_reason}</span>}
-      <span className="ml-auto text-[12px] text-subtle">{j.finished_at ? `finished ${fmtAgo(j.finished_at)}` : j.started_at ? `started ${fmtAgo(j.started_at)}` : `queued ${fmtAgo(j.created_at)}`}</span>
+      <span className="ml-auto text-[12px] text-subtle" title={j.estimate_basis ? `estimate: ${j.estimate_basis}` : undefined}>
+        {j.finished_at ? `finished ${fmtAgo(j.finished_at)}${j.started_at ? ` after ${fmtDuration(j.finished_at - j.started_at)}` : ""}`
+          : j.started_at ? `started ${fmtAgo(j.started_at)}`
+          : `queued ${fmtAgo(j.created_at)}${isNum(j.expected_start) ? ` · starts in ~${fmtDuration(Math.max(0, j.expected_start - Date.now() / 1000))}` : ""}${isNum(j.expected_total_s) ? `, takes ~${fmtDuration(j.expected_total_s)}` : ""}`}
+      </span>
       {onAbort && <Button size="sm" variant="ghost" onClick={onAbort}><X />{j.status === "running" ? "Abort" : "Cancel"}</Button>}
     </li>
   );

@@ -47,6 +47,46 @@ export interface CurrentRun {
   owner?: string | null;
   /** when live traffic started (s); warm-up and measurement are timed from here, not from the launch */
   measure_started_at?: number | null;
+  /** the run will be verified once it ends (its verification is part of its timeline) */
+  verify?: boolean;
+  /** the run's timeline (runner/timeline.py) and estimated finish (report/eta.py) */
+  timeline?: RunTimeline;
+  eta?: RunEta;
+  /** the server's clock when this was sent: elapsed times are shown on it, not on the browser's */
+  server_now?: number;
+}
+
+/** A run's lifecycle: every instant and duration from one source (runner/timeline.py). */
+export interface RunTimeline {
+  stage: "queued" | "prepare" | "warmup" | "measure" | "drain" | "report" | "verify" | "done";
+  live: boolean;
+  aborted: boolean;
+  queued_at?: number | null;
+  launched_at: number | null;
+  traffic_start: number | null;
+  measure_start: number | null;
+  emission_end: number | null;
+  drain_end: number | null;
+  report_end: number | null;
+  verify_start: number | null;
+  verify_end: number | null;
+  finished_at: number | null;
+  /** the scenario's traffic window: warm-up is inside duration_s */
+  configured: { duration_s: number; warmup_s: number; measure_s: number };
+  durations: {
+    prepare_s: number | null; warmup_s: number | null; measured_s: number | null; drain_s: number | null;
+    report_s: number | null; verify_s: number | null; total_s: number | null; queued_s?: number | null;
+  };
+}
+
+/** Estimated remaining time, per step, from earlier runs of the same scenario (report/eta.py). */
+export interface RunEta {
+  remaining_s: number;
+  finish_at: number;
+  basis: string;
+  per_step: Record<string, number>;
+  /** steps running longer than their usual p75 */
+  late: string[];
 }
 
 export interface Job {
@@ -64,6 +104,10 @@ export interface Job {
   abort_reason: string | null;
   error: string | null;
   schedule_id: string | null;
+  /** queued jobs: when it is expected to start and how long it is expected to take (report/eta.py) */
+  expected_start?: number;
+  expected_total_s?: number;
+  estimate_basis?: string;
 }
 
 /** The pipeline lease holder: whichever process (console, CLI, bench Job) owns the pipeline now. */
@@ -107,6 +151,8 @@ export interface StartupProgress {
 export interface StartupStep {
   id: string;
   label: string;
+  /** startup steps come before the traffic; finish steps (drain, report, verify) after it */
+  group?: "startup" | "finish";
   index: number;
   status: "pending" | "running" | "done" | "skipped" | "failed" | "warn";
   detail: string;
@@ -139,8 +185,22 @@ export interface RunSummary {
   run_id: string;
   scenario: string | null;
   topology: Topology | null;
+  /** when the run was launched (preparation included), not when its traffic started */
   started_at: number;
+  launched_at?: number;
+  traffic_started_at?: number | null;
+  finished_at?: number | null;
+  stage?: RunTimeline["stage"];
+  /** the configured traffic window (warm-up included) */
   duration_s: number | null;
+  warmup_s?: number | null;
+  prepare_s?: number | null;
+  drain_s?: number | null;
+  report_s?: number | null;
+  verify_s?: number | null;
+  /** launch to finish (or to now, while running) */
+  total_s?: number | null;
+  eta?: RunEta | null;
   status: string;
   phase?: string;
   verdict: Verdict;
@@ -357,6 +417,8 @@ export interface RunDetail {
   verify: VerifyResult | null;
   run: Record<string, unknown> | null;
   scenario: Record<string, unknown> | null;
+  timeline?: RunTimeline;
+  server_now?: number;
   logs: string[];
 }
 

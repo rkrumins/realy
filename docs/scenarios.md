@@ -41,8 +41,8 @@ seed: 12                                   # world + traffic + fraud are all der
 world: { customers: 200000, merchants: 20000, payees: 40000 }
 traffic:
   profile: { kind: constant, tps: 500 }    # wall-clock target rate
-  duration_s: 120                          # measured window (after warm-up)
-  warmup_s: 15                             # traffic that is sent but excluded from latency stats
+  duration_s: 120                          # the whole traffic window, warm-up included (105 s measured)
+  warmup_s: 15                             # the first seconds of it: sent, but excluded from the statistics
   backfill_days: 1                         # unpaced history first, so velocity features are warm
 topology: gateway-kafka
 scoring:                                   # proto3 JSON ScoringConfig

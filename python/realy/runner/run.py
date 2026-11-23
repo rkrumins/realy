@@ -535,13 +535,20 @@ class _Run:
         self.error: str | None = None
         self.t0 = time.time()
         self.phases: dict[str, float] = {}
+        self.transitions: list[list[Any]] = []
         self.watchdog_s = float(os.environ.get("REALY_RUN_WATCHDOG_S") or (
             sc.traffic.duration_s + sc.traffic.warmup_s + float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900")) + 900))
 
     # ------------------------------------------------------------------ helpers
     def phase(self, name: str) -> None:
+        """Enter a phase. `phases` keeps the first time each phase was entered (seconds since launch);
+        `transitions` keeps every change in order (a phase can be entered again)."""
+        if self.h.phase == name and name in self.phases:
+            return
         self.h.phase = name
-        self.phases[name] = round(time.time() - self.t0, 2)
+        at = round(time.time() - self.t0, 2)
+        self.phases.setdefault(name, at)
+        self.transitions.append([name, at])
 
     def check(self, where: str) -> None:
         """Raise _Stop when the run must end now. Called from every wait loop."""
@@ -851,9 +858,13 @@ class _Run:
                                 extra={"history": self.history, "prime_tps": self.base_tps / n_shards,
                                        "usecases": self.usecases, "type_topics": self.type_topics()})
                       for s in range(n_shards)]
-        self.manifest.update({"t_start_us": t_start, "time_scale": self.ts, "sim_start_us": self.sim0,
+        # the async emitters' start is provisional until the gates pass (_gates_and_go), so it stays out of
+        # the manifest: a run aborted during its history replay never had traffic. The sync rail's is final.
+        self.manifest.update({"time_scale": self.ts, "sim_start_us": self.sim0,
                               "shards": n_shards, "collectors": self.n_coll, "world_hash": self.world.content_hash,
-                              "prepare_s": round(time.time() - self.t0, 2), "auto_prime": self.primes, "history": self.history})
+                              "auto_prime": self.primes, "history": self.history})
+        if self.sync:
+            self.manifest.update({"t_start_us": t_start, "prepare_s": round(t_start / 1e6 - self.t0, 2)})
         self.write_manifest()
         self.log(f"run {self.run_id}: {sc.topology}, {n_shards} emitter shard(s), {self.n_coll} collector(s), "
                  f"{sc.traffic.duration_s:.0f}s ({sc.traffic.profile.kind} {sc.traffic.profile.tps:.0f} TPS)")
@@ -1022,7 +1033,8 @@ class _Run:
             return
         t_start = now_us() + 3_000_000
         self.start_v.value = t_start
-        self.manifest["t_start_us"] = t_start
+        # preparation ends when traffic starts: everything since launch counts, inside a step or not
+        self.manifest.update({"t_start_us": t_start, "prepare_s": round(t_start / 1e6 - self.t0, 2)})
         self.write_manifest()
         self.go.set()
 
@@ -1064,12 +1076,21 @@ class _Run:
 
     # ------------------------------------------------------------------ teardown (always runs)
     def teardown(self) -> None:
+        try:
+            self._teardown()
+        finally:
+            d = self.startup.steps["drain"]
+            if d["status"] == "running":
+                self.startup.finish("drain", d["detail"] or "children stopped")
+
+    def _teardown(self) -> None:
         h, log = self.h, self.log
         aborted_at_start = bool(h.abort_reason)
         if aborted_at_start:
             log(f"ABORTING ({h.abort_kind}): {h.abort_reason}")
             self.phase("ABORTING")
             self.startup.fail_running(f"aborted ({h.abort_kind}): {h.abort_reason}")
+        self.startup.start("drain", "emitters flush, collectors drain the decisions in flight")
         h.stop.set()
         if self.go is not None:
             self.go.set()          # release children still waiting for the measured phase (they see stop)
@@ -1096,6 +1117,7 @@ class _Run:
             if not aborted_at_start:
                 self.phase("DRAIN")
             log(f"emission {'stopped' if h.abort_reason else 'complete'}: {total:,} events; draining")
+            self.startup.steps["drain"]["detail"] = f"{total:,} events emitted; collectors draining"
             deadline = time.time() + (abort_drain + 60 if h.abort_reason else 180)
             shortened = bool(h.abort_reason)
             while len(self.coll_summ) < self.n_coll and time.time() < deadline:
@@ -1143,24 +1165,39 @@ class _Run:
             "abort": ({"reason": h.abort_reason, "kind": h.abort_kind, "phase": h.abort_phase,
                        "after_s": round((h.abort_at or time.time()) - self.t0, 2)} if h.abort_reason else None),
             "error": self.error, "emission_end_us": self.emission_end_us, "measured_s": measured_s,
-            "wall_s": round(time.time() - self.t0, 2), "phases": self.phases, "rate_changes": list(h.rate_changes),
+            "wall_s": round(time.time() - self.t0, 2), "phases": self.phases, "transitions": self.transitions,
+            "rate_changes": list(h.rate_changes),
             "owner": self.lease.info.get("owner"), "lease": ("held" if self.lease.held else
                                                              "disabled" if self.lease.disabled else
                                                              f"unavailable: {self.lease.unavailable}"),
         }
         (self.run_dir / "run.json").write_text(json.dumps(summary, indent=1, default=str))
+        st = self.startup
         if report:
             from ..report.report import build_report
+            st.start("report", "report, insights and run history")
             try:
                 rep = build_report(self.run_dir)
                 summary["report"] = rep["summary"]
+                st.finish("report", f"verdict {rep['summary'].get('verdict')}")
                 self.log(rep["text"])
             except Exception as e:  # noqa: BLE001 - a partial run must still end cleanly
                 import traceback as tb
                 self.log(f"report failed: {e}\n{tb.format_exc()}")
                 summary["report"] = {"verdict": "ABORTED" if h.abort_reason else "ERROR", "reasons": [f"report: {e}"]}
+                st.finish("report", f"report failed: {e}", "failed")
             from ..report.history import store
             store(self.run_dir, log=self.log)
+        else:
+            st.skip("report", "not requested")
+        if st.steps["verify"]["status"] == "pending" and not (h.verifiable and not h.abort_reason):
+            st.skip("verify", "not requested" if not h.abort_reason else "the run was aborted")
+        st.write()
+        # wall time now includes the report; the timeline itself is derived on read (runner/timeline.py), so a
+        # verification that follows is part of it
+        summary["wall_s"] = round(time.time() - self.t0, 2)
+        (self.run_dir / "run.json").write_text(json.dumps({k: v for k, v in summary.items() if k != "report"},
+                                                          indent=1, default=str))
         return summary
 
 

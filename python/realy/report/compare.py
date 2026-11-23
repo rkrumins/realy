@@ -53,12 +53,21 @@ def run_summary(run_dir: Path) -> dict[str, Any]:
     det = rep.get("detection") or {}
     src = (rep.get("resources") or {}).get("sources") or {}
     knee = s.get("knee") or {}
+    from ..runner.timeline import timeline
+    tl = timeline(run_dir, live=status == "running")
+    d = tl["durations"]
+    launched = tl["launched_at"] or (run_dir.stat().st_mtime if run_dir.exists() else 0)
     return {
         "run_id": run_dir.name, "scenario": man.get("scenario") or rep.get("scenario"),
         "topology": man.get("topology") or rep.get("topology"),
-        "started_at": (man.get("t_start_us") or 0) / 1e6 or (run_dir.stat().st_mtime if run_dir.exists() else 0),
-        "duration_s": man.get("duration_s"), "status": status, "phase": live_phase,
-        "abort_kind": ab.get("kind"), "abort_phase": ab.get("phase"), "measured_s": s.get("measured_s"),
+        # when the run was launched (not when its traffic started: preparation can take minutes)
+        "started_at": launched, "launched_at": launched, "traffic_started_at": tl["traffic_start"],
+        "finished_at": tl["finished_at"], "stage": tl["stage"],
+        "duration_s": man.get("duration_s"), "warmup_s": man.get("warmup_s"), "status": status, "phase": live_phase,
+        "abort_kind": ab.get("kind"), "abort_phase": ab.get("phase"),
+        "measured_s": s.get("measured_s") if s.get("measured_s") is not None else d["measured_s"],
+        "prepare_s": d["prepare_s"], "drain_s": d["drain_s"], "report_s": d["report_s"], "verify_s": d["verify_s"],
+        "total_s": d["total_s"],
         "owner": man.get("owner"),
         "verdict": s.get("verdict"), "reasons": s.get("reasons", []),
         "expected_verdict": s.get("expected_verdict"), "matches_expectation": s.get("matches_expectation"),

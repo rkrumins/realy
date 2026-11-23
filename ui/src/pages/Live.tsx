@@ -11,6 +11,7 @@ import { PipelineBanner, StopAllButton } from "@/components/run-controls";
 import { DistributionEditor } from "@/components/editors";
 import { DecisionFeed, LogConsole } from "@/components/feeds";
 import { TopologyMap, useTopology } from "@/components/Topology";
+import { RunLifecycle } from "@/components/run-lifecycle";
 import { StartupPanel } from "@/components/startup";
 import { ghostSeries, ReplayBar, replayRun, startupAt, useReplay } from "@/components/replay";
 import { Badge, Dot } from "@/components/ui/badge";
@@ -23,8 +24,9 @@ import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import type { LatencyDist } from "@/lib/dist";
-import { fmtCompact, fmtDuration, fmtMs, fmtNum, fmtPct, isNum } from "@/lib/format";
-import { activeRun, useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
+import { fmtCompact, fmtMs, fmtNum, fmtPct, isNum } from "@/lib/format";
+import { activeRun, useLiveSeries, useStatus } from "@/lib/hooks";
+import { useServerNow } from "@/lib/timeline";
 import { decisionsAt, focusRunId, live, logsFor, snapshotsAt, STAGE_SERIES, type LivePoint } from "@/lib/live";
 import type { CurrentRun } from "@/lib/types";
 
@@ -195,11 +197,14 @@ export default function Live() {
   const series = useLiveSeries(Number(win), runId, store);
   // warm-up + measurement are timed from the start of live traffic, not from the launch: a large world
   // spends minutes preparing (world, history replay, catch-up) and that shows as startup steps instead
-  const liveElapsed = useElapsed(replay.data ? null : cur?.measure_started_at ?? null);
-  const livePrep = useElapsed(replay.data ? null : cur?.started_at ?? null);
-  const elapsed = replay.data ? (cur?.measure_started_at && clock !== null && clock >= cur.measure_started_at ? clock - cur.measure_started_at : null) : liveElapsed;
-  const prepElapsed = replay.data ? (cur?.started_at && clock !== null ? clock - cur.started_at : null) : livePrep;
-  const activeStep = status?.pipeline?.startup?.steps?.find((s) => s.status === "running");
+  // the whole lifecycle (prepare, warm-up, measure, drain, report, verify) from the server's timeline, on the
+  // server's clock; a replay shows the recorded timeline
+  const liveCur = replay.data ? null : activeRun(liveStatus);
+  const serverNow = useServerNow(liveCur?.server_now ?? null);
+  const timelineNow = replay.data ? (clock ?? serverNow) : serverNow;
+  const lifecycle = replay.data ? replay.data.run.timeline ?? null : liveCur?.timeline ?? null;
+  const startupSteps = status?.pipeline?.startup?.steps?.filter((s) => (s.group ?? "startup") === "startup");
+  const activeStep = startupSteps?.find((s) => s.status === "running");
   // overlay: the previous run of the same scenario, aligned on the start of traffic
   const runsList = useQuery({ queryKey: ["runs-picker"], queryFn: () => api.runs(200), staleTime: 15_000 });
   const finished = (runsList.data?.history ?? []).filter((r) => ["done", "aborted", "failed"].includes(r.status) && r.run_id);
@@ -231,8 +236,6 @@ export default function Live() {
   const backlog = lastOf(series, "backlog");
   const degraded = mean(recent.map((p) => (isNum(p.degraded) && isNum(p.decided) && p.decided > 0 ? p.degraded / p.decided : null)));
   const target = cur?.base_tps ? cur.base_tps * (cur.rate_multiplier || 1) : null;
-  const total = cur ? (cur.warmup_s ?? 0) + (cur.duration_s ?? 0) : null;
-  const progress = elapsed !== null && total ? Math.min(1, elapsed / total) : null;
   const active = Boolean(cur) || series.some((p) => p.emitted);
   const snaps = snapshotsAt(store, runId);
   const graph = topo.data;
@@ -282,30 +285,10 @@ export default function Live() {
       {replay.data?.note && <div className="mb-4 rounded-xl border border-warn/30 bg-warn/8 px-4 py-2.5 text-[13px]">{replay.data.note}</div>}
       {replayId && replay.error && <div className="mb-4 rounded-xl border border-fail/30 bg-fail/8 px-4 py-2.5 text-[13px]">Could not load the run's telemetry: {(replay.error as Error).message}</div>}
 
-      {cur && progress === null && (
-        <div className="-mt-3 mb-5" data-testid="preparing">
-          <div className="mb-1.5 flex flex-wrap justify-between gap-2 text-[11.5px] text-subtle num">
-            <span>preparing for {fmtDuration(prepElapsed)}{activeStep ? ` · step ${activeStep.index}/${status!.pipeline!.startup!.steps.length}: ${activeStep.label.toLowerCase()}` : ""}
-              {activeStep?.progress?.eta_s ? ` · ETA ${fmtDuration(activeStep.progress.eta_s)}` : ""}</span>
-            <span>then {fmtDuration(total)} of traffic{cur.warmup_s ? ` (warm-up ${fmtDuration(cur.warmup_s)})` : ""}</span>
-          </div>
-          <div className="relative h-1.5 overflow-hidden rounded-full bg-surface-3">
-            <div className="absolute inset-y-0 left-0 rounded-full bg-info/60 transition-[width] duration-1000"
-              style={{ width: `${activeStep?.progress?.total ? Math.min(100, (100 * (activeStep.progress.done ?? 0)) / activeStep.progress.total) : 0}%` }} />
-          </div>
-        </div>
-      )}
-      {cur && progress !== null && (
-        <div className="-mt-3 mb-5">
-          <div className="mb-1.5 flex justify-between text-[11.5px] text-subtle num">
-            <span>{fmtDuration(elapsed)} elapsed{cur.warmup_s ? ` · warm-up ${fmtDuration(cur.warmup_s)}` : ""}</span>
-            <span>{fmtDuration(total)} planned</span>
-          </div>
-          <div className="relative h-1.5 overflow-hidden rounded-full bg-surface-3">
-            {cur.warmup_s && total ? <div className="absolute inset-y-0 left-0 bg-warn/25" style={{ width: `${(cur.warmup_s / total) * 100}%` }} /> : null}
-            <div className="absolute inset-y-0 left-0 rounded-full bg-[linear-gradient(90deg,#6366f1,#22d3ee)] transition-[width] duration-1000" style={{ width: `${progress * 100}%` }} />
-          </div>
-        </div>
+      {cur && lifecycle && (
+        <RunLifecycle tl={lifecycle} eta={replay.data ? null : liveCur?.eta} now={timelineNow}
+          verify={replay.data ? lifecycle.verify_start !== null : Boolean(liveCur?.verify)}
+          step={activeStep} nSteps={startupSteps?.length} />
       )}
       {!replay.data && <PipelineBanner status={status} shown />}
       {cur?.abort_reason && (
@@ -322,7 +305,8 @@ export default function Live() {
         <Kpi icon={<Clock />} label="Degraded" value={fmtPct(degraded, 2)} sub="rules-only fallback" tone={isNum(degraded) && degraded > 0.01 ? "warn" : undefined} />
       </div>
 
-      {cur && <StartupPanel startup={status?.pipeline?.startup} phase={cur.phase} />}
+      {cur && <StartupPanel startup={status?.pipeline?.startup} phase={cur.phase} now={timelineNow}
+        prepareS={lifecycle?.traffic_start ? lifecycle.durations.prepare_s : null} />}
 
       <Card className="mt-5">
         <CardHeader title="Pipeline topology"

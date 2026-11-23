@@ -24,6 +24,7 @@ export interface Telemetry {
     run_id: string; scenario: string; topology: string | null; budget: { e2e_p99_ms?: number } | null; base_tps: number | null;
     warmup_s: number | null; duration_s: number | null; started_at: number | null; measure_started_at: number | null;
     ended_at: number | null; verdict: string | null; complete: boolean; first_us?: number; last_us?: number;
+    timeline?: import("./types").RunTimeline;
   };
   metrics: Record<string, Snapshot[]>;
   logs: LogLine[];

@@ -1,4 +1,5 @@
 import { BaseRateAndImpact, Insights, LabelCoverage, ModelEvaluation, StepUpCard } from "@/components/insights";
+import { RunLifecycle } from "@/components/run-lifecycle";
 import { StartupPanel } from "@/components/startup";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -17,6 +18,7 @@ import { Dropdown, DropdownContent, DropdownItem, DropdownTrigger } from "@/comp
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { fmtCompact, fmtDuration, fmtMs, fmtNum, fmtPct, fmtTime, fmtUsd, isNum, titleCase } from "@/lib/format";
+import { useServerNow } from "@/lib/timeline";
 import type { Report, RunDetail, VerifyResult } from "@/lib/types";
 
 function download(name: string, data: unknown) {
@@ -54,8 +56,11 @@ function Hero({ d }: { d: RunDetail }) {
           <h1 className="mt-3 font-mono text-[22px] font-semibold tracking-tight text-fg md:text-[26px]">{d.summary.scenario}</h1>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-muted">
             <span className="font-mono">{d.run_id}</span>
-            <span>{fmtTime(d.summary.started_at)}</span>
-            <span>{fmtDuration(d.summary.duration_s)} measured</span>
+            <span title="when the run was launched">{fmtTime(d.summary.started_at)}</span>
+            <span title="the measured window (after warm-up)">{fmtDuration(s?.measured_s ?? d.summary.measured_s)} measured</span>
+            {isNum(d.summary.prepare_s) && <span title="launch to the start of traffic">prepared in {fmtDuration(d.summary.prepare_s)}</span>}
+            {isNum(d.timeline?.durations.total_s) && <span title="launch to the end of the report and verification">
+              {d.timeline!.live ? "running for" : "total"} {fmtDuration(d.timeline!.durations.total_s)}</span>}
             {s?.expected_verdict && <span>expected {s.expected_verdict}</span>}
           </div>
           {!!s?.reasons?.length && (
@@ -232,7 +237,13 @@ function Parity({ label, checked, parity, notCheckable }: { label: string; check
   );
 }
 
-function Verify({ v }: { v: VerifyResult | null }) {
+function Verify({ v, verifying }: { v: VerifyResult | null; verifying?: boolean }) {
+  if (!v && verifying) return (
+    <>
+      <SectionTitle>Correctness verification</SectionTitle>
+      <EmptyState icon={<Microscope />} title="Verifying…">Features, rules, scores and the audit trail are being recomputed independently. This page updates when the verification ends.</EmptyState>
+    </>
+  );
   if (!v) return (
     <>
       <SectionTitle>Correctness verification</SectionTitle>
@@ -320,9 +331,20 @@ function Verify({ v }: { v: VerifyResult | null }) {
   );
 }
 
+function RunLifecycleAt({ d }: { d: RunDetail }) {
+  const now = useServerNow(d.server_now ?? null);
+  return <RunLifecycle tl={d.timeline!} now={now} verify={Boolean(d.summary.verify_requested) || d.timeline!.verify_start !== null}
+    className="mt-4 mb-6" />;
+}
+
 export default function RunReport() {
   const { id = "" } = useParams();
-  const q = useQuery({ queryKey: ["run", id], queryFn: () => api.run(id), refetchInterval: (qq) => (qq.state.data?.report ? false : 5000) });
+  // poll until the run is over, its verification included (a verification takes minutes after the report)
+  const q = useQuery({ queryKey: ["run", id], queryFn: () => api.run(id), refetchInterval: (qq) => {
+    const dd = qq.state.data;
+    if (!dd?.report) return 5000;
+    return dd.timeline?.live || dd.summary.stage === "verify" ? 3000 : false;
+  } });
   if (q.isLoading) return <div className="space-y-4"><Skeleton className="h-44 rounded-2xl" /><div className="grid grid-cols-4 gap-3">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="h-24 rounded-2xl" />)}</div><Skeleton className="h-80 rounded-2xl" /></div>;
   if (q.error) return <><BackLink /><ErrorState error={q.error} title="Run not found" /></>;
   const d = q.data!;
@@ -337,6 +359,7 @@ export default function RunReport() {
     <>
       <BackLink />
       <Hero d={d} />
+      {d.timeline && <RunLifecycleAt d={d} />}
       {!r ? (
         <EmptyState title="No report yet" icon={<FileText />}>The run is still in progress (or did not finish). This page refreshes automatically.</EmptyState>
       ) : (
@@ -411,11 +434,11 @@ export default function RunReport() {
           )}
 
           <Detection r={r} />
-          <div id="verify" className="scroll-mt-20"><Verify v={d.verify} /></div>
+          <div id="verify" className="scroll-mt-20"><Verify v={d.verify} verifying={d.timeline?.stage === "verify" || (d.summary.verify_requested && d.timeline?.live)} /></div>
           {r.startup && (
             <div id="startup" className="scroll-mt-20">
               <SectionTitle>Startup</SectionTitle>
-              <StartupPanel startup={r.startup} phase="COMPLETE" className="mt-0" />
+              <StartupPanel startup={r.startup} phase="COMPLETE" className="mt-0" prepareS={d.summary.prepare_s ?? r.summary.prepare_s} />
             </div>
           )}
 

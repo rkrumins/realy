@@ -45,8 +45,8 @@ A scenario is one YAML file in `scenarios/` (or saved from the console's builder
 |---|---|---|---|
 | `profile` | `RateProfile` | `(object)` |  |
 | `arrivals` | `Literal["uniform", "poisson"]` | `"uniform"` |  |
-| `duration_s` | `float` | `60.0` |  |
-| `warmup_s` | `float` | `10.0` |  |
+| `duration_s` | `float` | `60.0` | the whole traffic window, warm-up included (measured = duration_s - warmup_s) |
+| `warmup_s` | `float` | `10.0` | the first seconds of the traffic window: sent, excluded from the statistics |
 | `time_scale` | `float \| Literal["auto"]` | `"auto"` | Simulated seconds per wall second. "auto" = the population's natural rate maps onto the target TPS, so each customer behaves realistically (rules fire at realistic rates). |
 | `generators` | `int` | `1` | emitter processes (shards of the customer population) |
 | `sim_start` | `str` | `"2026-11-02T00:00:00Z"` |  |

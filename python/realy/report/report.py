@@ -158,6 +158,20 @@ def _render_mix(mx: dict[str, Any]) -> list[str]:
     return [f"message mix: {mx['messages']:,} messages besides {mx['decided']:,} decided payments: {per}"]
 
 
+def _timing(run_dir: Path, rep: dict[str, Any]) -> None:
+    """The run's startup steps and its timeline (runner/timeline.py): `prepare_s` is everything before
+    traffic, inside a step or not; warm-up belongs to the traffic window, not to the preparation."""
+    from ..runner.startup import read as read_startup
+    from ..runner.timeline import timeline
+    startup = read_startup(run_dir)
+    if startup:
+        rep["startup"] = startup
+    tl = timeline(run_dir, live=False)
+    rep["timeline"] = tl
+    if tl["durations"]["prepare_s"] is not None:
+        rep["summary"]["prepare_s"] = round(tl["durations"]["prepare_s"], 1)
+
+
 def build_report(run_dir: Path | str) -> dict[str, Any]:
     run_dir = Path(run_dir)
     man = json.loads((run_dir / "manifest.json").read_text())
@@ -183,6 +197,7 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
             why, verdict = (run.get("error") and f"error: {run['error']}") or "no events emitted", "ERROR"
         rep["summary"] = {"verdict": verdict, "reasons": [why], "emitted": 0, "decided": 0, "missing": 0,
                           "duplicates": 0, "aborted": abort, "measured_s": 0.0}
+        _timing(run_dir, rep)     # a run aborted while preparing still shows where its time went
         rep["text"] = f"{verdict}: {why}"
         _write(run_dir, rep)
         return rep
@@ -490,12 +505,7 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     mix = message_mix(run_dir, int(summary.get("decided") or summary.get("events") or 0))
     if mix:
         rep["message_mix"] = mix
-    from ..runner.startup import read as read_startup
-    startup = read_startup(run_dir)
-    if startup:
-        rep["startup"] = startup
-        rep["summary"]["prepare_s"] = round(sum(s_.get("duration_s") or 0 for s_ in startup.get("steps", [])
-                                                if s_.get("id") != "measure"), 1)
+    _timing(run_dir, rep)
     expect = scenario.expect.get("verdict")
     if expect:
         rep["summary"]["expected_verdict"] = expect
@@ -887,7 +897,8 @@ def render_text(rep: dict[str, Any]) -> str:
         lines.append("insights:")
         lines += [f"  {mark.get(x['severity'], ' -')} {x['title']}" for x in ins]
     if rep.get("startup"):
-        steps = [x for x in rep["startup"].get("steps", []) if x.get("id") != "measure" and x.get("status") != "pending"]
+        steps = [x for x in rep["startup"].get("steps", []) if x.get("id") not in ("warmup", "measure")
+                 and x.get("group", "startup") == "startup" and x.get("status") != "pending"]
         lines.append(f"startup: prepared in {s.get('prepare_s', 0):.1f} s: " + ", ".join(_startup_item(x) for x in steps))
     lines.append(f"{'step':40s} {'p50':>8s} {'p90':>8s} {'p99':>8s} {'p99.9':>8s} {'max':>8s}  (ms)")
     for k in STEP_ORDER:

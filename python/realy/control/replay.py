@@ -80,6 +80,8 @@ class Replay:
                 "ended_at": (run.get("emission_end_us") or 0) / 1e6 or None,
                 "verdict": ((_json(d / "report.json") or {}).get("summary") or {}).get("verdict"),
                 "complete": (d / "run.json").exists()}
+        from ..runner.timeline import timeline
+        info["timeline"] = timeline(d, live=False if info["complete"] else None)
         metrics = self._metrics(d)
         if metrics:
             ts = [s["ts_us"] for snaps in metrics.values() for s in snaps]
@@ -121,21 +123,28 @@ class Replay:
     def _markers(self, run: dict[str, Any], man: dict[str, Any], info: dict[str, Any]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         base = info.get("started_at")
-        for ph, off in (run.get("phases") or {}).items():
+        # every phase change in order (runs before `transitions` keep the first time of each phase)
+        changes = run.get("transitions") or list((run.get("phases") or {}).items())
+        for ph, off in changes:
             if base is not None and off is not None:
                 out.append({"t": base + float(off), "kind": "phase", "label": str(ph).lower()})
         t0 = info.get("measure_started_at")
         if t0 and not any(m["label"] == "warmup" for m in out):
             out.append({"t": t0, "kind": "phase", "label": "warmup"})
         if t0 and info.get("warmup_s") and not any(m["label"] == "measure" for m in out):
-            out.append({"t": t0 + float(info["warmup_s"]), "kind": "phase", "label": "measure"})
+            ms = (info.get("timeline") or {}).get("measure_start")
+            out.append({"t": float(ms) if ms else t0 + float(info["warmup_s"]), "kind": "phase", "label": "measure"})
         for rc in run.get("rate_changes") or []:
-            t = rc.get("t") or rc.get("ts") or rc.get("wall")
+            # run.json records {"at_us", "mult"} (RunHandle.rate_changes)
+            t = rc.get("at_us") / 1e6 if rc.get("at_us") else (rc.get("t") or rc.get("ts") or rc.get("wall"))
             if t:
-                out.append({"t": float(t), "kind": "rate", "label": f"rate {rc.get('tps') or rc.get('multiplier')}"})
+                mult = rc.get("mult") if rc.get("mult") is not None else rc.get("multiplier")
+                out.append({"t": float(t), "kind": "rate", "label": f"rate x{mult}" if mult is not None
+                            else f"rate {rc.get('tps')}"})
         ab = run.get("abort") or {}
-        if run.get("aborted") and ab.get("at"):
-            out.append({"t": float(ab["at"]), "kind": "abort", "label": f"abort: {ab.get('reason', '')}"[:80]})
+        if run.get("aborted") and base is not None and (ab.get("after_s") is not None or ab.get("at")):
+            t = base + float(ab["after_s"]) if ab.get("after_s") is not None else float(ab["at"])
+            out.append({"t": t, "kind": "abort", "label": f"abort: {ab.get('reason', '')}"[:80]})
         h = (man.get("health") or {})
         if h.get("flink_restarts"):
             out.append({"t": info.get("ended_at") or base or 0, "kind": "health",

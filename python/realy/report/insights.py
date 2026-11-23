@@ -235,7 +235,8 @@ def build_insights(rep: dict[str, Any], cfg: dict[str, Any], prev: dict[str, Any
     # ------------------------------------------------------------------ startup
     if s.get("prepare_s") and s["prepare_s"] > float(th.get("startup_warn_s", 180)):
         steps = sorted(((x["label"], x.get("duration_s") or 0) for x in (rep.get("startup") or {}).get("steps", [])
-                        if x.get("id") not in ("measure", "warmup")), key=lambda kv: -kv[1])[:3]
+                        if x.get("id") not in ("measure", "warmup") and x.get("group", "startup") == "startup"),
+                       key=lambda kv: -kv[1])[:3]
         add("info", "startup", f"preparation took {s['prepare_s']:.0f} s before measuring",
             "; ".join(f"{n.lower()} {v:.0f} s" for n, v in steps), {"prepare_s": s["prepare_s"]}, {"kind": "startup"},
             "keep the pipeline on one world between runs (warm state skips the replay), or shorten backfill_days")

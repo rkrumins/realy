@@ -37,6 +37,7 @@ class RunWorker:
         self.current: dict[str, Any] | None = None      # job dict of the running job
         self.handle: Any = None                           # realy.runner.run.RunHandle
         self.scenario: Any = None                         # validated Scenario of the running job
+        self.verifying = False                            # the running job's run has ended; it is being verified
         self.logs: dict[str, collections.deque] = {}
         self.blocked_by: dict[str, Any] | None = None     # lease holder keeping the next job queued
         self._blocked_job: str | None = None
@@ -87,7 +88,9 @@ class RunWorker:
             h = self.handle
             sc = self.scenario
             cur = {"job_id": self.current["id"], "run_id": self.current.get("run_id"),
-                   "scenario": self.current["scenario"], "phase": getattr(h, "phase", "PREPARE"),
+                   "scenario": self.current["scenario"],
+                   "phase": "VERIFY" if self.verifying else getattr(h, "phase", "PREPARE"),
+                   "verify": bool(self.current.get("verify")),
                    "abort_reason": getattr(h, "abort_reason", None), "abort_kind": getattr(h, "abort_kind", None),
                    "started_at": self.current.get("started_at"),
                    "rate_multiplier": float(h.rate_mult.value) if h is not None and h.rate_mult is not None else 1.0,
@@ -228,8 +231,12 @@ class RunWorker:
                 fields.update(status="failed", error=str(res["exception"])[:2000])
             if job["verify"] and not aborted:
                 self._log(run_id, "[console] verifying ...")
+                self.verifying = True
                 try:
-                    v = self.verify_fn(self.runs_dir / run_id)
+                    from ..runner.startup import timed_step
+                    with timed_step(self.runs_dir / run_id, "verify", "recomputing features, rules, scores, audit") as t:
+                        v = self.verify_fn(self.runs_dir / run_id)
+                        t.detail = "PASS" if v.get("passed") else "FAIL"
                     fields["verify_passed"] = int(bool(v.get("passed")))
                     from ..verify.verify import render
                     self._log(run_id, render(v))
@@ -237,6 +244,9 @@ class RunWorker:
                     store(self.runs_dir / run_id, log=lambda m: self._log(run_id, m))   # refresh with verify results
                 except Exception as e:  # noqa: BLE001
                     self._log(run_id, f"[console] verify failed: {e}")
+                finally:
+                    self.verifying = False
+            fields["finished_at"] = time.time()      # the job ends after its verification, not before
             self.store.update(job["id"], **fields)
         except PipelineBusy as e:  # type: ignore[misc]
             busy = True

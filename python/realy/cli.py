@@ -89,8 +89,11 @@ def run(scenario: str = typer.Argument(..., help="scenario name (scenarios/<name
         raise typer.Exit(3)
     verdict = res.get("report", {}).get("verdict")
     if verify_ and verdict != "ABORTED":
+        from .runner.startup import timed_step
         from .verify.verify import render, verify_run
-        v = verify_run(Path(res["run_dir"]))
+        with timed_step(Path(res["run_dir"]), "verify", "recomputing features, rules, scores, audit") as t:
+            v = verify_run(Path(res["run_dir"]))
+            t.detail = "PASS" if v.get("passed") else "FAIL"
         typer.echo(render(v))
         if not v.get("passed"):
             typer.echo(f"report: {res['run_dir']}/report.html")
@@ -169,8 +172,11 @@ def report(run_dir: Path):
 def verify(run_dir: Path, clickhouse: Optional[str] = typer.Option(None, help="ClickHouse HTTP URL"),
            max_events: int = typer.Option(1_000_000, help="above this, verify a customer sample")):
     """Independent correctness checks: features, CEL rule parity, score/outcome parity, ClickHouse audit."""
+    from .runner.startup import timed_step
     from .verify.verify import render, verify_run
-    v = verify_run(run_dir, clickhouse=clickhouse, max_events=max_events)
+    with timed_step(run_dir, "verify", "recomputing features, rules, scores, audit") as t:
+        v = verify_run(run_dir, clickhouse=clickhouse, max_events=max_events)
+        t.detail = "PASS" if v.get("passed") else "FAIL"
     typer.echo(render(v))
     from .report.history import store
     store(run_dir, clickhouse, log=lambda m: typer.echo(m, err=True))

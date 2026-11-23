@@ -34,8 +34,10 @@ function secs(s?: number) {
   return s < 10 ? `${s.toFixed(1)} s` : s < 120 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
 }
 
-function StepRow({ s }: { s: StartupStep }) {
+function StepRow({ s, now }: { s: StartupStep; now?: number }) {
   const { icon: Icon, cls } = ICON[s.status] ?? ICON.pending;
+  // a running step's time is counted to now (the record is written only on progress, start and finish)
+  const dur = s.status === "running" && s.started_at && now ? Math.max(0, now - s.started_at) : s.duration_s;
   const pct = s.progress?.total ? Math.min(1, (s.progress.done || 0) / s.progress.total) : null;
   return (
     <li className={cn("flex gap-3 py-2", s.status === "pending" && "opacity-55")}>
@@ -44,7 +46,7 @@ function StepRow({ s }: { s: StartupStep }) {
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-[13px] font-medium text-fg"><span className="mr-1.5 font-mono text-[11px] text-subtle">{s.index}</span>{s.label}</span>
           <span className="shrink-0 font-mono text-[11.5px] text-subtle num">
-            {s.status === "skipped" ? "skipped" : secs(s.duration_s)}
+            {s.status === "skipped" ? "skipped" : secs(dur)}
           </span>
         </div>
         {s.status === "running" && pct !== null && (
@@ -61,20 +63,29 @@ function StepRow({ s }: { s: StartupStep }) {
   );
 }
 
-export function StartupPanel({ startup, phase, className }: { startup: StartupSnapshot | null | undefined; phase?: string | null; className?: string }) {
-  const measuring = phase === "MEASURE" || phase === "DRAIN" || phase === "COMPLETE";
+/**
+ * @param prepareS everything before traffic (the run's timeline), inside a step or not; without it the
+ *   steps before warm-up are summed (an older backend)
+ * @param now the server's clock, for the running step's time
+ */
+export function StartupPanel({ startup, phase, className, prepareS, now }: {
+  startup: StartupSnapshot | null | undefined; phase?: string | null; className?: string; prepareS?: number | null; now?: number;
+}) {
+  const measuring = ["MEASURE", "DRAIN", "COMPLETE", "VERIFY"].includes(phase ?? "");
   const [open, setOpen] = React.useState(!measuring);
   React.useEffect(() => { setOpen(!measuring); }, [measuring]);
-  if (!startup?.steps?.length) return null;
-  const active = startup.steps.find((s) => s.status === "running");
-  const failed = startup.steps.filter((s) => s.status === "failed" || s.status === "warn");
-  const prepS = startup.steps.filter((s) => s.id !== "measure" && isNum(s.duration_s)).reduce((a, s) => a + (s.duration_s ?? 0), 0);
-  const half = Math.ceil(startup.steps.length / 2);
+  const steps = (startup?.steps ?? []).filter((s) => (s.group ?? "startup") === "startup");
+  if (!steps.length) return null;
+  const active = steps.find((s) => s.status === "running");
+  const failed = steps.filter((s) => s.status === "failed" || s.status === "warn");
+  const prepS = isNum(prepareS) ? prepareS
+    : steps.filter((s) => s.id !== "measure" && s.id !== "warmup" && isNum(s.duration_s)).reduce((a, s) => a + (s.duration_s ?? 0), 0);
+  const half = Math.ceil(steps.length / 2);
   return (
     <Card className={cn("mt-5", className)}>
       <CardHeader title="Startup"
-        subtitle={active ? `${active.index}/${startup.steps.length} · ${active.label}${active.progress ? ` · ${fmtStartupProgress(active.progress)}` : ""}`
-          : `prepared in ${secs(prepS)}`}
+        subtitle={active ? `${active.index}/${steps.length} · ${active.label}${active.progress ? ` · ${fmtStartupProgress(active.progress)}` : ""}`
+          : `prepared in ${secs(prepS)} (launch to traffic)`}
         actions={<div className="flex items-center gap-2">
           {failed.length > 0 && <Badge tone="warn">{failed.length} step{failed.length > 1 ? "s" : ""} need attention</Badge>}
           <button type="button" onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] text-muted hover:bg-surface-2"
@@ -83,8 +94,8 @@ export function StartupPanel({ startup, phase, className }: { startup: StartupSn
       {open && (
         <CardBody>
           <div className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
-            <ol className="divide-y divide-border">{startup.steps.slice(0, half).map((s) => <StepRow key={s.id} s={s} />)}</ol>
-            <ol className="divide-y divide-border">{startup.steps.slice(half).map((s) => <StepRow key={s.id} s={s} />)}</ol>
+            <ol className="divide-y divide-border">{steps.slice(0, half).map((s) => <StepRow key={s.id} s={s} now={now} />)}</ol>
+            <ol className="divide-y divide-border">{steps.slice(half).map((s) => <StepRow key={s.id} s={s} now={now} />)}</ol>
           </div>
         </CardBody>
       )}
@@ -94,11 +105,12 @@ export function StartupPanel({ startup, phase, className }: { startup: StartupSn
 
 /** One line for the Overview's "running now" card. */
 export function ActiveStartupStep({ startup }: { startup: StartupSnapshot | null | undefined }) {
-  const s = startup?.steps?.find((x) => x.status === "running");
+  const steps = (startup?.steps ?? []).filter((x) => (x.group ?? "startup") === "startup");
+  const s = steps.find((x) => x.status === "running");
   if (!s) return null;
   return (
     <div className="mt-1 text-[12px] text-muted">
-      Startup {s.index}/{startup!.steps.length}: <span className="text-fg">{s.label}</span>
+      Startup {s.index}/{steps.length}: <span className="text-fg">{s.label}</span>
       {s.progress ? <span className="font-mono num"> · {fmtStartupProgress(s.progress)}</span> : s.detail ? ` · ${s.detail}` : ""}
     </div>
   );

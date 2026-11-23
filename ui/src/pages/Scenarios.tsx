@@ -246,7 +246,7 @@ export default function Scenarios() {
                 title="restore the version this image ships (your edit is kept in .backup/)"><RotateCcw />Reset to bundled</Button>
             )}
             {parseErr && <Badge tone="fail"><AlertTriangle />YAML error</Badge>}
-            <span className="ml-auto text-[12px] text-subtle num">{fmtCompact(peakTps)} TPS peak · {fmtDuration(duration)} + {fmtDuration(warmup)} warm-up</span>
+            <span className="ml-auto text-[12px] text-subtle num">{fmtCompact(peakTps)} TPS peak · {fmtDuration(duration)} of traffic, warm-up {fmtDuration(warmup)} of it</span>
             <Button size="sm" variant="ghost" onClick={() => nav(`/launch?scenario=${encodeURIComponent(name)}`)} disabled={dirty}><Rocket />Launch</Button>
           </div>
           {errors.length > 0 && (
@@ -418,7 +418,7 @@ export default function Scenarios() {
                     ))}
                   </div>
                   <Button variant="outline" size="sm" className="mt-3" onClick={() => upd(["fraud", "campaigns"], [...campaigns, { kind: "card_testing", at_s: Math.round(warmup + duration / 2), count: 1 }])}><Plus />Add campaign</Button>
-                  <CampaignTimeline campaigns={campaigns} total={warmup + duration} warmup={warmup} />
+                  <CampaignTimeline campaigns={campaigns} total={duration} warmup={warmup} />
                 </Section>
               </TabsContent>
 

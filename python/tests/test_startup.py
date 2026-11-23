@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from realy.runner import flink as flink_mod
-from realy.runner.startup import STEPS, Startup, fmt_progress
+from realy.runner.startup import FINISH_STEPS, STEPS, Startup, fmt_progress
 
 
 def test_steps_log_consistently_and_persist(tmp_path):
@@ -24,7 +24,8 @@ def test_steps_log_consistently_and_persist(tmp_path):
     assert lines[3] == f"[startup {p}/{n}] scoring-path prime skipped in 0.0 s: scoring path already warm"
     snap = json.loads((tmp_path / "startup.json").read_text())
     by = {s["id"]: s for s in snap["steps"]}
-    assert [s["id"] for s in snap["steps"]] == [sid for sid, _ in STEPS]
+    assert [s["id"] for s in snap["steps"]] == [sid for sid, _ in STEPS + FINISH_STEPS]
+    assert {s["group"] for s in snap["steps"][len(STEPS):]} == {"finish"}
     assert by["history"]["status"] == "done" and by["prime"]["status"] == "skipped"
     assert by["world"]["status"] == "pending" and snap["active"] is None
 

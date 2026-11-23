@@ -112,8 +112,8 @@ class RateProfile(_Model):
 class TrafficSpec(_Model):
     profile: RateProfile = Field(default_factory=RateProfile)
     arrivals: Literal["uniform", "poisson"] = "uniform"
-    duration_s: float = 60.0
-    warmup_s: float = 10.0
+    duration_s: float = 60.0         # the whole traffic window, warm-up included (measured = duration_s - warmup_s)
+    warmup_s: float = 10.0           # the first seconds of the traffic window: sent, excluded from the statistics
     # Simulated seconds per wall second. "auto" = the population's natural rate maps onto the
     # target TPS, so each customer behaves realistically (rules fire at realistic rates).
     time_scale: float | Literal["auto"] = "auto"

@@ -49,6 +49,9 @@ COLUMNS: list[tuple[str, str, str]] = [
     ("status", "LowCardinality(String)", "status"),
     ("abort_kind", "LowCardinality(String)", "abort_kind"),
     ("measured_s", "Nullable(Float64)", "measured_s"),
+    ("prepare_s", "Nullable(Float64)", "prepare_s"),
+    ("verify_s", "Nullable(Float64)", "verify_s"),
+    ("total_s", "Nullable(Float64)", "total_s"),
     ("git_sha", "LowCardinality(String)", "git_sha"),
     ("images", "String", "images"),
     ("report", "String CODEC(ZSTD(3))", "report"),
@@ -71,7 +74,7 @@ ORDER BY (scenario, run_id);
 
 def migrations() -> list[str]:
     """Columns added after the first release: re-applying the DDL upgrades an existing table in place."""
-    added = ("status", "abort_kind", "measured_s")
+    added = ("status", "abort_kind", "measured_s", "prepare_s", "verify_s", "total_s")
     return [f"`{c}` {t}" for c, t, _ in COLUMNS if c in added]
 
 
