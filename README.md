@@ -138,7 +138,7 @@ The docs are rendered in the console (**Docs**) and on GitHub.
 
 | Start here | Concepts | Run & deploy | Reference |
 |---|---|---|---|
-| [Getting started](docs/getting-started.md) | [Architecture](docs/architecture.md) | [Running benchmarks](docs/running-benchmarks.md) | [Scenario schema](docs/reference/scenario-schema.md) |
+| [Getting started](docs/getting-started.md) | [Architecture](docs/architecture.md) | [Building your pipeline](docs/building-your-pipeline.md) · [Running benchmarks](docs/running-benchmarks.md) | [Scenario schema](docs/reference/scenario-schema.md) |
 | [Console guide](docs/console-guide.md) | [Feature store, state & inference](docs/feature-store-and-inference.md) | [Docker](docs/deployment-docker.md) | [Runtime config](docs/reference/config.md) |
 | [Scenarios](docs/scenarios.md) | [Fraud detection](docs/fraud-detection.md) | [Kubernetes](docs/deployment-kubernetes.md) · [GKE / L4](docs/k8s-l4.md) | [CLI](docs/reference/cli.md) · [HTTP API](docs/reference/http-api.md) |
 | [Developer guide](docs/developer-guide.md) | [Contracts](docs/contracts.md) · [Synthetic data](docs/synthetic-data.md) | [Production & sizing](docs/production.md) · [Capacity planning](docs/capacity-planning.md) | [Features](docs/reference/features.md) · [Rules](docs/reference/rules.md) |

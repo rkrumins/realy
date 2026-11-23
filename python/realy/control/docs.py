@@ -19,7 +19,7 @@ NAV: list[tuple[str, list[str]]] = [
     ("Start here", ["getting-started.md", "console-guide.md", "scenarios.md"]),
     ("Concepts", ["architecture.md", "reference/topologies.md", "components.md", "feature-store-and-inference.md", "fraud-detection.md", "contracts.md",
                   "synthetic-data.md", "latency-budget.md"]),
-    ("Run & deploy", ["running-benchmarks.md", "real-infrastructure.md", "production-pipeline.md", "deployment-docker.md",
+    ("Run & deploy", ["building-your-pipeline.md", "running-benchmarks.md", "real-infrastructure.md", "production-pipeline.md", "deployment-docker.md",
                       "deployment-kubernetes.md", "k8s-l4.md",
                       "production.md", "capacity-planning.md", "operations.md", "security.md"]),
     ("Develop", ["developer-guide.md", "dev/schemas.md", "dev/transactions.md", "dev/topologies.md", "dev/features.md", "dev/flink-job.md", "dev/extending.md", "dev/external-scorer.md", "dev/messages.md"]),
