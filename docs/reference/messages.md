@@ -12,6 +12,7 @@ Every message that goes in or out of the pipeline. The protobuf files are the co
 | `payments.events.assembled` | `realy.payments.v1.TransactionEvent` | customer_id (decimal string) | `x-bench-trace`, `x-run-id`, `x-txn`, `x-read-only` | 48 |  |  |
 | `payments.decisions` | `realy.scoring.v1.DecisionRecord` | customer_id (decimal string) |  | 48 | gateway (`DecisionSink`), Flink inline job (`decisions-sink`) | collector (`collect/collector.py`), ClickHouse `decisions` (Kafka engine), console live feed |
 | `payments.devices.telemetry` | `realy.devices.v1.DeviceTelemetry` | device_id (decimal string) | `x-event-type`, `x-run-id`, `x-backfill` | 24 |  |  |
+| `payments.payees.listings` | `realy.payees.v1.PayeeListingChanged` | payee_id (decimal string) | `x-event-type`, `x-run-id`, `x-backfill` | 12 |  |  |
 | `payments.events.dlq` | `the original record's bytes, unchanged` | the original record's key | `x-dlq-error`, `x-dlq-service`, `x-dlq-source` | 6 |  |  |
 | `payments.labels` | `realy.payments.v1.FraudLabel` | customer_id (decimal string) |  | 12 | emitter, at each label's simulated time (needs the `x-run-id` header) | ClickHouse `labels` (Kafka engine) for training and reports |
 | `bench.control` | `realy.bench.v1.ControlMessage (proto3 JSON)` | <target> |  | 1 | runner (`common/control.py`), console control drawer (`/api/live/*`) | gateway, model server, Flink jobs, emitters (`<target>:<cmd>` keys; `*` = every service) |

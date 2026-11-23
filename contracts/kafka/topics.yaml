@@ -45,6 +45,16 @@ topics:
     timestamp: CreateTime
     retention_ms: 21600000
     config: { compression.type: lz4, message.timestamp.type: CreateTime }
+  payments.payees.listings:
+    partitions: 12
+    key: payee_id (decimal string)   # a payee's listings stay ordered; it belongs to no customer
+    value: realy.payees.v1.PayeeListingChanged
+    # fraud operations' payee lists for pipelines that fold them into payee features (payments-status): it
+    # joins the Flink job's keyed stages at the payee stage. x-event-type: payee_listing_changed
+    headers: [x-event-type, x-run-id, x-backfill]
+    timestamp: CreateTime
+    retention_ms: 21600000
+    config: { compression.type: lz4 }
   payments.events.dlq:
     partitions: 6
     key: the original record's key

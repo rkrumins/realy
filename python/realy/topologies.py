@@ -118,9 +118,20 @@ def steps(topology: str, flows: bool = False) -> list[dict[str, Any]]:
 def graph(topology: str, flows: bool = False, stream_entities: list[str] | None = None) -> dict[str, Any]:
     """The live map of `topology`: nodes on a column / row grid with the metrics that feed them, and the
     hops between them, built from its steps (`for_each: stream_entities` expanded, chained)."""
+    hosted: dict[str, list[str]] = {}
     if stream_entities is None:
+        # one node per keyed stage: an entity computed in its owner's stage (an account in its customer's) shares it
+        from .bindings.registry import registry
         from .features import load_schema
-        stream_entities = load_schema().stream_entities()
+        reg = registry()
+        stream_entities = []
+        for e in load_schema().stream_entities():
+            st = reg.stage_of(e)
+            if st == e:
+                stream_entities.append(e)
+            else:
+                hosted.setdefault(st, []).append(e)
+        stream_entities += [h for h in hosted if h not in stream_entities]
     comps = load().get("components") or {}
     flows = bool(flows) and runtime(topology).supports_flows
     nodes: list[dict[str, Any]] = []
@@ -143,7 +154,8 @@ def graph(topology: str, flows: bool = False, stream_entities: list[str] | None 
     def node(sid: str, st: dict[str, Any], col: int, row: int, entity: str | None = None) -> None:
         nonlocal max_col
         comp = comps.get(st["component"]) or {}
-        fill = (lambda x: x.replace("{entity}", entity) if isinstance(x, str) and entity else x)
+        shown = " + ".join([entity, *hosted.get(entity, [])]) if entity else entity
+        fill = (lambda x: x.replace("{entity}", shown) if isinstance(x, str) and entity else x)
         n = {"id": sid, "label": fill(st.get("label") or comp.get("label") or sid), "kind": comp.get("kind", "service"),
              "column": col, "row": row, "rate": _metric(st.get("rate"), entity), "p99": _metric(st.get("p99"), entity),
              "subtitle": fill(st.get("sub")), "component": st["component"], "does": fill(st.get("does"))}
