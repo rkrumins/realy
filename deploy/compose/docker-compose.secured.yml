@@ -5,17 +5,21 @@
 #               (the runner only verifies them: REALY_KAFKA_TOPICS=verify)
 #   Redis       a three-node Redis Cluster with a password (16384 slots over three primaries)
 #   ClickHouse  a named user with a password (the default user removed)
-# Start (passwords are dev defaults; override them with the SECURED_* variables):
-#   docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml up -d
+# Start: `make secured-up` writes deploy/compose/secured.env (git-ignored) with random passwords on first use,
+# then runs:
+#   docker compose --env-file deploy/compose/secured.env \
+#     -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml up -d
+# No password is in this file: SECURED_KAFKA_PASSWORD, SECURED_REDIS_PASSWORD and SECURED_CLICKHOUSE_PASSWORD
+# are required.
 # then `docker compose ... exec console pulsebench infra check smoke` shows each component as it is used.
 x-sasl: &sasl
   KAFKA_BOOTSTRAP: kafka:29094
   KAFKA_SECURITY_PROTOCOL: SASL_PLAINTEXT
   KAFKA_SASL_MECHANISM: PLAIN
   KAFKA_SASL_USERNAME: pulsebench
-  KAFKA_SASL_PASSWORD: ${SECURED_KAFKA_PASSWORD:-pulsebench-kafka-dev}
+  KAFKA_SASL_PASSWORD: ${SECURED_KAFKA_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}
 x-redis-cluster: &redis-cluster
-  REDIS_URI: redis://:${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}@redis-c1:6379
+  REDIS_URI: redis://:${SECURED_REDIS_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}@redis-c1:6379
   REDIS_MODE: cluster
 x-redis-node: &redis-node
   image: redis:8.8-alpine
@@ -34,12 +38,12 @@ services:
       KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
       KAFKA_LISTENER_NAME_SASL_PLAIN_SASL_JAAS_CONFIG: >-
         org.apache.kafka.common.security.plain.PlainLoginModule required
-        user_pulsebench="${SECURED_KAFKA_PASSWORD:-pulsebench-kafka-dev}";
+        user_pulsebench="${SECURED_KAFKA_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}";
 
   redis-c1:
     <<: *redis-node
     hostname: redis-c1
-    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}" }
+    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}" }
     command: &redis-cluster-cmd
       - sh
       - -c
@@ -52,18 +56,18 @@ services:
   redis-c2:
     <<: *redis-node
     hostname: redis-c2
-    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}" }
+    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}" }
     command: *redis-cluster-cmd
   redis-c3:
     <<: *redis-node
     hostname: redis-c3
-    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}" }
+    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}" }
     command: *redis-cluster-cmd
   # Forms the cluster once: three primaries, no replicas (an operator's job on a managed service).
   redis-cluster-init:
     image: redis:8.8-alpine
     restart: "no"
-    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}" }
+    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}" }
     depends_on:
       redis-c1: { condition: service_healthy }
       redis-c2: { condition: service_healthy }
@@ -84,8 +88,8 @@ services:
       KAFKA_BROKERS: kafka:29094
       CLICKHOUSE_SKIP_USER_SETUP: "0"
       CLICKHOUSE_USER: pulsebench
-      CLICKHOUSE_PASSWORD: ${SECURED_CLICKHOUSE_PASSWORD:-pulsebench-ch-dev}
-      KAFKA_SASL_PASSWORD: ${SECURED_KAFKA_PASSWORD:-pulsebench-kafka-dev}
+      CLICKHOUSE_PASSWORD: ${SECURED_CLICKHOUSE_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}
+      KAFKA_SASL_PASSWORD: ${SECURED_KAFKA_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}
     volumes:
       - ./clickhouse/secured.xml:/etc/clickhouse-server/config.d/secured.xml:ro
       # its own data: the Kafka engine tables are created (with this profile's broker list) only on an empty
@@ -113,7 +117,7 @@ services:
       FLINK_KAFKA_BOOTSTRAP: kafka:29094
       REALY_KAFKA_TOPICS: verify
       CLICKHOUSE_USER: pulsebench
-      CLICKHOUSE_PASSWORD: ${SECURED_CLICKHOUSE_PASSWORD:-pulsebench-ch-dev}
+      CLICKHOUSE_PASSWORD: ${SECURED_CLICKHOUSE_PASSWORD:?run make secured-up, or set it in deploy/compose/secured.env}
     depends_on:
       redis-cluster-init: { condition: service_completed_successfully }
 

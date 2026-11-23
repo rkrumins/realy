@@ -16,3 +16,4 @@ python/realy/control/static/
 .DS_Store
 deploy/compose/external.env
 deploy/compose/plugins/*.jar
+deploy/compose/secured.env

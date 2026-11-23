@@ -186,17 +186,19 @@ the ones managed services impose, so every client takes the code path it takes i
 | ClickHouse | the default user | a named user with a password (the default user removed) | the credentials headers of every Python query, the init scripts |
 
 ```bash
-docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml up -d
-docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml \
-  exec console pulsebench infra check smoke        # Kafka SASL_PLAINTEXT, Redis cluster (3 primaries), ...
-docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml \
-  exec console pulsebench run smoke --verify
+make secured-up                  # first use writes deploy/compose/secured.env with random passwords
+S="docker compose --env-file deploy/compose/secured.env -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml"
+$S exec console pulsebench infra check smoke      # Kafka SASL_PLAINTEXT, Redis cluster (3 primaries), ...
+$S exec console pulsebench run smoke --verify
+make secured-down                # back to the bundled stack
 ```
 
-The passwords are development defaults (`SECURED_KAFKA_PASSWORD`, `SECURED_REDIS_PASSWORD`,
-`SECURED_CLICKHOUSE_PASSWORD` override them). ClickHouse keeps a data volume per profile, because its
-Kafka engine tables are created with the profile's broker list. Return to the bundled stack with
-`docker compose -f deploy/compose/docker-compose.yml up -d --remove-orphans`.
+No password is in the repository. The overlay requires `SECURED_KAFKA_PASSWORD`,
+`SECURED_REDIS_PASSWORD` and `SECURED_CLICKHOUSE_PASSWORD`, and compose refuses to start without them.
+`make secured-env` (run by `secured-up`) draws them at random into `deploy/compose/secured.env`, which is
+git-ignored and readable only by its owner; `secured.env.example` lists them. The file is kept between
+runs, because the stack's data was created with those passwords. ClickHouse keeps a data volume per
+profile, because its Kafka engine tables are created with the profile's broker list.
 
 **Measured** (2026-11-22, `smoke`, 500 TPS on one 4-vCPU host):
 - **Latency:** PASS, e2e p99 107 ms, 99.46% within budget.

@@ -5,11 +5,13 @@ SHELL := /bin/bash
 COMPOSE_FILE := deploy/compose/docker-compose.yml
 COMPOSE := docker compose -f $(COMPOSE_FILE)
 COMPOSE_PROXY := $(COMPOSE) -f deploy/compose/docker-compose.proxy.yml
+SECURED_ENV := deploy/compose/secured.env
+COMPOSE_SECURED := docker compose --env-file $(SECURED_ENV) -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.secured.yml
 VENV := .venv
 PY := $(VENV)/bin/python
 REALY := $(VENV)/bin/realy
 
-.PHONY: help up up-proxy up-obs down logs ps images console-shell smoke live-test migrate eval k8s-local k8s-test k8s-down k8s-validate codegen docs \
+.PHONY: help up up-proxy up-obs secured-env secured-up secured-down down logs ps images console-shell smoke live-test migrate eval k8s-local k8s-test k8s-down k8s-validate codegen docs \
         dev-venv dev-proto dev-build dev-test test test-java test-python dev-ui dev-console dev-up flink-reload \
         verify budget train clean
 
@@ -23,6 +25,15 @@ up: ## Build everything from source in Docker and start the full stack (console:
 
 up-proxy: ## Same as `up` behind a TLS-intercepting proxy (REALY_BUILD_CA=<pem> HTTPS_PROXY=<url>)
 	$(COMPOSE_PROXY) up -d --build
+
+secured-env: ## Write deploy/compose/secured.env with random passwords (once; git-ignored)
+	@deploy/compose/secured-env.sh $(SECURED_ENV)
+
+secured-up: secured-env ## Start on production-shaped infrastructure: SASL Kafka, Redis Cluster, ClickHouse user
+	$(COMPOSE_SECURED) up -d --remove-orphans
+
+secured-down: ## Return to the bundled stack (the secured profile keeps its own ClickHouse volume)
+	$(COMPOSE) up -d --remove-orphans
 
 up-obs: ## Also start Prometheus (:9090) + Grafana (:3000)
 	$(COMPOSE) --profile obs up -d

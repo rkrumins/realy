@@ -30,21 +30,23 @@ def test_auth_off_by_default(tmp_path, monkeypatch):
 
 
 def test_auth_token_cookie_and_bearer(tmp_path, monkeypatch):
-    monkeypatch.setenv("REALY_CONSOLE_TOKEN", "s3cret-token")
+    import secrets
+    tok = secrets.token_hex(12)                # drawn per run: no credential-shaped literal in the repository
+    monkeypatch.setenv("REALY_CONSOLE_TOKEN", tok)
     c = make_client(tmp_path)
     assert c.get("/api/runs").status_code == 401
     assert c.get("/api/health").status_code == 200
     assert c.get("/api/auth/me").json() == {"auth_required": True, "authenticated": False}
     assert c.post("/api/auth/login", json={"token": "wrong"}).status_code == 401
-    r = c.post("/api/auth/login", json={"token": "s3cret-token"})
+    r = c.post("/api/auth/login", json={"token": tok})
     assert r.status_code == 200 and "realy_session" in r.cookies
-    assert "s3cret-token" not in r.headers.get("set-cookie", "")
+    assert tok not in r.headers.get("set-cookie", "")
     assert c.get("/api/runs").status_code == 200
     assert c.get("/api/auth/me").json()["authenticated"] is True
     c.post("/api/auth/logout")
     c.cookies.clear()
     assert c.get("/api/runs").status_code == 401
-    assert c.get("/api/runs", headers={"Authorization": "Bearer s3cret-token"}).status_code == 200
+    assert c.get("/api/runs", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
     with pytest.raises(Exception):
         with c.websocket_connect("/api/live") as ws:
             ws.receive_json()

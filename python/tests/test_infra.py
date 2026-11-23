@@ -84,11 +84,13 @@ def test_redis_mode_can_be_forced_and_defaults_to_asking(monkeypatch):
 def test_clickhouse_credentials_travel_in_headers(monkeypatch, tmp_path):
     monkeypatch.delenv("CLICKHOUSE_USER", raising=False)
     assert clickhouse.headers() == {}
+    import secrets
+    key = secrets.token_hex(8)                 # drawn per run: no credential-shaped literal in the repository
     pw = tmp_path / "pw"
-    pw.write_text("s3cret\n")
+    pw.write_text(key + "\n")
     monkeypatch.setenv("CLICKHOUSE_USER", "bench")
     monkeypatch.setenv("CLICKHOUSE_PASSWORD_FILE", str(pw))
-    assert clickhouse.headers() == {"X-ClickHouse-User": "bench", "X-ClickHouse-Key": "s3cret"}
+    assert clickhouse.headers() == {"X-ClickHouse-User": "bench", "X-ClickHouse-Key": key}
     monkeypatch.setenv("CLICKHOUSE_URL", "https://ch.example.com:8443/")
     assert clickhouse.url() == "https://ch.example.com:8443"
 
