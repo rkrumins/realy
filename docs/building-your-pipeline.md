@@ -43,11 +43,12 @@ On this repository's compose stack, on one 4-vCPU / 15 GB host shared by every c
 | Logins, profile changes, card lifecycle and device telemetry feed customer, card, device and IP features alongside payments; customer and card features stay exact | `m2-multi-type-inline`: 30,000 payments + 29,588 other messages, exact-set agreement 100%, device and IP features 98.4% or better (agreement-only, as for payments), rule / score / outcome parity 100%, audit 30,000 / 30,000 |
 | The same through the asynchronous gateway (features read from the online store) | `m1-multi-type-smoke`: exact-set 99.42%, parity 100%, audit complete; the remainder is store lag (a login seconds before its payment) |
 | The new signals reach rules | `rules-whatif` of `baseline-ext` on `m2`: fraud flagged 86.3% → 99.7%, false positives 3.73% → 3.82%. The signals are synthetic (the generator skews logins and telemetry around fraud), so this proves the path, not real-world lift |
+| Rich payments: nested blocks inside `TransactionEvent` (card, account, merchant, device, payee, authentication, a basket of items, attributes), with filters, stream features, an entity key and rules on nested paths, through Flink | `n1-rich-inline` (73 features, 11 on nested paths): exact-set agreement 100%, rule / score / outcome parity 100%, audit 30,000 / 30,000. `n2-rich-smoke` through the gateway: exact-set 99.94%, parity 100%. Nested columns populated in ClickHouse (`card_info.status`, `items.sku`, `authentication.attempts`, the attributes map) |
 | Multi-message transactions assemble and decide exactly | `flows-inline`: exact 100% |
 | Synchronous decisions within the budget | `sync-budget4`: 45,010 requests at 500/s, 100% within 150 ms, p99 51 ms |
 | Real infrastructure: SASL Kafka, a 3-node Redis Cluster with a password, ClickHouse with a user | `r8-secured-smoke5`: p99 107 ms, verify PASS |
 | Your own scorer as a black box | `r6-external`: 30,000 / 30,000 decided, 0 duplicates |
-| Payments unchanged by all of this | the golden payments set and state bytes (`GoldenPaymentsTest`, `tests/test_golden_payments.py`); `m4-smoke-payments-warm` on the payments pipeline with the new images: verify PASS (exact-set 99.78%, parity 100%), e2e p99 147 ms with 99.07% within 150 ms, CPU per event as before (gateway 1.08 ms, Flink 1.63 ms). The verdict still flags p99 drift, this host's I/O noise (throughput, below) |
+| Payments unchanged by all of this | the golden payments set and state bytes (`GoldenPaymentsTest`, `tests/test_golden_payments.py`); `n3-payments-smoke` on the payments pipeline after the nested blocks: PASS, e2e p99 111 ms with 99.82% within 150 ms, verify PASS (exact-set 99.80%, parity 100%); the flat payment path within ±3% in `HotPathBench` |
 
 ## What is not proven yet: throughput
 
@@ -55,6 +56,7 @@ On this repository's compose stack, on one 4-vCPU / 15 GB host shared by every c
 |---|---|
 | 500 payments/s, payments only | within budget on this host on warm state (`m4-smoke-payments-warm` p99 147 ms, `sync-budget4` p99 51 ms); a fresh-state run whose feature catch-up overlaps the measured window does not (`m3`: p99 282 ms) |
 | 500 payments/s + about 1 other message per payment | correct, **over budget**: e2e p99 300 ms (`m1`, `m2`). The host runs Kafka, Flink, Redis, ClickHouse, the gateway, the model and the load generator on 4 vCPUs |
+| 500 rich payments/s (every block) | correct, **at the edge**: `n1-rich-inline` p99 152 ms (98.95% within 150 ms), `n2-rich-smoke` p99 170 ms; Flink inline at 2.3 ms CPU per payment with 73 features. The tail is the keyed shuffles on this shared host |
 | 1,000 payments/s | the latest step-ramp's knee; p99 241 ms with 4.8% rules-only fallbacks |
 | 2,000 payments/s sustained | **not reached**. Measured CPU per payment at 1k: Flink 0.87 ms, gateway 0.66, emitter 0.30, model 0.22, collector 0.12, so about 4.35 cores at 2k for these five alone. The cost per event has to roughly halve, and the host's I/O (Kafka acks, checkpoint flushes, about 10.5 Redis operations per payment, ClickHouse merges) has to stop stalling |
 | 20,000 payments/s | **predicted only**. Never run beyond one gateway, Flink parallelism 2 and 12 partitions. The GKE overlays exist; their sizing still uses assumed costs |
