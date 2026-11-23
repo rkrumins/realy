@@ -5,7 +5,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The aggregation registry: the eight built-ins, then every {@link Aggregation} provider on the classpath
+ * The aggregation registry: the nine built-ins, then every {@link Aggregation} provider on the classpath
  * or in a plugin jar ({@link io.realy.scoring.Plugins}: META-INF/services/io.realy.scoring.features.Aggregation
  * in a jar in PLUGINS_DIR), then any {@link #register}ed in code. A name is registered once. Each needs a
  * Python twin under the same name (python/realy/features/aggregations.py), proved equal by the
@@ -37,7 +37,7 @@ public final class Aggregations {
         return f;
     }
 
-    /** True for the eight built-ins. */
+    /** True for the nine built-ins. */
     public static boolean builtin(String name) {
         return BUILTIN.contains(name);
     }
@@ -92,7 +92,7 @@ public final class Aggregations {
                         return any ? max : s.defaultValue();
                     }
                 },
-                new Distinct(), new Novel(), new TimeSinceLast(), new GeoSpeed()}) {
+                new Distinct(), new Novel(), new TimeSinceLast(), new GeoSpeed(), new Latest()}) {
             m.put(a.name(), a);
         }
         return m.values();
@@ -284,6 +284,59 @@ public final class Aggregations {
         public double read(FeatureSpec s, Window w, EventRow e, int slot, long t, boolean match) {
             long last = w.lastTs();
             return (last != NONE && t >= last && t - last <= s.windowUs()) ? (t - last) / 1e6 : s.defaultValue();
+        }
+    }
+
+    /**
+     * The latest value of a change feed (a card's status, an account's freeze): the value of the latest folded
+     * change, as of the event's time. With `value:`, a matching change sets it to that field (an enum reads as
+     * its number); without, every folded change sets it to its filter bit (1 when the filter matches, else 0),
+     * so `card_blocked` is 1 after a blocking change and 0 after an unblocking one. A change older than the
+     * latest is ignored (it arrived late). Read before the latest change's time, it gives the value before it;
+     * with a `window`, a value older than the window reads the default. Without a window the value holds until
+     * it changes: the state is {@link #sticky} (kept past the keyed-state TTL while not the default).
+     *
+     * <p>State: shape LAST_GEO reused (the time of the latest change, the value, the value before it), so the
+     * state encoding is unchanged.
+     */
+    static final class Latest implements Aggregation {
+        @Override
+        public String name() {
+            return "latest";
+        }
+
+        @Override
+        public Shape shape() {
+            return Shape.LAST_GEO;
+        }
+
+        @Override
+        public Input input() {
+            return Input.OPTIONAL_NUMERIC;
+        }
+
+        @Override
+        public boolean sticky(FeatureSpec s) {
+            return s.windowUs() == 0;
+        }
+
+        @Override
+        public double apply(FeatureSpec s, Window w, EventRow e, int slot, long t, boolean match) {
+            if ((slot < 0 || match) && (w.lastTs() == NONE || t >= w.lastTs())) {
+                double v = slot < 0 ? (match ? 1.0 : 0.0) : e.num[slot];
+                double before = w.lastTs() == NONE ? s.defaultValue() : w.lat();
+                w.lastTs(t);
+                w.location(v, before);
+            }
+            return read(s, w, e, slot, t, match);
+        }
+
+        @Override
+        public double read(FeatureSpec s, Window w, EventRow e, int slot, long t, boolean match) {
+            long last = w.lastTs();
+            if (last == NONE) return s.defaultValue();
+            if (t < last) return w.lon();
+            return s.windowUs() > 0 && t - last > s.windowUs() ? s.defaultValue() : w.lat();
         }
     }
 

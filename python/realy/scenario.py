@@ -109,6 +109,25 @@ class RateProfile(_Model):
         return 0
 
 
+class StatusSpec(_Model):
+    """The systems of record that own the entities' status (card management, core banking, fraud operations),
+    simulated (gen/sor.py): their changes travel as change events the pipeline folds into state (pipeline
+    payments-status). Rates are per simulated time; every draw is on a random stream of its own."""
+    initial_blocked_cards: float = 0.002     # share of cards blocked, lost or stolen when the simulation starts
+    initial_aml_holds: float = 0.001         # share of accounts on an AML hold when the simulation starts
+    issuer_block_after: int = 2              # the issuer's monitoring blocks a card at its k-th fraudulent payment (0: never)
+    issuer_block_rate: float = 0.6           # ... for this share of compromised cards
+    issuer_block_delay_s: float = 300.0      # ... this long after it
+    report_blocks: bool = True               # a reported fraud (its label) blocks the card: lost / stolen, else blocked
+    freeze_on_report: float = 0.3            # share of reported account frauds (no card) that freeze the account
+    list_payee_after: int = 2                # a payee is listed at its k-th fraud label (0: never)
+    temporary_locks_per_1k: float = 0.5      # cards locked in the app for a while, per 1,000 payments (noise)
+    lock_duration_s: float = 7200.0
+    aml_holds_per_1k: float = 0.2            # accounts put on an AML hold, per 1,000 payments (noise), released later
+    aml_hold_duration_s: float = 172800.0
+    genuine_stop_on_block: bool = True       # a customer does not pay with a blocked card: genuine payments on it stop
+
+
 class TrafficSpec(_Model):
     profile: RateProfile = Field(default_factory=RateProfile)
     arrivals: Literal["uniform", "poisson"] = "uniform"
@@ -132,6 +151,9 @@ class TrafficSpec(_Model):
     # device_info, payee_info, authentication, items, attributes; gen/blocks.py). Empty: flat payments,
     # byte-identical to a pipeline without blocks
     event_blocks: list[str] = Field(default_factory=list)
+    # entity status from simulated systems of record, as change events (card blocked, account frozen, payee
+    # listed; gen/sor.py): needs a pipeline with the status event types (payments-status). None: no changes
+    status: StatusSpec | None = None
 
 
 class CampaignSpec(_Model):
@@ -222,7 +244,8 @@ class SyncSpec(_Model):
 # Scenario settings added after the fingerprints were pinned (contracts/testdata/golden/scenarios.json):
 # dotted paths left out of `Scenario.fingerprint()` while they equal their default. Every new setting is
 # added here (tests/test_golden_payments.py fails otherwise), so existing runs keep their policy_version.
-FINGERPRINT_OPTIONAL: tuple[str, ...] = ("traffic.flows", "traffic.event_types", "traffic.event_blocks", "pipeline")
+FINGERPRINT_OPTIONAL: tuple[str, ...] = ("traffic.flows", "traffic.event_types", "traffic.event_blocks", "traffic.status",
+                                         "pipeline")
 
 
 def _drop_if_default(d: dict[str, Any], base: dict[str, Any], path: str) -> None:

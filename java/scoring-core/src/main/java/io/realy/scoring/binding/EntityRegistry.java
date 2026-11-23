@@ -74,6 +74,46 @@ public final class EntityRegistry {
         return out;
     }
 
+    /**
+     * The entity whose keyed stage computes {@code name}'s features. An entity has a stage of its own unless it
+     * is owned and does not directly follow its owner in registry order: then its owner's stage computes it,
+     * keyed by its own id inside the owner's key (an account inside its customer's stage). Every event of an
+     * owned entity carries its owner, so it stays in the owner's order with no shuffle of its own; a stage of its
+     * own after another entity's shuffle (account after payee) would interleave its events across that entity's
+     * subtasks and lose the order. Card directly follows customer and terminal merchant: their stages stay.
+     */
+    public String stageOf(String name) {
+        String owner = get(name).ownedBy();
+        if (owner == null || names.indexOf(name) == names.indexOf(owner) + 1) return name;
+        return stageOf(owner);
+    }
+
+    /**
+     * The order features are computed in, for the entities in {@code present}: stage by stage in registry order,
+     * each stage's own entity first, then the entities it hosts ({@link #stageOf}), in registry order. A `gate:`
+     * reads a feature computed earlier in this order; Flink, the gateway and the Python twin all follow it.
+     */
+    public List<String> evaluationOrder(java.util.Collection<String> present) {
+        List<String> out = new ArrayList<>();
+        for (String s : names) {
+            if (!stageOf(s).equals(s)) continue;
+            if (present.contains(s)) out.add(s);
+            for (String n : names) if (!n.equals(s) && present.contains(n) && stageOf(n).equals(s)) out.add(n);
+        }
+        return out;
+    }
+
+    /** The keyed stages for the entities in {@code present}, in order, each with the entities it hosts. */
+    public Map<String, List<String>> stages(java.util.Collection<String> present) {
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        for (String n : evaluationOrder(present)) {
+            String s = stageOf(n);
+            List<String> h = out.computeIfAbsent(s, k -> new ArrayList<>());
+            if (!n.equals(s)) h.add(n);
+        }
+        return out;
+    }
+
     /** Entities seen in one total order by a pipeline partitioned by {@code partition}: exact features. */
     public List<String> exact(String partition) {
         List<String> out = new ArrayList<>();

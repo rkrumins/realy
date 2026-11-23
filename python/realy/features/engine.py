@@ -41,6 +41,8 @@ class ReferenceEngine:
         self.entities = entities or schema.stream_entities()
         self.specs = {e: schema.stream_features(e) for e in self.entities}
         self.aggs = {e: [_aggs.get(s.agg) for s in self.specs[e]] for e in self.entities}
+        # `gate:` features fold only while their gating feature (computed earlier, in `out`) is non-zero
+        self.gates = {e: [schema.gate_index(s) for s in self.specs[e]] for e in self.entities}
         self.state: dict[str, dict[int, list[_Feat]]] = {e: {} for e in self.entities}
         self.filter_index = {name: i for i, name in enumerate(schema.filters)}
         if default_type is None or scored_types is None:
@@ -79,16 +81,15 @@ class ReferenceEngine:
             if feats is None:
                 if not any(folds):
                     if scored:                      # nothing to record: read an empty window
-                        for s, a in zip(specs, self.aggs[ent]):
-                            match = s.filter is None or bool(filter_mask >> self.filter_index[s.filter] & 1)
-                            out[s.index] = a.read(s, _Feat(), ev, t, match)
+                        for s, a, g in zip(specs, self.aggs[ent], self.gates[ent]):
+                            out[s.index] = a.read(s, _Feat(), ev, t, self._match(s, g, filter_mask, out))
                     continue
                 feats = [_Feat() for _ in specs]
                 self.state[ent][key] = feats
-            for s, f, a, fold in zip(specs, feats, self.aggs[ent], folds):
+            for s, f, a, fold, g in zip(specs, feats, self.aggs[ent], folds, self.gates[ent]):
                 if not fold and not scored:
                     continue
-                match = s.filter is None or bool(filter_mask >> self.filter_index[s.filter] & 1)
+                match = self._match(s, g, filter_mask, out if scored else None)
                 v = a.apply(s, f, ev, t, match) if fold else a.read(s, f, ev, t, match)
                 if scored:
                     out[s.index] = v
@@ -105,5 +106,12 @@ class ReferenceEngine:
                     out[s.index] = s.default
                     continue
                 f = feats[i] if feats is not None else _Feat()
-                match = s.filter is None or bool(filter_mask >> self.filter_index[s.filter] & 1)
+                match = self._match(s, self.gates[ent][i], filter_mask, out)
                 out[s.index] = self.aggs[ent][i].read(s, f, ev, t, match)
+
+    def _match(self, s: FeatureSpec, gate: int, filter_mask: int, out: list[float] | None) -> bool:
+        """The feature's filter bit, and its gate: the gating feature (already in `out`) is non-zero; an event
+        without a feature vector (a fold-only type) never passes a gate. Mirrors EntityAggregator.matches."""
+        if s.filter is not None and not (filter_mask >> self.filter_index[s.filter] & 1):
+            return False
+        return gate < 0 or (out is not None and out[gate] != 0)

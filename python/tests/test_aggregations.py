@@ -11,7 +11,7 @@ from realy.features.schema import _load_schema
 
 
 def test_builtins_and_shapes():
-    assert set(A.BUILTINS) == {"count", "sum", "avg", "max", "distinct", "novel", "time_since_last", "geo_speed_kmh"}
+    assert set(A.BUILTINS) == {"count", "sum", "avg", "max", "distinct", "novel", "time_since_last", "geo_speed_kmh", "latest"}
     assert {A.get(n).shape for n in A.BUILTINS} == set(A.SHAPES)
 
 

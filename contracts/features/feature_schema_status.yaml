@@ -1,0 +1,38 @@
+# The status of the entities a payment touches, from change feeds (pipeline payments-status). Extends the rich
+# schema (and through it the base): every earlier feature keeps its index, the ones below are appended.
+#
+#   agg: latest   the value of the latest folded change, as of the event's time. Without `value:` it is the
+#                 change's filter bit (card_blocked: 1 after a blocking change, 0 after an unblock); with it, the
+#                 field (an enum reads as its number). No `window`: the value holds until it changes, and its
+#                 state is sticky (kept past the keyed-state TTL while it is not the default).
+#   gate: <f>     the feature folds only while <f>, a feature of an earlier keyed stage (or earlier in the same
+#                 one), is non-zero for the event: how a Flink feature depends on a status. Stage order is the
+#                 entity registry's: customer, card, device, ip, merchant, terminal, payee, account.
+schema_version: 5
+extends: feature_schema_rich.yaml
+
+entities:
+  account: { key: account_id }           # a new keyed stage (after payee): one more shuffle per payment
+
+filters:
+  card_blocking:    { when: "event.status in ['CARD_STATUS_BLOCKED', 'CARD_STATUS_LOST', 'CARD_STATUS_STOLEN']", event_types: [card_status_changed] }
+  card_reported:    { when: "event.status in ['CARD_STATUS_LOST', 'CARD_STATUS_STOLEN']", event_types: [card_status_changed] }
+  account_freezing: { when: "event.status in ['ACCOUNT_STATUS_FROZEN', 'ACCOUNT_STATUS_CLOSED']", event_types: [account_status_changed] }
+  account_aml:      { when: "'AML_HOLD' in event.flags", event_types: [account_status_changed] }
+  payee_listing:    { when: "event.listed", event_types: [payee_listing_changed] }
+
+features:
+  # the statuses themselves, held until they change
+  - { name: card_blocked,                  source: stream, entity: card, agg: latest, filter: card_blocking, event_types: [card_status_changed] }
+  - { name: card_reported_lost_stolen,     source: stream, entity: card, agg: latest, filter: card_reported, event_types: [card_status_changed] }
+  - { name: card_status_code,              source: stream, entity: card, agg: latest, value: status, event_types: [card_status_changed], default: 1 }   # ACTIVE until a change says otherwise
+  - { name: card_secs_since_status_change, source: stream, entity: card, agg: time_since_last, event_types: [card_status_changed], window: 30d, granularity: 1d, default: 2592000 }
+  - { name: account_frozen,                source: stream, entity: account, agg: latest, filter: account_freezing, event_types: [account_status_changed] }
+  - { name: account_aml_hold_status,       source: stream, entity: account, agg: latest, filter: account_aml, event_types: [account_status_changed] }
+  - { name: payee_listed,                  source: stream, entity: payee, agg: latest, filter: payee_listing, event_types: [payee_listing_changed] }
+  # Flink features that depend on a status: payments that met a blocked card, by the device and the merchant
+  # they came through (a device cycling stolen cards, a merchant under a stolen-card attack), and payments to a
+  # payee while it was listed
+  - { name: dev_blocked_card_attempts_24h,   source: stream, entity: device, agg: count, gate: card_blocked, window: 24h, granularity: 1h }
+  - { name: merch_blocked_card_attempts_1h,  source: stream, entity: merchant, agg: count, gate: card_blocked, window: 1h, granularity: 1m }
+  - { name: payee_payments_while_listed_24h, source: stream, entity: payee, agg: count, gate: payee_listed, window: 24h, granularity: 1h }

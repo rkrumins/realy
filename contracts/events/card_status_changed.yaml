@@ -1,0 +1,9 @@
+# A card's status after a change at the system of record (realy.cards.v1.CardStatusChanged): customer and card.
+# On the events topic keyed by customer, so a card's status features are exact against its payments.
+name: card_status_changed
+message: realy.cards.v1.CardStatusChanged
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  card: card_id

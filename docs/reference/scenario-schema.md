@@ -54,6 +54,7 @@ A scenario is one YAML file in `scenarios/` (or saved from the console's builder
 | `flows` | `list[str]` | `[]` | transactions formed by several linked messages (contracts/transactions): the generator sends each matching payment as its messages, which the pipeline assembles back into one transaction |
 | `event_types` | `dict[str, float]` | `{}` | message types other than payments (the pipeline's standalone types: logins, profile changes, card lifecycle, device telemetry): messages of each type per payment generated, so the load mix is explicit (2,000 payments/s with login: 0.6 also sends 1,200 logins/s). Each carries the entities of a payment of the same batch: its customer, card, device, IP (gen/sessions.py) |
 | `event_blocks` | `list[str]` | `[]` | rich payment blocks to fill (TransactionEvent fields 40-47: card_info, account_info, merchant_info, device_info, payee_info, authentication, items, attributes; gen/blocks.py). Empty: flat payments, byte-identical to a pipeline without blocks |
+| `status` | `StatusSpec \| None` | `None` | entity status from simulated systems of record, as change events (card blocked, account frozen, payee listed; gen/sor.py): needs a pipeline with the status event types (payments-status). None: no changes |
 
 ## `traffic.profile` - RateProfile
 

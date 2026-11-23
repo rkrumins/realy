@@ -27,6 +27,7 @@ Order is the Flink job's keyed-stage order (append only).
 |---|---|---|---|---|---|
 | `payments-ext` | (default) | customer | `payment` (scored), `login` (fold), `profile_change` (fold), `card_lifecycle` (fold), `device_telemetry` (fold), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold), `card_authentication` (fold), `card_authorization` (fold), `card_capture` (fold), `card_reversal` (fold), `card_refund` (fold), `chargeback` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq`, device_telemetry: `payments.devices.telemetry` |
 | `payments-rich` | (default) | customer | `payment` (scored) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq` |
+| `payments-status` | (default) | customer | `payment` (scored), `card_status_changed` (fold), `account_status_changed` (fold), `payee_listing_changed` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq`, payee_listings: `payments.payees.listings` |
 | `payments` | (default) | customer | `payment` (scored), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold), `card_authentication` (fold), `card_authorization` (fold), `card_capture` (fold), `card_reversal` (fold), `card_refund` (fold), `chargeback` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq` |
 
 ## Transaction `a2a_transfer`
@@ -81,6 +82,20 @@ Linked by `auth_id`; assembled into `payment` when `authorization` have arrived 
 | `secs_to_capture` | seconds `authorization` -> `capture` | `0.0` |
 | `refunds` | count of `refund` | `0` |
 | `chargeback_reason` | `chargeback.reason` | `'CHARGEBACK_REASON_UNSPECIFIED'` |
+
+## Event type `account_status_changed`
+
+Message `realy.accounts.v1.AccountStatusChanged`; id `event_id`; time `event_time_us` (us); amount ``.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `customer_id` | u64 | UInt64 | customer |
+| 4 | `account_id` | u64 | UInt64 | account |
+| 5 | `status` | enum AccountStatus | Int8 |  |
+| 7 | `reason` | string | String |  |
+| 8 | `source` | string | String |  |
 
 ## Event type `card_authentication`
 
@@ -196,6 +211,20 @@ Message `realy.flows.v1.CardReversal`; id `event_id`; time `event_time_us` (us);
 | 5 | `card_id` | u64 | UInt64 | card |
 | 6 | `reason` | enum ReversalReason | Int8 |  |
 
+## Event type `card_status_changed`
+
+Message `realy.cards.v1.CardStatusChanged`; id `event_id`; time `event_time_us` (us); amount ``.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `customer_id` | u64 | UInt64 | customer |
+| 4 | `card_id` | u64 | UInt64 | card |
+| 5 | `status` | enum CardStatus | Int8 |  |
+| 6 | `reason` | string | String |  |
+| 7 | `source` | string | String |  |
+
 ## Event type `chargeback`
 
 Message `realy.flows.v1.Chargeback`; id `event_id`; time `event_time_us` (us); amount `amount_usd_minor`.
@@ -277,6 +306,20 @@ Message `realy.flows.v1.PayeeCheck`; id `event_id`; time `event_time_us` (us); a
 | 5 | `payee_id` | u64 | UInt64 | payee |
 | 6 | `result` | enum PayeeCheckResult | Int8 |  |
 | 7 | `account_type_mismatch` | bool | UInt8 |  |
+
+## Event type `payee_listing_changed`
+
+Message `realy.payees.v1.PayeeListingChanged`; id `event_id`; time `event_time_us` (us); amount ``.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `payee_id` | u64 | UInt64 | payee |
+| 4 | `listed` | bool | UInt8 |  |
+| 5 | `list` | string | String |  |
+| 6 | `reason` | string | String |  |
+| 7 | `source` | string | String |  |
 
 ## Event type `payment`
 

@@ -8,6 +8,8 @@ package realy.cards.v1;
 option java_package = "io.realy.contracts.cards.v1";
 option java_multiple_files = true;
 
+import "realy/payments/v1/transaction.proto";
+
 enum CardAction {
   CARD_ACTION_UNSPECIFIED = 0;
   CARD_ISSUED = 1;
@@ -36,4 +38,18 @@ message CardLifecycleEvent {
   CardAction action = 6;
   Wallet wallet = 7;
   bool step_up_passed = 8;       // the issuer's verification for provisioning or a PIN change
+}
+
+// A change of a card's status at the system of record (the issuer's card management), carrying the status after
+// the change: the change feed a pipeline folds into card state (`latest` features such as card_blocked), so a
+// payment reads the card's status as of its own time without a lookup. It carries the customer (the events
+// topic's partition key), so a card's changes and payments share one order and its status features are exact.
+message CardStatusChanged {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  uint64 customer_id = 3;
+  uint64 card_id = 4;
+  realy.payments.v1.CardStatus status = 5;   // after the change (the vocabulary of card_info.status)
+  string reason = 6;                         // CUSTOMER_REPORT, ISSUER_MONITORING, FRAUD_CONFIRMED, TEMPORARY_LOCK, UNLOCK, INITIAL
+  string source = 7;                         // the system that changed it: CARD_MANAGEMENT, FRAUD_OPS, MOBILE_APP
 }

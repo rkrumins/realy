@@ -53,6 +53,28 @@ class Registry:
             cur = self[cur].owned_by
         return out
 
+    def stage_of(self, name: str) -> str:
+        """The entity whose keyed stage computes `name`'s features: itself, unless it is owned and does not
+        directly follow its owner in registry order, then its owner's stage (keyed by its own id inside the owner's
+        key: an account in its customer's stage). Mirrors EntityRegistry.stageOf (Java)."""
+        owner = self.entities[name].owned_by
+        if owner is None or self.names.index(name) == self.names.index(owner) + 1:
+            return name
+        return self.stage_of(owner)
+
+    def evaluation_order(self, present) -> list[str]:
+        """The order features are computed in for the entities in `present`: stage by stage in registry order,
+        each stage's own entity first, then those it hosts. A `gate:` reads a feature computed earlier in this
+        order. Mirrors EntityRegistry.evaluationOrder."""
+        out = []
+        for s in self.names:
+            if self.stage_of(s) != s:
+                continue
+            if s in present:
+                out.append(s)
+            out += [n for n in self.names if n != s and n in present and self.stage_of(n) == s]
+        return out
+
     def exact(self, partition: str) -> list[str]:
         """Entities whose events a pipeline partitioned by `partition` sees in one total order: the
         partition entity and every entity it owns, directly or through a chain. Their features are exact;

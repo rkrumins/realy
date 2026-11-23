@@ -1,0 +1,9 @@
+# A payee listed on or removed from a list (realy.payees.v1.PayeeListingChanged): the payee only. It travels on
+# its own topic keyed by payee (payments-status `topics.payee_listings`) and joins the keyed stages at the payee
+# stage.
+name: payee_listing_changed
+message: realy.payees.v1.PayeeListingChanged
+id: event_id
+time: event_time_us
+entities:
+  payee: payee_id

@@ -38,9 +38,12 @@ public final class AggregationConformance {
             Aggregation a = Aggregations.get(agg);
             long w = Math.round(c.get("window_s").asDouble() * 1_000_000);
             long g = Math.round(c.get("granularity_s").asDouble() * 1_000_000);
+            // a case with `"value": null` runs an optional-value aggregation without one (`latest` of the filter bit)
+            boolean noValue = c.has("value") && c.get("value").isNull();
             FeatureSpec spec = new FeatureSpec(0, "conformance_" + agg, "stream", "customer", agg,
-                    a.input() == Aggregation.Input.KEY ? "k" : "v", null, w, g, c.get("default").asDouble(),
+                    noValue ? null : a.input() == Aggregation.Input.KEY ? "k" : "v", null, w, g, c.get("default").asDouble(),
                     null, null, null);
+            int slot = noValue ? -1 : 0;
             Aggregation.Window win = Aggregations.newWindow(a.shape());
             JsonNode steps = c.get("steps");
             for (int i = 0; i < events.size(); i++) {
@@ -52,8 +55,8 @@ public final class AggregationConformance {
                 row.num = new double[] {e.get("value").asDouble()};
                 row.val = new long[] {e.get("key").asLong()};
                 boolean match = e.get("match").asBoolean();
-                double r = a.read(spec, win, row, 0, row.timeUs, match);
-                double v = a.apply(spec, win, row, 0, row.timeUs, match);
+                double r = a.read(spec, win, row, slot, row.timeUs, match);
+                double v = a.apply(spec, win, row, slot, row.timeUs, match);
                 compare(out, agg, i, "read", steps.get(i).get("read").asDouble(), r);
                 compare(out, agg, i, "apply", steps.get(i).get("apply").asDouble(), v);
                 if (out.size() >= 20) return out;

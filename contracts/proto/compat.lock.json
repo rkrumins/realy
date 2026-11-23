@@ -2,6 +2,57 @@
  "inference.ServerLiveRequest": {},
  "inference.ServerMetadataRequest": {},
  "inference.ServerReadyRequest": {},
+ "realy.accounts.v1.AccountStatus": {
+  "0": {
+   "name": "ACCOUNT_STATUS_UNSPECIFIED"
+  },
+  "1": {
+   "name": "ACCOUNT_STATUS_OPEN"
+  },
+  "2": {
+   "name": "ACCOUNT_STATUS_FROZEN"
+  },
+  "3": {
+   "name": "ACCOUNT_STATUS_CLOSED"
+  },
+  "4": {
+   "name": "ACCOUNT_STATUS_DORMANT"
+  }
+ },
+ "realy.accounts.v1.AccountStatusChanged": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "4": {
+   "name": "account_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "status",
+   "type": "AccountStatus"
+  },
+  "6": {
+   "name": "flags",
+   "type": "repeated string"
+  },
+  "7": {
+   "name": "reason",
+   "type": "string"
+  },
+  "8": {
+   "name": "source",
+   "type": "string"
+  }
+ },
  "realy.bench.v1.AuditFailure": {
   "0": {
    "name": "SPOOL_LOCAL"
@@ -578,6 +629,36 @@
   "8": {
    "name": "step_up_passed",
    "type": "bool"
+  }
+ },
+ "realy.cards.v1.CardStatusChanged": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "4": {
+   "name": "card_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "status",
+   "type": "realy.payments.v1.CardStatus"
+  },
+  "6": {
+   "name": "reason",
+   "type": "string"
+  },
+  "7": {
+   "name": "source",
+   "type": "string"
   }
  },
  "realy.cards.v1.Wallet": {
@@ -1605,6 +1686,36 @@
   },
   "4": {
    "name": "PROFILE_BRANCH"
+  }
+ },
+ "realy.payees.v1.PayeeListingChanged": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "payee_id",
+   "type": "uint64"
+  },
+  "4": {
+   "name": "listed",
+   "type": "bool"
+  },
+  "5": {
+   "name": "list",
+   "type": "string"
+  },
+  "6": {
+   "name": "reason",
+   "type": "string"
+  },
+  "7": {
+   "name": "source",
+   "type": "string"
   }
  },
  "realy.payments.v1.AccountInfo": {

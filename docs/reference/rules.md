@@ -40,6 +40,18 @@ Model thresholds: review >= `None`, decline >= `None`.
 | `GIFT_CARD_BURST` | REVIEW | `event.items.exists(i, i.category == 'GIFT_CARD') && f.cust_gift_card_baskets_24h >= 2.0` | a second gift-card basket within a day |
 | `FOREIGN_BIN_VELOCITY` | REVIEW | `f.cust_auth_attempts_sum_1h >= 4.0 \|\| f.card_foreign_bin_count_24h >= 3.0` | repeated authentication attempts, or a card used repeatedly away from its issuing country |
 
+## `baseline-status` - version `baseline-v5-status1`
+
+Model thresholds: review >= `None`, decline >= `None`.
+
+| Rule | Action | When | Reason |
+|---|---|---|---|
+| `CARD_BLOCKED` | DECLINE | `f.card_blocked > 0.0` | the card is blocked, lost or stolen at the issuer (its latest status change) |
+| `ACCOUNT_FROZEN` | DECLINE | `f.account_frozen > 0.0` | the account is frozen or closed |
+| `ACCOUNT_AML_HOLD_STATUS` | REVIEW | `f.account_aml_hold_status > 0.0` | the account is on an AML hold (its latest status change) |
+| `PAYEE_LISTED` | REVIEW | `f.payee_listed > 0.0` | the payee is on a list of confirmed mule accounts |
+| `BLOCKED_CARD_DEVICE` | REVIEW | `f.card_blocked == 0.0 && f.dev_blocked_card_attempts_24h >= 2.0` | a device that tried blocked cards within a day, now paying with another card |
+
 ## `baseline-v1` - version `baseline-v1`
 
 Model thresholds: review >= `0.55`, decline >= `0.9`.

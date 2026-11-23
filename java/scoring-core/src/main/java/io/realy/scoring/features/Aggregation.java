@@ -4,7 +4,7 @@ import java.util.Map;
 import java.util.function.DoubleBinaryOperator;
 
 /**
- * An aggregation kind for stream features (feature_schema.yaml `agg:`): the eight built-ins and any
+ * An aggregation kind for stream features (feature_schema.yaml `agg:`): the nine built-ins and any
  * registered one (see {@link Aggregations}). An aggregation keeps its state in one of the shared state
  * {@link Shape}s, so a new aggregation needs no new state encoding and existing state blobs are untouched.
  *
@@ -35,7 +35,9 @@ public interface Aggregation {
         /** a field used as a key (EventRow.val) */
         KEY,
         /** the event's location (lat / lon) */
-        LOCATION
+        LOCATION,
+        /** a numeric field when `value:` names one (EventRow.num), else nothing: the slot is -1 */
+        OPTIONAL_NUMERIC
     }
 
     String name();
@@ -49,6 +51,15 @@ public interface Aggregation {
 
     /** The value as of {@code t}, without folding the event in. */
     double read(FeatureSpec spec, Window w, EventRow e, int slot, long t, boolean match);
+
+    /**
+     * Whether this feature's state must outlive the keyed-state TTL (a status that holds until it changes:
+     * `latest` without a window). The Flink stage keeps such state apart, without expiry, while its value is
+     * not the default, and the online-store key does not expire meanwhile.
+     */
+    default boolean sticky(FeatureSpec spec) {
+        return false;
+    }
 
     /** Long.MIN_VALUE: no bucket / no event yet. */
     long NONE = Long.MIN_VALUE;

@@ -1,0 +1,27 @@
+# baseline-rich + rules over entity status folded from change feeds (pipeline payments-status): the card's,
+# the account's and the payee's status as of the payment, kept as Flink state rather than looked up. Unlike
+# CARD_NOT_ACTIVE (the status the payment itself carries, as the acquirer saw it), these read the system of
+# record's latest change. Candidates, not tuned (replay with rules-whatif).
+extends: baseline-rich
+version: baseline-v5-status1
+rules:
+  - id: CARD_BLOCKED
+    when: "f.card_blocked > 0.0"
+    action: DECLINE
+    reason: "the card is blocked, lost or stolen at the issuer (its latest status change)"
+  - id: ACCOUNT_FROZEN
+    when: "f.account_frozen > 0.0"
+    action: DECLINE
+    reason: "the account is frozen or closed"
+  - id: ACCOUNT_AML_HOLD_STATUS
+    when: "f.account_aml_hold_status > 0.0"
+    action: REVIEW
+    reason: "the account is on an AML hold (its latest status change)"
+  - id: PAYEE_LISTED
+    when: "f.payee_listed > 0.0"
+    action: REVIEW
+    reason: "the payee is on a list of confirmed mule accounts"
+  - id: BLOCKED_CARD_DEVICE
+    when: "f.card_blocked == 0.0 && f.dev_blocked_card_attempts_24h >= 2.0"
+    action: REVIEW
+    reason: "a device that tried blocked cards within a day, now paying with another card"

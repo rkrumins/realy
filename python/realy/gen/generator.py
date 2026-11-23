@@ -87,6 +87,12 @@ class Generator:
             # a stream of its own, seeded apart from the spawned children above (unchanged by it)
             r_ses = np.random.Generator(np.random.PCG64(np.random.SeedSequence([scenario.seed, shard, n_shards, 0x5E55])))
             self.sessions = Sessions(scenario.traffic.event_types, r_ses, shard) or None
+        self.sor = None
+        if scenario.traffic.status is not None:
+            from .sor import SystemOfRecord
+            # entity status changes from the simulated systems of record: a stream of its own
+            r_sor = np.random.Generator(np.random.PCG64(np.random.SeedSequence([scenario.seed, shard, n_shards, 0x50F])))
+            self.sor = SystemOfRecord(scenario.traffic.status, world, self.rows, r_sor, shard)
         self.pending = make_chunk(0)
         self.seq = 0
         self.order = 1 << 40
@@ -153,11 +159,21 @@ class Generator:
         else:
             camp = make_chunk(0)
         legit = self.legit.generate(max(0, n - n_due), t0, t1, order0=self.seq)
-        batch = finalize(concat_chunks([legit, camp]), self.gen_id, self.seq, self.auth, self.blocks)
+        chunk = concat_chunks([legit, camp])
+        if self.sor is not None:
+            # the changes these payments cause; a genuine payment on a card blocked at its time is not made
+            chunk = take(chunk, np.flatnonzero(self.sor.observe(chunk, t0, t1)))
+        batch = finalize(chunk, self.gen_id, self.seq, self.auth, self.blocks)
         self.seq += len(batch)
         if self.flows is not None:
             batch.records = self.flows.expand(batch.columns, batch.payloads, batch.keys, t1)
+        extra = []
         if self.sessions is not None:
+            extra += self.sessions.expand(batch.columns, t0, t1)
+        if self.sor is not None and len(batch):
+            # status changes due before the batch ends (a batch without payments is not sent: they wait for the next)
+            extra += self.sor.due(t1)
+        if extra:
             # the standalone types' messages, merged into the records in event-time order
             from .flows import Record
             recs = batch.records
@@ -166,7 +182,7 @@ class Generator:
                 times = batch.columns["event_time_us"].tolist()
                 recs = [Record(int(t), "", p, k, int(e), True, j)
                         for j, (t, p, k, e) in enumerate(zip(times, batch.payloads, batch.keys, ids))]
-            recs = recs + self.sessions.expand(batch.columns, t0, t1)
+            recs = recs + extra
             recs.sort(key=lambda r: (r.t_us, r.order))
             batch.records = recs
         return batch

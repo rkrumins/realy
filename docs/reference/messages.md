@@ -29,6 +29,33 @@ Source: `contracts/proto/kserve/v2/grpc_predict_v2.proto`
 
 ### `ServerMetadataRequest`
 
+## `realy.accounts.v1` (accounts.proto)
+
+Source: `contracts/proto/realy/accounts/v1/accounts.proto`
+
+### `AccountStatus` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `ACCOUNT_STATUS_UNSPECIFIED` | 0 |  |
+| `ACCOUNT_STATUS_OPEN` | 1 |  |
+| `ACCOUNT_STATUS_FROZEN` | 2 | no debits until released (fraud investigation, court order) |
+| `ACCOUNT_STATUS_CLOSED` | 3 |  |
+| `ACCOUNT_STATUS_DORMANT` | 4 |  |
+
+### `AccountStatusChanged`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `customer_id` | `uint64` |  |
+| 4 | `account_id` | `uint64` |  |
+| 5 | `status` | `AccountStatus` | after the change |
+| 6 | `flags` | `repeated string` | the account's flags after the change: AML_HOLD, OVERDRAWN, ... |
+| 7 | `reason` | `string` | FRAUD_CONFIRMED, AML_REVIEW, RELEASED, INITIAL, ... |
+| 8 | `source` | `string` | CORE_BANKING, FRAUD_OPS, AML |
+
 ## `realy.bench.v1` (control.proto)
 
 Source: `contracts/proto/realy/bench/v1/control.proto`
@@ -312,6 +339,20 @@ Source: `contracts/proto/realy/cards/v1/cards.proto`
 | 6 | `action` | `CardAction` |  |
 | 7 | `wallet` | `Wallet` |  |
 | 8 | `step_up_passed` | `bool` | the issuer's verification for provisioning or a PIN change |
+
+### `CardStatusChanged`
+
+A change of a card's status at the system of record (the issuer's card management), carrying the status after the change: the change feed a pipeline folds into card state (`latest` features such as card_blocked), so a payment reads the card's status as of its own time without a lookup. It carries the customer (the events topic's partition key), so a card's changes and payments share one order and its status features are exact.
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `customer_id` | `uint64` |  |
+| 4 | `card_id` | `uint64` |  |
+| 5 | `status` | `realy.payments.v1.CardStatus` | after the change (the vocabulary of card_info.status) |
+| 6 | `reason` | `string` | CUSTOMER_REPORT, ISSUER_MONITORING, FRAUD_CONFIRMED, TEMPORARY_LOCK, UNLOCK, INITIAL |
+| 7 | `source` | `string` | the system that changed it: CARD_MANAGEMENT, FRAUD_OPS, MOBILE_APP |
 
 ## `realy.devices.v1` (devices.proto)
 
@@ -764,6 +805,22 @@ Source: `contracts/proto/realy/identity/v1/identity.proto`
 | 6 | `change` | `ProfileChange` |  |
 | 7 | `channel` | `ProfileChannel` |  |
 | 8 | `verified` | `bool` | confirmed out of band (a code to the old phone or email) |
+
+## `realy.payees.v1` (payees.proto)
+
+Source: `contracts/proto/realy/payees/v1/payees.proto`
+
+### `PayeeListingChanged`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `payee_id` | `uint64` |  |
+| 4 | `listed` | `bool` | listed after the change (false: delisted) |
+| 5 | `list` | `string` | which list: MULE, SCAM_BENEFICIARY, ... |
+| 6 | `reason` | `string` | FRAUD_LABELS, MANUAL_REVIEW, APPEAL |
+| 7 | `source` | `string` | FRAUD_OPS, CONSORTIUM |
 
 ## `realy.payments.v1` (label.proto)
 

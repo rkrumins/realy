@@ -38,6 +38,7 @@ class FeatureSpec:
     fn: str | None = None        # derived: a library function (features/derived.py)
     expr: str | None = None      # derived: a CEL expression over `event` and `f` returning a double
     on: tuple[str, ...] | None = None   # stream: `event_types`, the types that fold into it (None: the default type)
+    gate: str | None = None      # stream: folds only while this earlier feature is non-zero (`gate:`)
 
     @property
     def n_buckets(self) -> int:
@@ -90,7 +91,8 @@ class FeatureSchema:
         import json
         # `event_types` joins the layout only when given, so a payment-only schema keeps its hash
         spec = [[f.name, f.entity, f.agg, f.value, f.filter, self.filters.get(f.filter or "", ""), f.window_us,
-                 f.granularity_us, f.default] + ([list(f.on)] if f.on is not None else []) for f in self.stream_features()]
+                 f.granularity_us, f.default] + ([list(f.on)] if f.on is not None else [])
+                + ([{"gate": f.gate}] if f.gate else []) for f in self.stream_features()]
         return hashlib.sha256(json.dumps(spec).encode()).hexdigest()[:12]
 
     def filter_applies(self, name: str, event_type: str, default_type: str = "payment") -> bool:
@@ -111,11 +113,20 @@ class FeatureSchema:
         return event_type in f.on if f.on is not None else event_type == default_type
 
     def stream_entities(self) -> list[str]:
-        seen: list[str] = []
+        """The entities with stream features, in keyed-stage order (the entity registry's, as Flink and the
+        gateway compute them): a `gate:` reads a feature of an earlier stage."""
+        from ..bindings.registry import registry
+        return registry().evaluation_order({f.entity for f in self.features if f.source == "stream"})
+
+    def gate_index(self, f: FeatureSpec) -> int:
+        """The schema index of stream feature `f`'s `gate:` feature, or -1."""
+        return self.index_of(f.gate) if f.gate else -1
+
+    def index_of(self, name: str) -> int:
         for f in self.features:
-            if f.source == "stream" and f.entity not in seen:
-                seen.append(f.entity)  # type: ignore[arg-type]
-        return seen
+            if f.name == name:
+                return f.index
+        raise KeyError(name)
 
     def country_index(self, code: str) -> int:
         try:
@@ -141,6 +152,23 @@ def schema_path(path: str | Path | None = None) -> Path:
     except KeyError:
         pass
     return SCHEMA_PATH
+
+
+def _check_gates(feats: list[FeatureSpec]) -> None:
+    """A `gate:` names a stream feature computed before the gated one: defined earlier in the schema, of an
+    entity no later in evaluation order (registry().evaluation_order). Mirrors FeatureSchema.gateIndex (Java)."""
+    from ..bindings.registry import registry
+    order = registry().evaluation_order({f.entity for f in feats if f.source == "stream"})
+    by = {f.name: f for f in feats}
+    for f in feats:
+        if not f.gate:
+            continue
+        g = by.get(f.gate)
+        if g is None or g.source != "stream" or g.index >= f.index:
+            raise ValueError(f"{f.name}: `gate` {f.gate} is not a stream feature defined before it")
+        if order.index(g.entity) > order.index(f.entity):
+            raise ValueError(f"{f.name}: `gate` {f.gate} is a {g.entity} feature, computed after the {f.entity} "
+                             f"stage (a gate must come from this stage or an earlier one: {order})")
 
 
 def schema_bundle(path: str | Path) -> str:
@@ -197,13 +225,22 @@ def _load_schema(path: str) -> FeatureSchema:
                 raise ValueError(f"{f['name']}: unknown entity {f['entity']}")
             if f.get("filter") and f["filter"] not in raw["filters"]:
                 raise ValueError(f"{f['name']}: unknown filter {f['filter']}")
-            w, g = parse_duration_us(f["window"]), parse_duration_us(f["granularity"])
-            if w % g:
-                raise ValueError(f"{f['name']}: window must be a multiple of granularity")
             from . import aggregations
             if f.get("agg") not in aggregations.names():
                 raise ValueError(f"{f['name']}: unknown aggregation {f.get('agg')!r} "
                                  f"(registered: {', '.join(aggregations.names())})")
+            a = aggregations.get(f["agg"])
+            # a window is required, except by an aggregation that holds a value until it changes (`latest`);
+            # shapes without buckets need no granularity (it defaults to the window)
+            w = parse_duration_us(f["window"]) if f.get("window") is not None else 0
+            g = (parse_duration_us(f["granularity"]) if f.get("granularity") is not None
+                 else w if a.shape in ("last", "last_geo") else -1)
+            if w == 0 and not a.sticky(w):
+                raise ValueError(f"{f['name']}: aggregation {f['agg']} needs a `window`")
+            if g < 0:
+                raise ValueError(f"{f['name']}: aggregation {f['agg']} needs a `granularity`")
+            if (w % g) if g > 0 else w:
+                raise ValueError(f"{f['name']}: window must be a multiple of granularity")
             if aggregations.get(f["agg"]).input in ("numeric", "key") and not f.get("value"):
                 raise ValueError(f"{f['name']}: aggregation {f['agg']} needs `value:` (the event field it reads)")
             if True in f or "on" in f:          # YAML 1.1 reads a bare `on:` key as the boolean true
@@ -211,8 +248,9 @@ def _load_schema(path: str) -> FeatureSchema:
             on = f.get("event_types")
             if on is not None and (not isinstance(on, list) or not on or not all(isinstance(x, str) for x in on)):
                 raise ValueError(f"{f['name']}: `event_types` lists the event types that fold into it, e.g. [payment, login]")
+            gate = f.get("gate")
             kw.update(entity=f["entity"], agg=f["agg"], value=f.get("value"), filter=f.get("filter"),
-                      window_us=w, granularity_us=g, on=tuple(on) if on is not None else None)
+                      window_us=w, granularity_us=g, on=tuple(on) if on is not None else None, gate=gate)
         elif src == "profile":
             kw.update(entity=f["entity"], field=f["field"])
         elif src == "derived":
@@ -230,6 +268,7 @@ def _load_schema(path: str) -> FeatureSchema:
         else:
             raise ValueError(f"{f['name']}: unknown source {src}")
         feats.append(FeatureSpec(**kw))
+    _check_gates(feats)
     filters, filter_on = {}, {}
     for k, v in (raw["filters"] or {}).items():
         if isinstance(v, dict):                 # {when: CEL, event_types: [types]}: evaluated for those types only

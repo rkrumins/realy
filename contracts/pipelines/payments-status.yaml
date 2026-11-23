@@ -1,0 +1,28 @@
+# payments-rich, plus the status of the entities a payment touches, as change feeds folded into Flink state:
+# the card's status (blocked, lost, stolen), the account's (frozen, an AML hold) and the payee's listing (a
+# confirmed mule). A payment then reads "is this card blocked?" as a feature of its own time, computed where
+# its other features are, with no lookup on the hot path (contracts/features/feature_schema_status.yaml).
+#
+#   event type              entities              topic (partition key)        exactness
+#   payment                 all, rich blocks      events (customer)            scored
+#   card_status_changed     customer, card        events (customer)            exact: one order with the payments
+#   account_status_changed  customer, account     events (customer)            exact
+#   payee_listing_changed   payee                 payee_listings (payee)       converged: its own topic
+#
+# Who owns the data: the systems of record (card management, core banking, fraud operations) publish the
+# changes; the pipeline owns its copy as state. A status that holds until it changes (card_blocked) outlives
+# the keyed-state TTL (docs/dev/features.md, sticky state).
+name: payments-status
+namespace: ""
+partition_key: customer
+topics: { events: payments.events.raw, decisions: payments.decisions, labels: payments.labels,
+          assembled: payments.events.assembled, dlq: payments.events.dlq,
+          payee_listings: payments.payees.listings }
+default_type: payment
+event_types:
+  payment: { scored: true, binding: payment_rich }
+  card_status_changed: {}
+  account_status_changed: {}
+  payee_listing_changed: { topic: payee_listings, partition_key: payee }
+features: contracts/features/feature_schema_status.yaml
+model: { client: kserve-v2, name: fraud_mlp, input: input__0, output: output__0 }

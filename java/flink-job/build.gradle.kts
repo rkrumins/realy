@@ -16,6 +16,8 @@ dependencies {
     testImplementation(libs.flink.statebackend.rocksdb)
     testImplementation(libs.flink.connector.base)
     testImplementation(libs.flink.test.utils)
+    // the operator test harnesses (KeyedOneInputStreamOperatorTestHarness): state TTL in processing time
+    testImplementation(variantOf(libs.flink.runtime) { classifier("tests") })
     testRuntimeOnly(libs.slf4j.simple)
 }
 

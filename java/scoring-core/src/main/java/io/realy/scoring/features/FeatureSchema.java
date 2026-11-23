@@ -33,6 +33,9 @@ public final class FeatureSchema {
     private final Map<String, List<FeatureSpec>> profileByEntity = new LinkedHashMap<>();
     /** Stream features' `event_types` (the types that fold into them), by feature index; absent = the default type. */
     private final Map<Integer, List<String>> onTypes = new java.util.HashMap<>();
+    /** Stream features' `gate:` (the schema index of the feature that must be non-zero for them to fold), by feature index. */
+    private final Map<Integer, Integer> gates = new java.util.HashMap<>();
+    private final Map<Integer, String> gateNames = new java.util.LinkedHashMap<>();
     /** Scoped filters' `event_types` (the types they are evaluated for); absent = the default type. */
     public final Map<String, List<String>> filterOn = new LinkedHashMap<>();
 
@@ -86,13 +89,20 @@ public final class FeatureSchema {
                     if (!entityKeys.containsKey(entity)) throw new IllegalArgumentException(name + ": unknown entity " + entity);
                     String filter = text(f, "filter");
                     if (filter != null && !filters.containsKey(filter)) throw new IllegalArgumentException(name + ": unknown filter " + filter);
-                    long w = parseDurationUs(f.get("window").asText());
-                    long g = parseDurationUs(f.get("granularity").asText());
-                    if (w % g != 0) throw new IllegalArgumentException(name + ": window must be a multiple of granularity");
                     String agg = text(f, "agg");
                     if (agg == null || !Aggregations.has(agg))
                         throw new IllegalArgumentException(name + ": unknown aggregation " + agg + " (registered: " + Aggregations.names() + ")");
-                    Aggregation.Input in = Aggregations.get(agg).input();
+                    Aggregation a = Aggregations.get(agg);
+                    // a window is required, except by an aggregation that holds a value until it changes (`latest`);
+                    // shapes without buckets need no granularity (it defaults to the window)
+                    long w = text(f, "window") == null ? 0 : parseDurationUs(f.get("window").asText());
+                    boolean bucketless = a.shape() == Aggregation.Shape.LAST || a.shape() == Aggregation.Shape.LAST_GEO;
+                    long g = text(f, "granularity") != null ? parseDurationUs(f.get("granularity").asText()) : bucketless ? w : -1;
+                    if (w == 0 && !a.sticky(new FeatureSpec(i, name, src, entity, agg, null, null, 0, 0, def, null, null, null)))
+                        throw new IllegalArgumentException(name + ": aggregation " + agg + " needs a `window`");
+                    if (g < 0) throw new IllegalArgumentException(name + ": aggregation " + agg + " needs a `granularity`");
+                    if (g > 0 ? w % g != 0 : w != 0) throw new IllegalArgumentException(name + ": window must be a multiple of granularity");
+                    Aggregation.Input in = a.input();
                     if ((in == Aggregation.Input.NUMERIC || in == Aggregation.Input.KEY) && text(f, "value") == null)
                         throw new IllegalArgumentException(name + ": aggregation " + agg + " needs `value:` (the event field it reads)");
                     spec = new FeatureSpec(i, name, src, entity, agg, text(f, "value"), filter, w, g, def, null, null, null);
@@ -105,6 +115,8 @@ public final class FeatureSchema {
                         on.forEach(x -> types.add(x.asText()));
                         onTypes.put(i, List.copyOf(types));
                     }
+                    String gate = text(f, "gate");
+                    if (gate != null) gateNames.put(i, gate);
                 }
                 case "profile" -> spec = new FeatureSpec(i, name, src, f.get("entity").asText(), null, null, null, 0, 0, def,
                         f.get("field").asText(), null, null);
@@ -126,12 +138,40 @@ public final class FeatureSchema {
             i++;
         }
         features = List.copyOf(fs);
-        for (String e : io.realy.scoring.binding.EntityRegistry.load().names()) {
+        var reg = io.realy.scoring.binding.EntityRegistry.load();
+        java.util.Set<String> withStream = new java.util.HashSet<>();
+        for (FeatureSpec f : features) if (f.isStream()) withStream.add(f.entity());
+        // stream features by entity in evaluation order (stage order, hosted entities right after their stage's own)
+        for (String e : reg.evaluationOrder(withStream)) {
             List<FeatureSpec> s = features.stream().filter(x -> x.isStream() && e.equals(x.entity())).toList();
             if (!s.isEmpty()) streamByEntity.put(e, s);
+        }
+        List<String> order = reg.evaluationOrder(withStream);
+        for (var g : gateNames.entrySet()) gates.put(g.getKey(), gateIndex(features.get(g.getKey()), g.getValue(), byName, order));
+        for (String e : reg.names()) {
             List<FeatureSpec> p = features.stream().filter(x -> x.isProfile() && e.equals(x.entity())).toList();
             if (!p.isEmpty()) profileByEntity.put(e, p);
         }
+    }
+
+    /**
+     * A `gate:` names a stream feature computed before this one: of an earlier keyed stage (registry order), or of
+     * the same entity and earlier in the schema. Its value is then in the feature vector when this one folds.
+     */
+    private static int gateIndex(FeatureSpec f, String gate, Map<String, FeatureSpec> byName, List<String> order) {
+        FeatureSpec g = byName.get(gate);
+        if (g == null || !g.isStream() || g.index() >= f.index())
+            throw new IllegalArgumentException(f.name() + ": `gate` " + gate + " is not a stream feature defined before it");
+        if (order.indexOf(g.entity()) > order.indexOf(f.entity()))
+            throw new IllegalArgumentException(f.name() + ": `gate` " + gate + " is a " + g.entity() + " feature, computed after the "
+                    + f.entity() + " stage (a gate must come from this stage or an earlier one: " + order + ")");
+        return g.index();
+    }
+
+    /** The schema index of stream feature {@code s}'s `gate:` (it folds only while that feature is non-zero), or -1. */
+    public int gate(FeatureSpec s) {
+        Integer g = gates.get(s.index());
+        return g == null ? -1 : g;
     }
 
     private static String text(JsonNode n, String field) {

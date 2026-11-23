@@ -25,7 +25,7 @@ from typing import Any, Callable
 MIN_GEO_DT_US = 60_000_000
 EARTH_RADIUS_KM = 6371.0088
 SHAPES = ("buckets", "seen", "last", "last_geo")
-INPUTS = ("none", "numeric", "key", "location")
+INPUTS = ("none", "numeric", "key", "location", "optional_numeric")
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -68,6 +68,11 @@ class Aggregation:
 
     def read(self, s: Any, w: Window, ev: dict, t: int, match: bool) -> float:
         raise NotImplementedError
+
+    def sticky(self, window_us: int) -> bool:
+        """Whether the feature's state must outlive the keyed-state TTL (a status that holds until it changes:
+        `latest` without a window). Mirrors Aggregation.sticky (Java)."""
+        return False
 
 
 class BucketAgg(Aggregation):
@@ -193,6 +198,33 @@ class GeoSpeed(Aggregation):
         return v
 
 
+class Latest(Aggregation):
+    """The latest value of a change feed (a card's status, an account's freeze), as of the event's time. With
+    `value:`, a matching change sets it to that field (an enum reads as its number); without, every folded
+    change sets it to its filter bit, so `card_blocked` is 1 after a blocking change and 0 after an unblocking
+    one. A change older than the latest is ignored (it arrived late). Read before the latest change's time it
+    gives the value before it; with a `window`, a value older than the window reads the default. State: the
+    `last_geo` shape (time of the latest change, the value, the value before it). Mirrors Aggregations.Latest."""
+    name, shape, input = "latest", "last_geo", "optional_numeric"
+
+    def sticky(self, window_us: int) -> bool:
+        return window_us == 0
+
+    def read(self, s, w, ev, t, match):
+        if w.last_ts is None:
+            return s.default
+        if t < w.last_ts:
+            return w.lon
+        return s.default if s.window_us > 0 and t - w.last_ts > s.window_us else w.lat
+
+    def apply(self, s, w, ev, t, match):
+        if (s.value is None or match) and (w.last_ts is None or t >= w.last_ts):
+            v = (1.0 if match else 0.0) if s.value is None else float(ev[s.value])
+            before = s.default if w.last_ts is None else w.lat
+            w.last_ts, w.lat, w.lon = t, v, before
+        return self.read(s, w, ev, t, match)
+
+
 _REGISTRY: dict[str, Aggregation] = {}
 
 
@@ -237,7 +269,7 @@ for _a in (BucketAgg("count", "none", contribution=lambda s, ev: 1.0),
            BucketAgg("avg", "numeric", window=lambda s, a, b, folded, any_: a / b if b > 0 else s.default),
            BucketAgg("max", "numeric", merge=max, count_merge=False,
                      window=lambda s, a, b, folded, any_: folded if any_ else s.default),
-           Distinct(), Novel(), TimeSinceLast(), GeoSpeed()):
+           Distinct(), Novel(), TimeSinceLast(), GeoSpeed(), Latest()):
     register(_a)
 BUILTINS = tuple(sorted(_REGISTRY))
 
@@ -273,6 +305,9 @@ DEFAULT_CASES = [
     {"agg": "novel", "window_s": 7200, "granularity_s": 3600, "default": 0.0},
     {"agg": "time_since_last", "window_s": 86400, "granularity_s": 1, "default": -1.0},
     {"agg": "geo_speed_kmh", "window_s": 86400, "granularity_s": 1, "default": 0.0},
+    {"agg": "latest", "window_s": 0, "granularity_s": 0, "default": 0.0},                  # a field's latest value
+    {"agg": "latest", "window_s": 0, "granularity_s": 0, "default": 0.0, "value": None},   # the latest filter bit
+    {"agg": "latest", "window_s": 3600, "granularity_s": 3600, "default": -1.0},          # expiring after an hour
 ]
 
 
@@ -314,7 +349,8 @@ class _Spec:
     """The fields of a FeatureSpec an aggregation reads, for the fixtures."""
 
     def __init__(self, sp: dict[str, Any], a: Aggregation) -> None:
-        self.value = "k" if a.input == "key" else "v"
+        # a case with `"value": null` runs an optional-value aggregation without one (`latest` of the filter bit)
+        self.value = None if "value" in sp and sp["value"] is None else "k" if a.input == "key" else "v"
         self.window_us = int(sp["window_s"] * 1_000_000)
         self.granularity_us = int(sp["granularity_s"] * 1_000_000)
         self.default = float(sp["default"])

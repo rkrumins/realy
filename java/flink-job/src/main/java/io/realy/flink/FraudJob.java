@@ -177,7 +177,10 @@ public final class FraudJob {
         }
         // entities whose online-store blob carries the aggregator state (exact re-windowing at read time);
         // the rest store values only. Customer/card: low per-entity rates -> small blobs, must be exact.
-        List<String> stateEntities = Arrays.stream(p.get("store-state", Env.str("STORE_STATE", "customer,card")).split(","))
+        // the exact entities by default: the partition key's and those it owns (customer, card, account)
+        String exact = String.join(",", io.realy.scoring.binding.EntityRegistry.load()
+                .exact(io.realy.scoring.binding.PipelineBinding.current().partitionKey));
+        List<String> stateEntities = Arrays.stream(p.get("store-state", Env.str("STORE_STATE", exact)).split(","))
                 .map(String::trim).filter(x -> !x.isEmpty()).toList();
         // multi-message transactions (--assemble <contract,...>): assembled into the unified event before the
         // feature stages, keyed by the pipeline's partition entity; that entity's stage reuses the keying
@@ -253,9 +256,19 @@ public final class FraudJob {
                                                 String preKeyed, Map<String, List<DataStream<Envelope>>> join,
                                                 String pipeline) {
         var plan = FeatureSchema.of(schemaYaml).rowPlan();
+        // keyed stages: an owned entity that does not directly follow its owner is computed in its owner's stage
+        // (EntityRegistry.stageOf: an account in its customer's), keyed by its own id inside the owner's key
+        Map<String, List<String>> stages = io.realy.scoring.binding.EntityRegistry.load().stages(entities);
+        List<String> order = new ArrayList<>();
+        stages.forEach((st, h) -> {
+            order.add(st);
+            order.addAll(h);
+        });
         DataStream<Envelope> s = in;
-        for (int i = 0; i < entities.size(); i++) {
-            String entity = entities.get(i);
+        int i = 0, done = 0;
+        for (var stage : stages.entrySet()) {
+            String entity = stage.getKey();
+            done += 1 + stage.getValue().size();
             EntityKey key = new EntityKey(plan.entityOrdinal(entity));
             List<DataStream<Envelope>> here = join.getOrDefault(entity, List.of());
             for (DataStream<Envelope> j : here) s = s.union(j);
@@ -264,8 +277,9 @@ public final class FraudJob {
                             org.apache.flink.api.common.typeinfo.Types.LONG)
                     : s.keyBy(key);
             s = keyed.process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity), spans, schemaYaml,
-                            entities.subList(i + 1, entities.size()), pipeline))
-                    .uid("features-" + entity).name("features:" + entity);
+                            order.subList(done, order.size()), pipeline).hosting(stage.getValue(), stateEntities))
+                    .uid("features-" + entity).name("features:" + String.join("+", order.subList(done - 1 - stage.getValue().size(), done)));
+            i++;
         }
         return s;
     }
@@ -276,12 +290,13 @@ public final class FraudJob {
         Map<String, List<DataStream<Envelope>>> out = new java.util.LinkedHashMap<>();
         if (extra.isEmpty()) return out;
         var byTopic = pipe.extraTopics();
+        var reg = io.realy.scoring.binding.EntityRegistry.load();
         for (var e : extra.entrySet()) {
             String at = null;
-            for (String ent : entities) {
+            for (String ent : reg.evaluationOrder(entities)) {
                 var agg = new io.realy.scoring.features.EntityAggregator(schema, ent, pipe);
                 for (String ty : byTopic.getOrDefault(e.getKey(), List.of())) {
-                    if (agg.folds(pipe.typeOrdinal(ty))) at = ent;
+                    if (agg.folds(pipe.typeOrdinal(ty))) at = reg.stageOf(ent);
                 }
                 if (at != null) break;
             }

@@ -1,0 +1,20 @@
+// A payee listed on (or removed from) a list, such as confirmed mule accounts: what the bank's own fraud
+// operations publish. A payee belongs to no customer, so the change travels on its own topic keyed by payee
+// (pipelines/payments-status.yaml) and joins the keyed stages at the payee stage: payee status features
+// converge to the listing feed (agreement, not exact order against the payments that pay the payee).
+syntax = "proto3";
+
+package realy.payees.v1;
+
+option java_package = "io.realy.contracts.payees.v1";
+option java_multiple_files = true;
+
+message PayeeListingChanged {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  uint64 payee_id = 3;
+  bool listed = 4;                 // listed after the change (false: delisted)
+  string list = 5;                 // which list: MULE, SCAM_BENEFICIARY, ...
+  string reason = 6;               // FRAUD_LABELS, MANUAL_REVIEW, APPEAL
+  string source = 7;               // FRAUD_OPS, CONSORTIUM
+}

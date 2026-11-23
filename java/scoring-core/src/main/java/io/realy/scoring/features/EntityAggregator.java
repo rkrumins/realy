@@ -37,6 +37,9 @@ public final class EntityAggregator {
     private final Aggregation[] aggs;       // per feature: its aggregation (Aggregations registry)
     private final Aggregation.Shape[] shapes;
     private final long[] onMasks;           // per feature: the event types (pipeline ordinals) that fold into it
+    private final int[] gates;              // per feature: the schema index of its `gate:` feature (-1: none)
+    private final boolean[] sticky;         // per feature: state kept past the keyed-state TTL (Aggregation.sticky)
+    private final boolean anySticky;
     private final int defaultType;          // the pipeline's default type ordinal
     private long anyMask;                   // the types that fold into at least one of this entity's features
 
@@ -56,7 +59,10 @@ public final class EntityAggregator {
         this.aggs = new Aggregation[specs.size()];
         this.shapes = new Aggregation.Shape[specs.size()];
         this.onMasks = new long[specs.size()];
+        this.gates = new int[specs.size()];
+        this.sticky = new boolean[specs.size()];
         this.defaultType = pipe.defaultOrdinal();
+        boolean anyS = false;
         for (int i = 0; i < specs.size(); i++) {
             FeatureSpec s = specs.get(i);
             List<String> on = schema.on(s);
@@ -72,16 +78,34 @@ public final class EntityAggregator {
             }
             onMasks[i] = m;
             anyMask |= m;
+            gates[i] = schema.gate(s);
+            if (gates[i] >= 0) {
+                // a gate is read from the feature vector, which only a scored event carries
+                for (int t = 0; t < 64; t++)
+                    if ((m & (1L << t)) != 0 && !pipe.scored(t))
+                        throw new IllegalArgumentException(s.name() + ": a gated feature folds only scored event types (a fold-only "
+                                + "event has no feature vector to read its gate from)");
+            }
             filterBits[i] = s.filter() == null ? -1 : schema.filterBit(s.filter());
             indices[i] = s.index();
             aggs[i] = Aggregations.get(s.agg());
             shapes[i] = aggs[i].shape();
+            sticky[i] = aggs[i].sticky(s);
+            anyS |= sticky[i];
             slots[i] = switch (aggs[i].input()) {
                 case NUMERIC -> plan.numSlot(s.value());
+                case OPTIONAL_NUMERIC -> s.value() == null ? -1 : plan.numSlot(s.value());
                 case KEY -> plan.valSlot(s.value());
                 default -> -1;
             };
         }
+        this.anySticky = anyS;
+    }
+
+    /** Feature {@code i}'s filter bit, and its gate: the gating feature (already in {@code out}) is non-zero. */
+    private boolean matches(int i, long filterMask, float[] out) {
+        if (filterBits[i] >= 0 && (filterMask & (1L << filterBits[i])) == 0) return false;
+        return gates[i] < 0 || (out != null && out[gates[i]] != 0f);
     }
 
     /** This entity's key on a decoded event (0 = absent). */
@@ -135,7 +159,7 @@ public final class EntityAggregator {
         for (int i = 0; i < specs.size(); i++) {
             boolean fold = (onMasks[i] & bit) != 0;
             if (!fold && out == null) continue;
-            boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
+            boolean match = matches(i, filterMask, out);
             double v = fold ? aggs[i].apply(specs.get(i), st.feats[i], r, slots[i], t, match)
                     : aggs[i].read(specs.get(i), st.feats[i], r, slots[i], t, match);
             folded |= fold;
@@ -144,6 +168,83 @@ public final class EntityAggregator {
         if (!folded) return stateBytes;
         st.lastEventUs = Math.max(st.lastEventUs, t);
         return st.encode(shapes);
+    }
+
+    // ------------------------------------------------------------------------------ sticky state
+    // A status that holds until it changes (`latest` without a window: card_blocked) must outlive the keyed
+    // state's TTL: a blocked card that stays dormant for longer than the TTL must still read blocked. The Flink
+    // stage keeps these features' state apart, without expiry, and only while it is not the default, so its
+    // size is the number of entities with a non-default status.
+
+    /** Whether any of this entity's features keeps state past the keyed-state TTL. */
+    public boolean hasSticky() {
+        return anySticky;
+    }
+
+    /** Whether events of this type (pipeline ordinal) fold into a sticky feature. */
+    public boolean foldsSticky(int type) {
+        if (!anySticky) return false;
+        for (int i = 0; i < sticky.length; i++) if (sticky[i] && (onMasks[i] & (1L << type)) != 0) return true;
+        return false;
+    }
+
+    /**
+     * The sticky features' state in {@code stateBytes}, compact (feature position, time of the latest change, the
+     * value, the value before it), or null when every sticky value is its default: nothing to keep.
+     */
+    public byte[] stickyState(byte[] stateBytes) {
+        if (!anySticky || stateBytes == null) return null;
+        State st = State.decode(stateBytes, shapes);
+        var bos = new java.io.ByteArrayOutputStream(32);
+        int n = 0;
+        try (var out = new java.io.DataOutputStream(bos)) {
+            out.writeByte(1);
+            for (int i = 0; i < sticky.length; i++) {
+                Feat f = st.feats[i];
+                if (!sticky[i] || f.lastTs == NONE || f.lat == specs.get(i).defaultValue()) continue;
+                out.writeShort(i);
+                out.writeLong(f.lastTs);
+                out.writeDouble(f.lat);
+                out.writeDouble(f.lon);
+                n++;
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return n == 0 ? null : bos.toByteArray();
+    }
+
+    /** A state blob holding only the sticky features of {@link #stickyState} (the windows expired with the TTL). */
+    public byte[] restoreSticky(byte[] stickyBytes) {
+        State st = State.decode(null, shapes);
+        try (var in = new DataInputStream(new ByteArrayInputStream(stickyBytes))) {
+            if (in.readByte() != 1) return null;
+            while (in.available() > 0) {
+                int i = in.readUnsignedShort();
+                long ts = in.readLong();
+                double cur = in.readDouble();
+                double before = in.readDouble();
+                if (i >= sticky.length || !sticky[i]) return null;      // another layout: start fresh
+                st.feats[i].lastTs = ts;
+                st.feats[i].lat = cur;
+                st.feats[i].lon = before;
+                st.lastEventUs = Math.max(st.lastEventUs, ts);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return st.encode(shapes);
+    }
+
+    /**
+     * Whether a sticky feature holds a non-default value among the entity's values in {@code out} (at their schema
+     * indices): its online-store key must then not expire.
+     */
+    public boolean holdsSticky(float[] out) {
+        if (!anySticky || out == null) return false;
+        for (int i = 0; i < sticky.length; i++)
+            if (sticky[i] && out[indices[i]] != (float) specs.get(i).defaultValue()) return true;
+        return false;
     }
 
     /** Whether events of this type (pipeline ordinal) fold into any of this entity's features. */
@@ -171,7 +272,7 @@ public final class EntityAggregator {
         long t = r.timeUs;
         long bit = 1L << type;
         for (int i = 0; i < specs.size(); i++) {
-            boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
+            boolean match = matches(i, filterMask, out);
             out[indices[i]] = (float) ((onMasks[i] & bit) != 0
                     ? aggs[i].apply(specs.get(i), st.feats[i], r, slots[i], t, match)
                     : aggs[i].read(specs.get(i), st.feats[i], r, slots[i], t, match));
@@ -193,7 +294,7 @@ public final class EntityAggregator {
         State st = State.decode(stateBytes, shapes);
         long t = r.timeUs;
         for (int i = 0; i < specs.size(); i++) {
-            boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
+            boolean match = matches(i, filterMask, out);
             out[indices[i]] = (float) aggs[i].read(specs.get(i), st.feats[i], r, slots[i], t, match);
         }
     }

@@ -180,6 +180,11 @@ def _schema_problems(p: "Pipeline") -> list[str]:
                 out.append(f"{f.name}: {ty} has no field {f.value} (its `value`)")
             if f.filter and not schema.filter_applies(f.filter, ty, p.default_type):
                 out.append(f"{f.name}: its filter {f.filter} is not evaluated for {ty} (add it to the filter's event_types)")
+    scored = set(p.scored()) | {p.default_type}
+    for f in schema.stream_features():
+        if f.gate and any(ty not in scored for ty in (f.on or (p.default_type,))):
+            out.append(f"{f.name}: a gated feature folds only scored event types (a fold-only event has no feature "
+                       f"vector to read its gate {f.gate} from)")
     return out
 
 

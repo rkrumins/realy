@@ -1,0 +1,28 @@
+// Account status changes at the system of record (core banking): freezes, closures and flags such as an AML
+// hold. Each carries the account's status and flags after the change, and the customer (the events topic's
+// partition key), so an account's changes and its payments share one order and its status features are exact.
+syntax = "proto3";
+
+package realy.accounts.v1;
+
+option java_package = "io.realy.contracts.accounts.v1";
+option java_multiple_files = true;
+
+enum AccountStatus {
+  ACCOUNT_STATUS_UNSPECIFIED = 0;
+  ACCOUNT_STATUS_OPEN = 1;
+  ACCOUNT_STATUS_FROZEN = 2;       // no debits until released (fraud investigation, court order)
+  ACCOUNT_STATUS_CLOSED = 3;
+  ACCOUNT_STATUS_DORMANT = 4;
+}
+
+message AccountStatusChanged {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  uint64 customer_id = 3;
+  uint64 account_id = 4;
+  AccountStatus status = 5;        // after the change
+  repeated string flags = 6;       // the account's flags after the change: AML_HOLD, OVERDRAWN, ...
+  string reason = 7;               // FRAUD_CONFIRMED, AML_REVIEW, RELEASED, INITIAL, ...
+  string source = 8;               // CORE_BANKING, FRAUD_OPS, AML
+}

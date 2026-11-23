@@ -1,3 +1,4 @@
+from realy.payments.v1 import transaction_pb2 as _transaction_pb2
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -56,3 +57,21 @@ class CardLifecycleEvent(_message.Message):
     wallet: Wallet
     step_up_passed: bool
     def __init__(self, event_id: _Optional[int] = ..., event_time_us: _Optional[int] = ..., customer_id: _Optional[int] = ..., card_id: _Optional[int] = ..., device_id: _Optional[int] = ..., action: _Optional[_Union[CardAction, str]] = ..., wallet: _Optional[_Union[Wallet, str]] = ..., step_up_passed: _Optional[bool] = ...) -> None: ...
+
+class CardStatusChanged(_message.Message):
+    __slots__ = ("event_id", "event_time_us", "customer_id", "card_id", "status", "reason", "source")
+    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
+    EVENT_TIME_US_FIELD_NUMBER: _ClassVar[int]
+    CUSTOMER_ID_FIELD_NUMBER: _ClassVar[int]
+    CARD_ID_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    event_id: int
+    event_time_us: int
+    customer_id: int
+    card_id: int
+    status: _transaction_pb2.CardStatus
+    reason: str
+    source: str
+    def __init__(self, event_id: _Optional[int] = ..., event_time_us: _Optional[int] = ..., customer_id: _Optional[int] = ..., card_id: _Optional[int] = ..., status: _Optional[_Union[_transaction_pb2.CardStatus, str]] = ..., reason: _Optional[str] = ..., source: _Optional[str] = ...) -> None: ...
