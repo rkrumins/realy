@@ -180,3 +180,27 @@ def test_verify_folds_standalone_messages_in_emission_order(ext):
     assert tmask & bit["device_tampered"] and not tmask & bit["login_failed"]
     assert lmask & bit["login_failed"] and not lmask & bit["device_tampered"]
     assert login["customer_id"] == 4 and login["event_time_us"] == T0 + 2
+
+
+def test_the_report_gives_the_message_mix_per_decided_payment(ext, tmp_path):
+    import json
+    from realy.report.report import _render_mix, message_mix
+    (tmp_path / "emit-0.json").write_text(json.dumps({"typed_sent": {"login": 600, "device_telemetry": 300}}))
+    (tmp_path / "emit-1.json").write_text(json.dumps({"typed_sent": {"login": 50, "payment_initiation": 7}}))
+    mx = message_mix(tmp_path, 1000)
+    assert mx["by_type"] == {"device_telemetry": {"sent": 300, "per_payment": 0.3}, "login": {"sent": 650, "per_payment": 0.65}}
+    assert mx["messages"] == 950 and "login 650 (0.65/payment)" in _render_mix(mx)[0]
+    assert message_mix(tmp_path / "none", 10) is None
+
+
+def test_a_candidate_rule_set_that_extends_resolves_with_its_base(tmp_path):
+    import yaml
+    from realy.scenario import REPO_ROOT, resolve_rule_file, resolve_rule_set
+    ext = yaml.safe_load(resolve_rule_file(REPO_ROOT / "rules" / "baseline-ext.yaml"))
+    base = yaml.safe_load(resolve_rule_set("baseline"))
+    ids = [r["id"] for r in ext["rules"]]
+    assert ids[:len(base["rules"])] == [r["id"] for r in base["rules"]] and "ATO_FAILED_LOGINS_NEW_DEVICE" in ids
+    assert ext["version"] == "baseline-v5-ext1"
+    # a copy elsewhere still finds its base in rules/
+    (tmp_path / "mine.yaml").write_text("extends: baseline\nversion: mine\nrules: []\n")
+    assert len(yaml.safe_load(resolve_rule_file(tmp_path / "mine.yaml"))["rules"]) == len(base["rules"])

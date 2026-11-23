@@ -135,7 +135,7 @@ def message_mix(run_dir: Path, decided: int) -> dict[str, Any] | None:
     sent: dict[str, int] = {}
     for f in glob.glob(str(run_dir / "emit-*.json")):
         try:
-            for k, v in (_json.loads(Path(f).read_text()).get("typed_sent") or {}).items():
+            for k, v in (json.loads(Path(f).read_text()).get("typed_sent") or {}).items():
                 sent[k] = sent.get(k, 0) + int(v)
         except (OSError, ValueError):
             pass

@@ -312,12 +312,21 @@ def resolve_rule_set(name: str) -> str:
     """The YAML of rules/<name>.yaml as the services receive it. A rule set may `extends: <base>`: the
     base's rules first (a rule of the same id replaced), then its own; its thresholds and step-up
     settings override the base's; its version is its own. Without `extends` the file is sent as written."""
-    text = (REPO_ROOT / "rules" / f"{name}.yaml").read_text()
+    return resolve_rule_file(REPO_ROOT / "rules" / f"{name}.yaml")
+
+
+def resolve_rule_file(path: Path) -> str:
+    """resolve_rule_set for a rule-set file anywhere (a candidate for `rules-whatif`): its `extends:` base is
+    looked up beside it, else in rules/."""
+    path = Path(path)
+    name = path.stem
+    text = path.read_text()
     doc = yaml.safe_load(text) or {}
     base_name = doc.get("extends")
     if not base_name:
         return text
-    base = yaml.safe_load(resolve_rule_set(str(base_name))) or {}
+    beside = path.parent / f"{base_name}.yaml"
+    base = yaml.safe_load(resolve_rule_file(beside) if beside.exists() else resolve_rule_set(str(base_name))) or {}
     own_ids = {r.get("id") for r in doc.get("rules") or []}
     merged = dict(base)
     for k, v in doc.items():
