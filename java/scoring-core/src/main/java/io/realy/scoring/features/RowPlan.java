@@ -45,11 +45,10 @@ public final class RowPlan {
         for (int i = 0; i < numFields.size(); i++) numIndex.put(numFields.get(i), i);
         for (int i = 0; i < valFields.size(); i++) valIndex.put(valFields.get(i), i);
         // fields another event type carries (a login's ip, a device report's risk_score): a payment reads 0
-        var pay = TransactionEvent.getDescriptor();
         this.numOnPayment = new boolean[numFields.size()];
-        for (int i = 0; i < numOnPayment.length; i++) numOnPayment[i] = pay.findFieldByName(numFields.get(i)) != null;
+        for (int i = 0; i < numOnPayment.length; i++) numOnPayment[i] = EventView.has(numFields.get(i));
         this.valOnPayment = new boolean[valFields.size()];
-        for (int i = 0; i < valOnPayment.length; i++) valOnPayment[i] = pay.findFieldByName(valFields.get(i)) != null;
+        for (int i = 0; i < valOnPayment.length; i++) valOnPayment[i] = EventView.has(valFields.get(i));
     }
 
     private final boolean[] numOnPayment;
@@ -116,7 +115,8 @@ public final class RowPlan {
             r.keys[i] = x instanceof String str ? (str.isEmpty() ? 0 : Hashing.fnv1a64(str)) : ((Number) x).longValue();
         }
         r.num = new double[p.num.length];
-        for (int i = 0; i < r.num.length; i++) r.num[i] = p.num[i] < 0 ? 0 : ((Number) v[p.num[i]]).doubleValue();
+        // numbers as they are, an enum as its number, a bool as 1 / 0 (WireCodec.numeric; EventView.numeric)
+        for (int i = 0; i < r.num.length; i++) r.num[i] = p.num[i] < 0 ? 0 : c.numeric(p.num[i], v[p.num[i]]);
         r.val = new long[p.val.length];
         for (int i = 0; i < r.val.length; i++) {
             int j = p.val[i];

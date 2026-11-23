@@ -7,6 +7,7 @@ import dev.cel.common.types.MapType;
 import dev.cel.common.types.SimpleType;
 import dev.cel.compiler.CelCompiler;
 import dev.cel.compiler.CelCompilerFactory;
+import dev.cel.parser.CelStandardMacro;
 import dev.cel.runtime.CelEvaluationException;
 import dev.cel.runtime.CelRuntime;
 import dev.cel.runtime.CelRuntimeFactory;
@@ -14,13 +15,17 @@ import java.util.Map;
 
 /**
  * Shared CEL environment: {@code f: map<string,double>} (features) and {@code event: map<string,dyn>}
- * (see {@link io.realy.scoring.features.EventView}). Identical declarations are used by the Python
+ * (see {@link io.realy.scoring.features.EventView}; nested messages are nested maps, repeated fields lists),
+ * with the standard macros (has, all, exists, exists_one, map, filter). Identical declarations are used by the Python
  * verifier, so rules evaluate the same in both languages.
  */
 public final class Cel {
     private static final CelOptions OPTIONS = CelOptions.current().build();
+    // standard macros (has, all, exists, exists_one, map, filter): rules over lists, e.g.
+    // event.items.exists(i, i.qty > 2), as Python's CEL evaluates them
     private static final CelCompiler COMPILER = CelCompilerFactory.standardCelCompilerBuilder()
             .setOptions(OPTIONS)
+            .setStandardMacros(CelStandardMacro.STANDARD_MACROS)
             .addVar("f", MapType.create(SimpleType.STRING, SimpleType.DOUBLE))
             .addVar("event", MapType.create(SimpleType.STRING, SimpleType.DYN))
             .setResultType(SimpleType.BOOL)
@@ -29,6 +34,7 @@ public final class Cel {
     /** Derived features written as expressions (feature_schema.yaml `expr`): same variables, numeric result. */
     private static final CelCompiler NUMERIC = CelCompilerFactory.standardCelCompilerBuilder()
             .setOptions(OPTIONS)
+            .setStandardMacros(CelStandardMacro.STANDARD_MACROS)
             .addVar("f", MapType.create(SimpleType.STRING, SimpleType.DOUBLE))
             .addVar("event", MapType.create(SimpleType.STRING, SimpleType.DYN))
             .setResultType(SimpleType.DYN)       // numbers, or booleans as 1.0 / 0.0 (checked at evaluation)

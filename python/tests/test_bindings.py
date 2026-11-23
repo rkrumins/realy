@@ -63,7 +63,10 @@ def test_generic_view_equals_the_payment_view_on_the_golden_events():
         ev = {k: lists[k][i] for k in names}
         v = event_view(ev)
         assert v.pop("txn")["transaction"] == ""             # a one-message payment: the default context
-        assert c.view(ev) == v == event_view_legacy(ev), i
+        assert c.view(ev) == v, i
+        legacy = event_view_legacy(ev)
+        assert {k: v[k] for k in legacy} == legacy, i         # the flat fields, as the hand-written view had them
+        assert v["card_info"]["status"] == "CARD_STATUS_UNSPECIFIED" and v["items"] == [], i   # blocks absent: defaults
 
 
 def test_absent_fields_read_their_proto3_default():
@@ -109,6 +112,9 @@ def test_codec_reads_decoded_messages():
     row = event_type("payment").codec.row(msg)
     t = pq.read_table(golden.OUT / "events.parquet").slice(0, 1).to_pylist()[0]
     for k, v in row.items():
+        if k not in t:      # a rich block's leaf (the golden payments carry none): its default
+            assert v in (0, 0.0, "", False, [], {}), k
+            continue
         assert (np.float32(v) == np.float32(t[k])) if isinstance(v, float) else v == t[k], k
 
 

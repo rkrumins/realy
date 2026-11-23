@@ -909,6 +909,115 @@ Result of 3-D Secure (EMV 3DS) cardholder authentication carried in an online ca
 | 30 | `pin_verified` | `bool` | the PIN was entered and verified (chip, ATM) |
 | 31 | `cryptogram_valid` | `bool` | EMV chip / network-token cryptogram verified (false for magstripe, keyed) |
 | 32 | `scheme_score` | `uint32` | card network risk score 0-99 carried in the request (0 = none) |
+| 40 | `card_info` | `CardInfo` | Rich blocks: the payment's parties and context as structured sub-messages, the way a payment hub carries them. All optional (absent = proto3 defaults), so payments without them are byte-identical; the generic codec (bindings) reads every field of them by dotted path (card_info.status, merchant_info.address.country), so features, filters, entity keys and rules can use them. |
+| 41 | `account_info` | `AccountInfo` |  |
+| 42 | `merchant_info` | `MerchantInfo` |  |
+| 43 | `device_info` | `DeviceInfo` |  |
+| 44 | `payee_info` | `PayeeInfo` |  |
+| 45 | `authentication` | `Authentication` |  |
+| 46 | `items` | `repeated LineItem` | the basket (e-commerce) |
+| 47 | `attributes` | `map<string, string>` | free-form context from the channel |
+
+### `CardStatus` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `CARD_STATUS_UNSPECIFIED` | 0 |  |
+| `CARD_STATUS_ACTIVE` | 1 |  |
+| `CARD_STATUS_BLOCKED` | 2 |  |
+| `CARD_STATUS_LOST` | 3 |  |
+| `CARD_STATUS_STOLEN` | 4 |  |
+| `CARD_STATUS_EXPIRED` | 5 |  |
+
+### `CardInfo`
+
+The card as the authorisation saw it.
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `id` | `uint64` | the card (equal to card_id when both are sent) |
+| 2 | `bin` | `string` | first digits of the PAN (6 or 8) |
+| 3 | `bin_country` | `string` | ISO 3166-1 alpha-2 of the issuing BIN |
+| 4 | `status` | `CardStatus` | the issuer's status of the card |
+| 5 | `network` | `string` | VISA, MASTERCARD... |
+| 6 | `tokenized` | `bool` | a network token (wallet) rather than the PAN |
+| 7 | `wallet` | `string` | APPLE_PAY, GOOGLE_PAY, "" for none |
+| 8 | `issued_at_us` | `int64` |  |
+
+### `AccountType` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `ACCOUNT_TYPE_UNSPECIFIED` | 0 |  |
+| `ACCOUNT_CURRENT` | 1 |  |
+| `ACCOUNT_SAVINGS` | 2 |  |
+| `ACCOUNT_CREDIT` | 3 |  |
+
+### `AccountInfo`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `id` | `uint64` |  |
+| 2 | `type` | `AccountType` |  |
+| 3 | `balance_usd_minor` | `int64` |  |
+| 4 | `age_days` | `uint32` |  |
+| 5 | `flags` | `repeated string` | e.g. AML_HOLD, OVERDRAWN |
+
+### `Address`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `country` | `string` |  |
+| 2 | `city` | `string` |  |
+| 3 | `postcode` | `string` |  |
+
+### `MerchantInfo`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `id` | `uint64` |  |
+| 2 | `name` | `string` |  |
+| 3 | `mcc` | `uint32` |  |
+| 4 | `address` | `Address` |  |
+| 5 | `risk_tier` | `uint32` | the acquirer's tier, 0 (low) to 3 (high) |
+
+### `DeviceInfo`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `id` | `uint64` |  |
+| 2 | `os` | `string` |  |
+| 3 | `app_version` | `string` |  |
+| 4 | `emulator` | `bool` |  |
+| 5 | `rooted` | `bool` |  |
+| 6 | `risk_score` | `double` | the device intelligence score, 0..1 |
+
+### `PayeeInfo`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `id` | `uint64` |  |
+| 2 | `bank_country` | `string` |  |
+| 3 | `new_payee` | `bool` | first payment to this payee |
+| 4 | `name_match` | `string` | confirmation of payee: MATCH, CLOSE_MATCH, NO_MATCH, "" |
+
+### `Authentication`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `three_ds` | `ThreeDsResult` |  |
+| 2 | `attempts` | `uint32` | authentication attempts before this one succeeded or failed |
+| 3 | `method` | `string` | OTP, BIOMETRIC, PASSWORD... |
+| 4 | `sca_exempt` | `bool` | an SCA exemption was applied (low value, trusted beneficiary...) |
+
+### `LineItem`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `sku` | `string` |  |
+| 2 | `qty` | `uint32` |  |
+| 3 | `amount_usd_minor` | `int64` |  |
+| 4 | `category` | `string` |  |
 
 ## `realy.scoring.v1` (decision.proto)
 

@@ -92,6 +92,7 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `MODEL_CLIENT_KEY` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/ModelChannels.java` |
 | `MODEL_INPUT_DIM` |  | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
 | `MODEL_INPUT_NAME` | `input__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
+| `MODEL_METADATA_RETRY_MS` | `10000` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
 | `MODEL_NAME` | `fraud_mlp` | Flink job, gateway |  | `java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `MODEL_OUTPUT_NAME` | `output__0` | gateway + Flink (scoring core) |  | `java/scoring-core/src/main/java/io/realy/scoring/model/KServeModelClient.java` |
 | `MODEL_SERVER_CONFIG` |  | model server |  | `java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
@@ -173,4 +174,4 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `STORE_STATE` | `customer,card` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
 | `TXN_TTL_DAYS` | `2` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/AssembleFunction.java` |
 
-166 variables.
+167 variables.

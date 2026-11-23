@@ -144,12 +144,13 @@ def _schema_problems(p: "Pipeline") -> list[str]:
     except Exception as e:  # noqa: BLE001 - a broken schema is a problem to report, not a crash
         return [f"pipeline {p.name}: features {p.features}: {e}"]
     out: list[str] = []
-    fields = {}
+    fields = {}       # per type: its top-level fields (what `event.X` names) and every leaf by dotted path
     for n in p.event_types:
         try:
-            fields[n] = {f.name for f in event_type(n).codec.fields}
+            c = event_type(n).codec
         except KeyError:
             continue
+        fields[n] = set(c.top_names) | set(c.by_name)
     for name, types in schema.filter_on.items():
         for ty in types:
             if ty not in p.event_types:
