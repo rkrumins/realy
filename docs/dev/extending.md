@@ -12,7 +12,7 @@ while you do it.
 | a message or a multi-message transaction | `contracts/events/`, `contracts/transactions/` | [schemas](schemas.md), [transactions](transactions.md) |
 | a rule, threshold or step-up policy | `rules/*.yaml`, live config | [rules](../reference/rules.md) |
 | a topology (which components, in which order) | `contracts/topologies.yaml` | [topologies](topologies.md) |
-| **an aggregation kind** (`agg:` other than the eight built-ins) | an `Aggregation` plugin, Java + Python twin | this page |
+| **an aggregation kind** (`agg:` other than the nine built-ins) | an `Aggregation` plugin, Java + Python twin | this page |
 | **a scoring-time function** CEL cannot express (`fn:` other than the built-in library) | a `DerivedFn` plugin, Java + Python twin | [derived functions](#derived-functions) |
 | another feature store | `OnlineStore` (Java interface, `io.realy.scoring.store`) | [feature store](../feature-store-and-inference.md) |
 | another model protocol | `ModelClient` (`io.realy.scoring.model`) | [feature store and inference](../feature-store-and-inference.md) |

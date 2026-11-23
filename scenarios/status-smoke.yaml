@@ -1,0 +1,30 @@
+name: status-smoke
+description: "Rich payments plus the status of the entities they touch, as change feeds from simulated systems of record: cards blocked by the issuer's monitoring or reported lost / stolen, temporary locks, accounts frozen or on an AML hold, payees listed as mules (pipeline payments-status). Flink folds the changes into card, account and payee state and the gateway reads it from the online store, re-windowed at each payment's time. Genuine payments stop on a blocked card, fraud attempts continue: what rule CARD_BLOCKED catches. Needs `make up PIPELINE=payments-status`."
+seed: 42
+pipeline: payments-status
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 500 }
+  duration_s: 60
+  warmup_s: 10
+  event_blocks: [card_info, account_info, merchant_info, device_info, payee_info, authentication, items, attributes]
+  # the systems of record (gen/sor.py): rates raised so a one-minute run sees every kind of change
+  status: { initial_blocked_cards: 0.003, initial_aml_holds: 0.002, issuer_block_after: 2, issuer_block_rate: 0.8,
+            issuer_block_delay_s: 120, temporary_locks_per_1k: 2.0, lock_duration_s: 1800, aml_holds_per_1k: 1.0,
+            freeze_on_report: 0.5, list_payee_after: 1 }
+topology: gateway-kafka
+rules: baseline-status
+fraud: { background_per_1k: 4.0, mix: { account_takeover: 1.0, card_testing: 1.0, app_scam_mule: 1.0, lost_stolen: 1.0 } }
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  self_inclusion: true
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+  max_batch: 1
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }
+flink_state: fresh

@@ -11,7 +11,7 @@ list of every feature is [reference/features.md](../reference/features.md).
 
 | Source | Computed by | Example |
 |---|---|---|
-| `stream` | Flink, per entity, over event-time windows (`count`, `sum`, `max`, `avg`, `distinct`, `novel`, `time_since_last`, `geo_speed_kmh`, or a [plugin aggregation](extending.md)), optionally behind a named `filter` | `card_small_cnp_count_10m`: small card-not-present payments on the card in 10 minutes |
+| `stream` | Flink, per entity, over event-time windows (`count`, `sum`, `max`, `avg`, `distinct`, `novel`, `time_since_last`, `geo_speed_kmh`, `latest`, or a [plugin aggregation](extending.md)), optionally behind a named `filter` | `card_small_cnp_count_10m`: small card-not-present payments on the card in 10 minutes |
 | `profile` | seeded from the world into Redis (`pf:<entity>:<id>`) | `cust_tenure_days` |
 | `derived` with `fn:` | a built-in function at scoring time (Java `DerivedFeatures`, Python `features/derived.py`) | `dist_from_home_km` |
 | `derived` with `expr:` | a CEL expression over `event` and the features computed before it (`f.<name>`) | `cvv_mismatch` |
@@ -52,6 +52,58 @@ features:
 
 Which messages exist, how they are routed and which features stay exact: [schemas](schemas.md#message-types-that-carry-a-subset-of-the-entities).
 
+## Entity status from change feeds
+
+"Is this card blocked?", "is this account frozen?", "is this payee a known mule?" are statuses owned by
+other systems (card management, core banking, fraud operations). When those systems publish their changes,
+the pipeline folds them into state like any other message, and a payment reads the status as a feature of
+its own time: computed where its other features are, with nothing to look up on the hot path
+(pipeline `payments-status`, `contracts/features/feature_schema_status.yaml`).
+
+```yaml
+filters:
+  card_blocking: { when: "event.status in ['CARD_STATUS_BLOCKED', 'CARD_STATUS_LOST', 'CARD_STATUS_STOLEN']",
+                   event_types: [card_status_changed] }
+features:
+  - { name: card_blocked, source: stream, entity: card, agg: latest, filter: card_blocking,
+      event_types: [card_status_changed] }
+  - { name: card_status_code, source: stream, entity: card, agg: latest, value: status,
+      event_types: [card_status_changed], default: 1 }
+  - { name: dev_blocked_card_attempts_24h, source: stream, entity: device, agg: count, gate: card_blocked,
+      window: 24h, granularity: 1h }
+```
+
+- **`agg: latest`** is the value of the latest folded change, as of the event's time. Without `value:` it
+  is the change's filter bit, so `card_blocked` is 1 after a blocking change and 0 after an unblock; with
+  `value:` it is the field (an enum reads as its number). A change older than the latest is ignored (it
+  arrived late); read before the latest change's time it gives the value before it. State: the
+  `last_geo` shape (time, value, value before), so the state encoding is unchanged.
+- **No `window`: sticky.** The value holds until it changes, including past the keyed state's TTL
+  (`STATE_TTL_DAYS`, 8 days of processing time): a stolen card left dormant for a month still reads
+  blocked. The Flink stage keeps a sticky value in a second state (`s-<entity>`) that never expires,
+  only while it is not the default (an unblock clears it), and writes the entity's online-store key
+  without expiry meanwhile. With a `window`, the value reads the default once it is older than the
+  window. Pick the default to be the common state (`card_status_code` defaults to 1, ACTIVE), or every
+  card that ever changed would be kept.
+- **`gate: <feature>`** folds the feature only while `<feature>` is non-zero for the event: a status
+  feeding a Flink feature. The gate must be computed earlier, in an earlier stage (registry order) or
+  earlier in the same entity, which both loaders check; a gated feature folds only scored types (a
+  fold-only message carries no feature vector to read its gate from).
+- **Exactness.** Card and account changes carry the customer and travel on the events topic, so they
+  are exact against the payments (the account is computed inside its customer's stage:
+  [schemas](schemas.md#exactness-follows-ownership)). A payee listing has no customer: it travels on its
+  own topic keyed by payee and its features are agreement-only.
+- **Who owns the data.** The systems of record do; the pipeline owns its copy as state, rebuilt by
+  replaying the change topics. For data no system publishes changes of (a third-party risk score),
+  a lookup at decision time is the other path: planned as `contracts/lookups` (Redis keys and HTTP
+  services, with a cache and a deadline), and audited per decision.
+
+The scenario side is `traffic.status` (`gen/sor.py`): simulated systems of record that block a card at
+its k-th fraudulent payment (the issuer's monitoring) or when its fraud is reported, lock cards and put
+accounts on AML holds for a while, freeze an account taken over and list a payee at its k-th fraud label.
+Genuine payments stop on a blocked card while fraud attempts continue, which is what a blocked-card rule
+(`rules/baseline-status.yaml`) catches.
+
 ## Walkthrough 1: an expression feature (no code)
 
 Flag online payments well above the customer's usual ticket that were not 3-D Secure authenticated:
@@ -85,7 +137,7 @@ shape):
 
 ## A new aggregation kind
 
-The eight built-ins cover counts, sums, averages, maxima, distinct counts, novelty, recency and speed.
+The nine built-ins cover counts, sums, averages, maxima, distinct counts, novelty, recency, speed and the latest value of a change feed.
 Anything else (a minimum, a weighted sum, a ratio of two windows) is an `Aggregation` plugin: one Java
 class and its Python twin, proved equal by shared fixtures. It reuses one of the four state shapes, so
 the state codec and the online-store layout stay as they are. Walkthrough and rules:

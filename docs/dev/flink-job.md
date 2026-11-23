@@ -50,7 +50,7 @@ The job has no payment-specific code on the feature path. Everything it computes
 | the Kafka key of every decision | the pipeline's partition entity, from the decoded row | edit the pipeline's `partition` |
 | what the source decodes from each event | `RowPlan`: one slot per event field a stream feature reads, by the aggregation's declared input | nothing: follows the schema |
 | filters | the schema's named CEL predicates, compiled once and evaluated once per event into a bit mask | add a filter (CEL), up to 63 |
-| aggregations | the aggregation registry: the eight built-ins and any [plugin](extending.md) in `PLUGINS_DIR` | add a plugin (Java + Python twin) |
+| aggregations | the aggregation registry: the nine built-ins and any [plugin](extending.md) in `PLUGINS_DIR` | add a plugin (Java + Python twin) |
 | the state layout | the aggregation's state shape (buckets, seen keys, last event, last event with location) | nothing: a plugin reuses a shape |
 | multi-message transactions | the transaction contracts named by `--assemble` | a contract, no code ([transactions](transactions.md)) |
 

@@ -84,6 +84,16 @@ entities (a device, a merchant, a payee) are shared across partitions: their ord
 as in production, and `verify` reports an agreement rate. The list is derived, not configured:
 `pipeline().exact_entities()`.
 
+Ownership also decides where an entity is computed. Each keyed stage is a shuffle, and events that cross
+one stage keyed by another entity come out interleaved across its subtasks. A card's stage directly
+follows its customer's, so a card's events still arrive from one customer subtask, in order. An account
+placed after the payee stage would not be: its events would come from several payee subtasks. So an
+owned entity that does not directly follow its owner in the registry is computed inside its owner's
+stage, keyed by its own id under the owner's key (Flink MapState): an account in its customer's stage,
+exact, and one shuffle fewer. `EntityRegistry.stageOf` (Java) and `registry().stage_of` (Python) give the
+stage; the evaluation order (each stage's entity, then the entities it hosts) is the order a `gate:` is
+checked against, and the one Flink, the gateway and the Python twin compute features in.
+
 ## Message types that carry a subset of the entities
 
 A payment names all seven entities. Most other messages name only some: a login has a customer, a device
