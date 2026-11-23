@@ -140,7 +140,8 @@ def _gen(status_spec, n_batches=12, seed=5, mix=None):
 def test_the_systems_of_record_publish_changes_in_time_order(status):
     from realy.bindings import event_type
     from realy.bindings.codec import message_class
-    sc, g, batches = _gen({"issuer_block_delay_s": 1.0, "temporary_locks_per_1k": 5.0, "aml_holds_per_1k": 5.0})
+    sc, g, batches = _gen({"issuer_block_delay_s": 1.0, "temporary_locks_per_1k": 5.0, "aml_holds_per_1k": 5.0,
+                           "initial_listed_mules": 0.5})
     by = collections.Counter()
     for b in batches:
         times = [r.t_us for r in b.records]
@@ -157,6 +158,7 @@ def test_the_systems_of_record_publish_changes_in_time_order(status):
     assert by["card_status_changed"] > 0 and by["account_status_changed"] > 0
     assert summary.get("card_status_changed:INITIAL", 0) > 0 and summary.get("card_status_changed:ISSUER_MONITORING", 0) > 0
     assert summary.get("card_status_changed:TEMPORARY_LOCK", 0) > 0
+    assert by["payee_listing_changed"] == summary["payee_listing_changed:INITIAL"] > 0
 
 
 def test_genuine_payments_stop_on_a_blocked_card_and_fraud_continues(status):

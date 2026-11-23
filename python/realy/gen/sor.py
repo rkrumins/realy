@@ -6,7 +6,8 @@ publish (scenario `traffic.status`, pipeline payments-status).
                     fraud label's time); temporary locks a customer sets in the app and lifts again (noise)
   core banking      an account frozen when an account takeover is reported; AML holds set and released (noise)
   fraud operations  a payee listed as a mule at its k-th fraud label
-  at the start      a share of cards already blocked, lost or stolen, and of accounts on an AML hold
+  at the start      a share of cards already blocked, lost or stolen, of accounts on an AML hold, and of the
+                    world's mule payees already listed
 
 Each change is a typed message (card_status_changed, account_status_changed: keyed by customer on the events
 topic; payee_listing_changed: keyed by payee on its own topic) at the simulated time it happens, merged with the
@@ -113,6 +114,12 @@ class SystemOfRecord:
                                         self.cs.Value("CARD_STATUS_STOLEN")], size=pick.size, p=[0.5, 0.25, 0.25])
             for i, st in zip(pick.tolist(), statuses.tolist()):
                 self._card(t0, int(cust_ids[owner[i]]), int(w.cards["card_id"][i]), int(st), "INITIAL", "CARD_MANAGEMENT")
+        if s.initial_listed_mules > 0 and self.gen_id == 0:
+            # payees belong to no customer: the first shard lists the known mules for every shard
+            mules = np.flatnonzero(w.payees["is_mule"])
+            for i in mules[self.rng.random(mules.size) < s.initial_listed_mules].tolist():
+                self._payee(t0, int(w.payees["payee_id"][i]), "INITIAL")
+                self.payee_labels[int(w.payees["payee_id"][i])] = max(s.list_payee_after, 1)   # listed: not again
         if s.initial_aml_holds > 0:
             pick = self.rows[self.rng.random(self.rows.size) < s.initial_aml_holds]
             for r in pick.tolist():

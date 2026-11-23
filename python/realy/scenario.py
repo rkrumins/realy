@@ -115,6 +115,7 @@ class StatusSpec(_Model):
     payments-status). Rates are per simulated time; every draw is on a random stream of its own."""
     initial_blocked_cards: float = 0.002     # share of cards blocked, lost or stolen when the simulation starts
     initial_aml_holds: float = 0.001         # share of accounts on an AML hold when the simulation starts
+    initial_listed_mules: float = 0.0        # share of the world's mule payees already listed when it starts
     issuer_block_after: int = 2              # the issuer's monitoring blocks a card at its k-th fraudulent payment (0: never)
     issuer_block_rate: float = 0.6           # ... for this share of compromised cards
     issuer_block_delay_s: float = 300.0      # ... this long after it

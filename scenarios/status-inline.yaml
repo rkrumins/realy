@@ -9,7 +9,7 @@ traffic:
   warmup_s: 10
   event_blocks: [card_info, account_info, merchant_info, device_info, payee_info, authentication, items, attributes]
   # the systems of record (gen/sor.py): rates raised so a one-minute run sees every kind of change
-  status: { initial_blocked_cards: 0.003, initial_aml_holds: 0.002, issuer_block_after: 2, issuer_block_rate: 0.8,
+  status: { initial_blocked_cards: 0.003, initial_aml_holds: 0.002, initial_listed_mules: 0.5, issuer_block_after: 2, issuer_block_rate: 0.8,
             issuer_block_delay_s: 120, temporary_locks_per_1k: 2.0, lock_duration_s: 1800, aml_holds_per_1k: 1.0,
             freeze_on_report: 0.5, list_payee_after: 1 }
 topology: flink-inline
