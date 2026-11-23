@@ -835,6 +835,16 @@ class Explorer:
             event["ip"] = ipv4(event["ip_v4"])
         event["event_id"] = str(er["event_id"])
         event["amount_usd"] = er.get("amount_usd_minor", 0) / 100.0
+        # the rich blocks (card_info, merchant_info, items...): nested, enums by name, as rules see them
+        from ..gen.blocks import BLOCKS
+        dotted = [k for k in event if "." in k or k in ("items", "attributes")]
+        if dotted:
+            from ..bindings.codec import codec as _codec
+            view = _codec("realy.payments.v1.TransactionEvent").view(er)
+            present = {k.split(".", 1)[0] for k in dotted}
+            event["blocks"] = {b: view[b] for b in BLOCKS if b in present}
+            for k in dotted:
+                event.pop(k, None)
         role = int(er.get("campaign_role") or 0)
         label = {"is_fraud": bool(er.get("is_fraud")), "fraud_type": meta.names.get(int(er.get("fraud_type") or 0), "?"),
                  "campaign_id": str(er.get("campaign_id") or 0),

@@ -71,3 +71,102 @@ def test_payments_without_blocks_are_byte_identical():
     assert e.SerializeToString() == pb.TransactionEvent(event_id=1, card_id=4, amount_usd_minor=500,
                                                         card_info=None).SerializeToString()
     assert not e.HasField("card_info")
+
+
+def _gen(blocks, n_batches=4, seed=9):
+    from realy.gen.generator import Generator, sim_start_us
+    from realy.scenario import Scenario, WorldSpec
+    from realy.world import build_world
+    spec = WorldSpec(customers=2000, merchants=300, payees=800)
+    sc = Scenario(name="t", seed=seed, world=spec, traffic={"event_blocks": blocks},
+                  fraud={"background_per_1k": 30.0, "mix": {"account_takeover": 1.0, "card_testing": 1.0,
+                                                            "app_scam_mule": 1.0}})
+    g = Generator(build_world(spec, seed, None), sc, 0, 1)
+    t = sim_start_us(sc)
+    dt = int(400 / g.natural_rate_per_sim_s() * 1e6)
+    out = []
+    for _ in range(n_batches):
+        out.append(g.generate(400, t, t + dt))
+        t += dt
+    return out
+
+
+def test_drawn_blocks_are_what_the_payload_carries():
+    from realy.gen.blocks import BLOCKS
+    c = codec(TE)
+    batches = _gen(list(BLOCKS))
+    seen = {b: 0 for b in ("card_info", "merchant_info", "payee_info", "authentication", "items")}
+    for b in batches:
+        cols = b.columns
+        for i, payload in enumerate(b.payloads):
+            msg = pb.TransactionEvent.FromString(payload)
+            row = c.row(msg)
+            for k, v in row.items():
+                if k not in cols:
+                    continue
+                want = cols[k][i]
+                want = want.item() if hasattr(want, "item") else want
+                if k == "items":
+                    assert [dict(x) for x in v] == [dict(x) for x in want], (i, k)
+                elif k == "attributes":
+                    assert dict(v) == dict(want), (i, k)
+                elif k == "account_info.flags":
+                    assert list(v) == list(want), (i, k)
+                elif isinstance(v, float):
+                    assert abs(v - float(want)) < 1e-9, (i, k)
+                else:
+                    assert v == want, (i, k, v, want)
+            for blk in seen:
+                seen[blk] += int(msg.HasField(blk) if blk != "items" else len(msg.items) > 0)
+            if msg.card_id == 0:
+                assert not msg.HasField("card_info") and cols["card_info.bin"][i] == ""
+    assert all(v > 0 for v in seen.values()), seen
+
+
+def test_flat_payloads_are_unchanged_by_blocks_being_available():
+    a = _gen([], n_batches=2)
+    b = _gen([], n_batches=2)
+    assert [p for x in a for p in x.payloads] == [p for x in b for p in x.payloads]
+    assert not any(k.startswith("card_info") for k in a[0].columns)
+
+
+def test_the_event_log_round_trips_blocks_for_verify(tmp_path, monkeypatch):
+    """Blocks written to the event log as the driver writes them, read back as verify reads them, give the
+    same views and the same rich features as the in-memory rows."""
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from realy.features.derived import event_view
+    from realy.features.engine import ReferenceEngine
+    from realy.features.schema import load_schema
+    from realy.gen.blocks import ARROW_TYPES, BLOCKS
+    monkeypatch.setenv("PIPELINE", "payments-rich")
+    batches = _gen(list(BLOCKS), n_batches=2)
+    cols = {k: np.concatenate([b.columns[k] for b in batches]) for k in batches[0].columns}
+    pq.write_table(pa.table({k: (pa.array(list(v), type=ARROW_TYPES[k]) if k in ARROW_TYPES else v)
+                             for k, v in cols.items()}), tmp_path / "events-0.parquet")
+    t = pq.read_table(tmp_path / "events-0.parquet")
+    back = {c: t[c].to_numpy(zero_copy_only=False).tolist() for c in t.column_names}
+    s = load_schema()
+    assert len(s.features) == 73
+    eng_a = ReferenceEngine(s, ["customer", "card"], default_type="payment", scored_types=["payment"])
+    eng_b = ReferenceEngine(s, ["customer", "card"], default_type="payment", scored_types=["payment"])
+    import cel
+    filt = s.compiled_filters()
+    n = len(back["event_id"])
+    names = [f.name for f in s.features]
+    for i in range(n):
+        mem = {k: (v[i].item() if hasattr(v[i], "item") else v[i]) for k, v in cols.items()}
+        disk = {k: v[i] for k, v in back.items()}
+        va, vb = event_view(mem), event_view(disk)
+        assert va == vb, i
+        ctx = cel.Context()
+        ctx.add_variable("event", vb)
+        ctx.add_variable("f", {})
+        mask = sum(1 << b for b, p in enumerate(filt) if p is not None and p.execute(ctx))
+        oa, ob = [0.0] * len(names), [0.0] * len(names)
+        eng_a.process(mem, mask, oa)
+        eng_b.process(disk, mask, ob)
+        assert oa == ob, i
+    assert any(v["card_info"]["status"] != "CARD_STATUS_ACTIVE" for v in [event_view({k: back[k][i] for k in back})
+                                                                           for i in range(n)] if v["card_info"]["id"])

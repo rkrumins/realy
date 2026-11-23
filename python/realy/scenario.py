@@ -128,6 +128,10 @@ class TrafficSpec(_Model):
     # (2,000 payments/s with login: 0.6 also sends 1,200 logins/s). Each carries the entities of a payment of
     # the same batch: its customer, card, device, IP (gen/sessions.py)
     event_types: dict[str, float] = Field(default_factory=dict)
+    # rich payment blocks to fill (TransactionEvent fields 40-47: card_info, account_info, merchant_info,
+    # device_info, payee_info, authentication, items, attributes; gen/blocks.py). Empty: flat payments,
+    # byte-identical to a pipeline without blocks
+    event_blocks: list[str] = Field(default_factory=list)
 
 
 class CampaignSpec(_Model):
@@ -218,7 +222,7 @@ class SyncSpec(_Model):
 # Scenario settings added after the fingerprints were pinned (contracts/testdata/golden/scenarios.json):
 # dotted paths left out of `Scenario.fingerprint()` while they equal their default. Every new setting is
 # added here (tests/test_golden_payments.py fails otherwise), so existing runs keep their policy_version.
-FINGERPRINT_OPTIONAL: tuple[str, ...] = ("traffic.flows", "traffic.event_types", "pipeline")
+FINGERPRINT_OPTIONAL: tuple[str, ...] = ("traffic.flows", "traffic.event_types", "traffic.event_blocks", "pipeline")
 
 
 def _drop_if_default(d: dict[str, Any], base: dict[str, Any], path: str) -> None:

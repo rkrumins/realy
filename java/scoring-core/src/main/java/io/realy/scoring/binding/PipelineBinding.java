@@ -35,8 +35,12 @@ public final class PipelineBinding {
         partitionKey = r.path("partition_key").asText("customer");
         defaultType = r.path("default_type").asText("payment");
         r.path("topics").fields().forEachRemaining(e -> topics.put(e.getKey(), e.getValue().asText()));
+        Map<String, String> bindingOf = new LinkedHashMap<>();
         r.path("event_types").fields().forEachRemaining(e -> {
             eventTypes.put(e.getKey(), e.getValue().path("scored").asBoolean(false));
+            // `binding:` another binding file for this type (contracts/events/<binding>.yaml), e.g. the payment
+            // type read with its card keyed from a nested block
+            bindingOf.put(e.getKey(), e.getValue().path("binding").asText(e.getKey()));
             typeTopic.put(e.getKey(), e.getValue().path("topic").asText("events"));
             typeKey.put(e.getKey(), e.getValue().path("partition_key").asText(r.path("partition_key").asText("customer")));
         });
@@ -44,7 +48,7 @@ public final class PipelineBinding {
         for (String t : eventTypes.keySet()) typeOrdinals.put(t, typeOrdinals.size());
         if (typeOrdinals.size() > 64) throw new IllegalArgumentException("pipeline " + r.get("name").asText() + ": at most 64 event types");
         features = r.hasNonNull("features") ? r.get("features").asText() : null;
-        for (String t : eventTypes.keySet()) bindings.put(t, EventBinding.load(t));
+        for (String t : eventTypes.keySet()) bindings.put(t, EventBinding.load(bindingOf.get(t)));
         EntityRegistry reg = EntityRegistry.load();
         if (!reg.contains(partitionKey)) throw new IllegalArgumentException("pipeline " + name + ": partition_key " + partitionKey);
         if (!eventTypes.containsKey(defaultType)) throw new IllegalArgumentException("pipeline " + name + ": default_type " + defaultType);

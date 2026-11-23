@@ -26,6 +26,7 @@ Order is the Flink job's keyed-stage order (append only).
 | Pipeline | Namespace | Partition key | Event types | Exact entities | Topics |
 |---|---|---|---|---|---|
 | `payments-ext` | (default) | customer | `payment` (scored), `login` (fold), `profile_change` (fold), `card_lifecycle` (fold), `device_telemetry` (fold), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold), `card_authentication` (fold), `card_authorization` (fold), `card_capture` (fold), `card_reversal` (fold), `card_refund` (fold), `chargeback` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq`, device_telemetry: `payments.devices.telemetry` |
+| `payments-rich` | (default) | customer | `payment` (scored) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq` |
 | `payments` | (default) | customer | `payment` (scored), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold), `card_authentication` (fold), `card_authorization` (fold), `card_capture` (fold), `card_reversal` (fold), `card_refund` (fold), `chargeback` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq` |
 
 ## Transaction `a2a_transfer`
@@ -336,6 +337,45 @@ Message `realy.flows.v1.PaymentInitiation`; id `event_id`; time `event_time_us` 
 | 12 | `reference` | string | String |  |
 | 13 | `lat` | float | Float64 |  |
 | 14 | `lon` | float | Float64 |  |
+
+## Event type `payment_rich`
+
+Message `realy.payments.v1.TransactionEvent`; id `event_id`; time `event_time_us` (us); amount `amount_usd_minor`.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `payment_type` | enum PaymentType | Int8 |  |
+| 4 | `customer_id` | u64 | UInt64 | customer |
+| 5 | `account_id` | u64 | UInt64 | account |
+| 6 | `card_id` | u64 | UInt64 |  |
+| 7 | `card_type` | enum CardType | Int8 |  |
+| 8 | `amount_minor` | int | Int64 |  |
+| 9 | `currency` | string | String |  |
+| 10 | `amount_usd_minor` | int | Int64 |  |
+| 11 | `merchant_id` | u64 | UInt64 | merchant |
+| 12 | `mcc` | u32 | UInt32 |  |
+| 13 | `merchant_country` | string | String |  |
+| 14 | `terminal_id` | u64 | UInt64 | terminal |
+| 15 | `channel` | enum Channel | Int8 |  |
+| 16 | `entry_mode` | enum EntryMode | Int8 |  |
+| 17 | `card_present` | bool | UInt8 |  |
+| 18 | `lat` | float | Float64 |  |
+| 19 | `lon` | float | Float64 |  |
+| 20 | `device_id` | u64 | UInt64 | device |
+| 21 | `ip_v4` | u32 | UInt32 | ip |
+| 22 | `ip_country` | string | String |  |
+| 23 | `ip_asn` | u32 | UInt32 |  |
+| 24 | `payee_id` | u64 | UInt64 | payee |
+| 25 | `cvv_match` | bool | UInt8 |  |
+| 26 | `avs_match` | bool | UInt8 |  |
+| 27 | `recurring` | bool | UInt8 |  |
+| 28 | `credit_limit_usd` | u32 | UInt32 |  |
+| 29 | `three_ds` | enum ThreeDsResult | Int8 |  |
+| 30 | `pin_verified` | bool | UInt8 |  |
+| 31 | `cryptogram_valid` | bool | UInt8 |  |
+| 32 | `scheme_score` | u32 | UInt32 |  |
 
 ## Event type `payment_status`
 

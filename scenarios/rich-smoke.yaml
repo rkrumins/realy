@@ -1,0 +1,26 @@
+name: rich-smoke
+description: "Payments carrying every rich block (card, account, merchant, device, payee, authentication, basket, attributes) as nested messages inside TransactionEvent, with features, filters, an entity key and rules defined on nested paths (pipeline payments-rich). Through the async gateway: features from the online store. Needs `make up PIPELINE=payments-rich`."
+seed: 42
+pipeline: payments-rich
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 500 }
+  duration_s: 60
+  warmup_s: 10
+  event_blocks: [card_info, account_info, merchant_info, device_info, payee_info, authentication, items, attributes]
+topology: gateway-kafka
+rules: baseline-rich
+fraud: { background_per_1k: 4.0, mix: { account_takeover: 1.0, card_testing: 1.0, app_scam_mule: 1.0, lost_stolen: 1.0 } }
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  self_inclusion: true
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+  max_batch: 1
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }
+flink_state: fresh

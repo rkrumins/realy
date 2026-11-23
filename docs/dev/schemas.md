@@ -34,6 +34,47 @@ The keyed Flink stages do not see the view: the source decodes each event once i
 key of every registry entity, and one slot per field a stream feature reads) laid out by the schema's
 `RowPlan`.
 
+## Nested messages
+
+A message can carry structured sub-messages, repeated fields and maps. `TransactionEvent` itself carries
+optional rich blocks (fields 40-47): `card_info` (status, BIN, network, wallet), `account_info` (type,
+balance, flags), `merchant_info` (with an `address`), `device_info`, `payee_info`, `authentication`,
+`items` (the basket) and `attributes`. Absent blocks read as defaults, so payments without them are
+byte-identical.
+
+Every part of the pipeline addresses a nested field by its **dotted path**:
+
+| Where | Example |
+|---|---|
+| a binding's entity key | `card: card_info.id` ([payment_rich.yaml](../../contracts/events/payment_rich.yaml)) |
+| a filter, a rule, an expression feature (CEL) | `event.card_info.status in ['CARD_STATUS_BLOCKED', 'CARD_STATUS_LOST']`, `event.items.exists(i, i.category == 'GIFT_CARD')`, `'AML_HOLD' in event.account_info.flags` |
+| a stream feature's `value:` | `authentication.attempts` (sum), `merchant_info.risk_tier` (max), `card_info.wallet` (distinct) |
+| a derived expression | `double(size(event.items))` |
+
+Rules:
+- The codec decodes a message in one pass, with sub-messages read in place. The Flink deserializer reads
+  every path a feature, filter or key needs into the event's row once, so the keyed stages never see the
+  nesting and their cost does not grow with the message.
+- A stream feature reads an enum as its number and a bool as 1 / 0, in both languages.
+- A list is a CEL list (with the standard macros `exists`, `all`, `filter`, `map`), a map a CEL map,
+  `Timestamp` / `Duration` microseconds, wrapper types their value.
+- An absent sub-message reads as all defaults, so `has(event.card_info)` is always true: test a field of
+  it (`event.card_info.id != 0`).
+- ClickHouse `events_raw` keeps every leaf as a column named by its path (`card_info.status`), a repeated
+  message as one array per leaf (`items.sku`), a map as `Map(String, T)`. The decisions table keeps the
+  flat event. The Explorer shows a decision's blocks.
+
+Not supported, by design:
+- `value:` over a repeated field (one value per event; use a filter or an expression);
+- presence of a sub-message, the case of a `oneof`, `bytes`, `Any`, `Struct`;
+- entity keys inside repeated fields;
+- more than 4 levels of nesting (deeper fields are skipped).
+
+The worked example is the pipeline [`payments-rich`](../../contracts/pipelines/payments-rich.yaml): features
+on nested paths ([feature_schema_rich.yaml](../../contracts/features/feature_schema_rich.yaml)), rules on
+them ([baseline-rich](../../rules/baseline-rich.yaml): a blocked card carried in the payment is declined),
+and scenarios `rich-inline` and `rich-smoke`. Scenarios fill the blocks with `traffic.event_blocks`.
+
 ## Exactness follows ownership
 
 A pipeline's records are keyed by its `partition_key` entity, so one customer's events are totally

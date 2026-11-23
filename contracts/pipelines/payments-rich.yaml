@@ -1,0 +1,17 @@
+# Payments carrying rich, nested blocks (card_info, account_info, merchant_info, device_info, payee_info,
+# authentication, items, attributes: TransactionEvent fields 40-47), with features, filters and rules
+# defined on their nested fields (contracts/features/feature_schema_rich.yaml extends the base schema:
+# the 62 payment features keep their indices, the nested ones are appended). The card is keyed from its
+# block (contracts/events/payment_rich.yaml). Scenarios fill the blocks with `traffic.event_blocks`.
+#
+# The same keys as `payments` keep the default namespace: run one of the pipelines on a stack at a time.
+name: payments-rich
+namespace: ""
+partition_key: customer
+topics: { events: payments.events.raw, decisions: payments.decisions, labels: payments.labels,
+          assembled: payments.events.assembled, dlq: payments.events.dlq }
+default_type: payment
+event_types:
+  payment: { scored: true, binding: payment_rich }
+features: contracts/features/feature_schema_rich.yaml
+model: { client: kserve-v2, name: fraud_mlp, input: input__0, output: output__0 }

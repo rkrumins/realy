@@ -34,7 +34,46 @@ CREATE TABLE realy.events_queue (
   `three_ds` Int8,
   `pin_verified` UInt8,
   `cryptogram_valid` UInt8,
-  `scheme_score` UInt32
+  `scheme_score` UInt32,
+  `card_info.id` UInt64,
+  `card_info.bin` String,
+  `card_info.bin_country` String,
+  `card_info.status` Int8,
+  `card_info.network` String,
+  `card_info.tokenized` UInt8,
+  `card_info.wallet` String,
+  `card_info.issued_at_us` Int64,
+  `account_info.id` UInt64,
+  `account_info.type` Int8,
+  `account_info.balance_usd_minor` Int64,
+  `account_info.age_days` UInt32,
+  `merchant_info.id` UInt64,
+  `merchant_info.name` String,
+  `merchant_info.mcc` UInt32,
+  `merchant_info.address.country` String,
+  `merchant_info.address.city` String,
+  `merchant_info.address.postcode` String,
+  `merchant_info.risk_tier` UInt32,
+  `device_info.id` UInt64,
+  `device_info.os` String,
+  `device_info.app_version` String,
+  `device_info.emulator` UInt8,
+  `device_info.rooted` UInt8,
+  `device_info.risk_score` Float64,
+  `payee_info.id` UInt64,
+  `payee_info.bank_country` String,
+  `payee_info.new_payee` UInt8,
+  `payee_info.name_match` String,
+  `authentication.three_ds` Int8,
+  `authentication.attempts` UInt32,
+  `authentication.method` String,
+  `authentication.sca_exempt` UInt8,
+  `account_info.flags` Array(String),
+  `items.sku` Array(String),
+  `items.qty` Array(UInt32),
+  `items.amount_usd_minor` Array(Int64),
+  `items.category` Array(String),
+  `attributes` Map(String, String)
 ) ENGINE = Kafka
 SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = 'payments.events.raw', kafka_group_name = 'clickhouse-events',
          kafka_format = 'ProtobufSingle', kafka_schema = 'realy/payments/v1/transaction.proto:TransactionEvent', kafka_num_consumers = 2,
@@ -75,6 +114,45 @@ CREATE TABLE IF NOT EXISTS realy.events_raw (
   `pin_verified` UInt8,
   `cryptogram_valid` UInt8,
   `scheme_score` UInt32,
+  `card_info.id` UInt64,
+  `card_info.bin` String,
+  `card_info.bin_country` String,
+  `card_info.status` Int8,
+  `card_info.network` String,
+  `card_info.tokenized` UInt8,
+  `card_info.wallet` String,
+  `card_info.issued_at_us` Int64,
+  `account_info.id` UInt64,
+  `account_info.type` Int8,
+  `account_info.balance_usd_minor` Int64,
+  `account_info.age_days` UInt32,
+  `merchant_info.id` UInt64,
+  `merchant_info.name` String,
+  `merchant_info.mcc` UInt32,
+  `merchant_info.address.country` String,
+  `merchant_info.address.city` String,
+  `merchant_info.address.postcode` String,
+  `merchant_info.risk_tier` UInt32,
+  `device_info.id` UInt64,
+  `device_info.os` String,
+  `device_info.app_version` String,
+  `device_info.emulator` UInt8,
+  `device_info.rooted` UInt8,
+  `device_info.risk_score` Float64,
+  `payee_info.id` UInt64,
+  `payee_info.bank_country` String,
+  `payee_info.new_payee` UInt8,
+  `payee_info.name_match` String,
+  `authentication.three_ds` Int8,
+  `authentication.attempts` UInt32,
+  `authentication.method` String,
+  `authentication.sca_exempt` UInt8,
+  `account_info.flags` Array(String),
+  `items.sku` Array(String),
+  `items.qty` Array(UInt32),
+  `items.amount_usd_minor` Array(Int64),
+  `items.category` Array(String),
+  `attributes` Map(String, String),
   event_time DateTime64(6) MATERIALIZED fromUnixTimestamp64Micro(event_time_us),
   ingested_at DateTime64(6) DEFAULT now64(6)
 ) ENGINE = ReplacingMergeTree(ingested_at)
@@ -113,6 +191,45 @@ ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `three_ds` Int8;
 ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `pin_verified` UInt8;
 ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `cryptogram_valid` UInt8;
 ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `scheme_score` UInt32;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `card_info.id` UInt64;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `card_info.bin` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `card_info.bin_country` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `card_info.status` Int8;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `card_info.network` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `card_info.tokenized` UInt8;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `card_info.wallet` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `card_info.issued_at_us` Int64;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `account_info.id` UInt64;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `account_info.type` Int8;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `account_info.balance_usd_minor` Int64;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `account_info.age_days` UInt32;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `merchant_info.id` UInt64;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `merchant_info.name` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `merchant_info.mcc` UInt32;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `merchant_info.address.country` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `merchant_info.address.city` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `merchant_info.address.postcode` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `merchant_info.risk_tier` UInt32;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `device_info.id` UInt64;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `device_info.os` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `device_info.app_version` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `device_info.emulator` UInt8;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `device_info.rooted` UInt8;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `device_info.risk_score` Float64;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `payee_info.id` UInt64;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `payee_info.bank_country` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `payee_info.new_payee` UInt8;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `payee_info.name_match` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `authentication.three_ds` Int8;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `authentication.attempts` UInt32;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `authentication.method` String;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `authentication.sca_exempt` UInt8;
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `account_info.flags` Array(String);
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `items.sku` Array(String);
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `items.qty` Array(UInt32);
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `items.amount_usd_minor` Array(Int64);
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `items.category` Array(String);
+ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `attributes` Map(String, String);
 
 -- the raw topic also carries the parts of multi-message transactions (x-event-type): not unified events
 CREATE MATERIALIZED VIEW realy.events_mv TO realy.events_raw AS
@@ -149,7 +266,46 @@ SELECT
   `three_ds`,
   `pin_verified`,
   `cryptogram_valid`,
-  `scheme_score`
+  `scheme_score`,
+  `card_info.id`,
+  `card_info.bin`,
+  `card_info.bin_country`,
+  `card_info.status`,
+  `card_info.network`,
+  `card_info.tokenized`,
+  `card_info.wallet`,
+  `card_info.issued_at_us`,
+  `account_info.id`,
+  `account_info.type`,
+  `account_info.balance_usd_minor`,
+  `account_info.age_days`,
+  `merchant_info.id`,
+  `merchant_info.name`,
+  `merchant_info.mcc`,
+  `merchant_info.address.country`,
+  `merchant_info.address.city`,
+  `merchant_info.address.postcode`,
+  `merchant_info.risk_tier`,
+  `device_info.id`,
+  `device_info.os`,
+  `device_info.app_version`,
+  `device_info.emulator`,
+  `device_info.rooted`,
+  `device_info.risk_score`,
+  `payee_info.id`,
+  `payee_info.bank_country`,
+  `payee_info.new_payee`,
+  `payee_info.name_match`,
+  `authentication.three_ds`,
+  `authentication.attempts`,
+  `authentication.method`,
+  `authentication.sca_exempt`,
+  `account_info.flags`,
+  `items.sku`,
+  `items.qty`,
+  `items.amount_usd_minor`,
+  `items.category`,
+  `attributes`
 FROM realy.events_queue WHERE length(_error) = 0 AND indexOf(_headers.name, 'x-event-type') = 0;
 
 -- multi-message transactions: the Flink assembler publishes them, assembled into the unified event
@@ -188,7 +344,46 @@ CREATE TABLE realy.events_assembled_queue (
   `three_ds` Int8,
   `pin_verified` UInt8,
   `cryptogram_valid` UInt8,
-  `scheme_score` UInt32
+  `scheme_score` UInt32,
+  `card_info.id` UInt64,
+  `card_info.bin` String,
+  `card_info.bin_country` String,
+  `card_info.status` Int8,
+  `card_info.network` String,
+  `card_info.tokenized` UInt8,
+  `card_info.wallet` String,
+  `card_info.issued_at_us` Int64,
+  `account_info.id` UInt64,
+  `account_info.type` Int8,
+  `account_info.balance_usd_minor` Int64,
+  `account_info.age_days` UInt32,
+  `merchant_info.id` UInt64,
+  `merchant_info.name` String,
+  `merchant_info.mcc` UInt32,
+  `merchant_info.address.country` String,
+  `merchant_info.address.city` String,
+  `merchant_info.address.postcode` String,
+  `merchant_info.risk_tier` UInt32,
+  `device_info.id` UInt64,
+  `device_info.os` String,
+  `device_info.app_version` String,
+  `device_info.emulator` UInt8,
+  `device_info.rooted` UInt8,
+  `device_info.risk_score` Float64,
+  `payee_info.id` UInt64,
+  `payee_info.bank_country` String,
+  `payee_info.new_payee` UInt8,
+  `payee_info.name_match` String,
+  `authentication.three_ds` Int8,
+  `authentication.attempts` UInt32,
+  `authentication.method` String,
+  `authentication.sca_exempt` UInt8,
+  `account_info.flags` Array(String),
+  `items.sku` Array(String),
+  `items.qty` Array(UInt32),
+  `items.amount_usd_minor` Array(Int64),
+  `items.category` Array(String),
+  `attributes` Map(String, String)
 ) ENGINE = Kafka
 SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = 'payments.events.assembled', kafka_group_name = 'clickhouse-events-assembled',
          kafka_format = 'ProtobufSingle', kafka_schema = 'realy/payments/v1/transaction.proto:TransactionEvent', kafka_num_consumers = 1,
@@ -229,5 +424,44 @@ SELECT
   `three_ds`,
   `pin_verified`,
   `cryptogram_valid`,
-  `scheme_score`
+  `scheme_score`,
+  `card_info.id`,
+  `card_info.bin`,
+  `card_info.bin_country`,
+  `card_info.status`,
+  `card_info.network`,
+  `card_info.tokenized`,
+  `card_info.wallet`,
+  `card_info.issued_at_us`,
+  `account_info.id`,
+  `account_info.type`,
+  `account_info.balance_usd_minor`,
+  `account_info.age_days`,
+  `merchant_info.id`,
+  `merchant_info.name`,
+  `merchant_info.mcc`,
+  `merchant_info.address.country`,
+  `merchant_info.address.city`,
+  `merchant_info.address.postcode`,
+  `merchant_info.risk_tier`,
+  `device_info.id`,
+  `device_info.os`,
+  `device_info.app_version`,
+  `device_info.emulator`,
+  `device_info.rooted`,
+  `device_info.risk_score`,
+  `payee_info.id`,
+  `payee_info.bank_country`,
+  `payee_info.new_payee`,
+  `payee_info.name_match`,
+  `authentication.three_ds`,
+  `authentication.attempts`,
+  `authentication.method`,
+  `authentication.sca_exempt`,
+  `account_info.flags`,
+  `items.sku`,
+  `items.qty`,
+  `items.amount_usd_minor`,
+  `items.category`,
+  `attributes`
 FROM realy.events_assembled_queue WHERE length(_error) = 0 AND indexOf(_headers.name, 'x-txn') > 0;

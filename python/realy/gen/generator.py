@@ -77,6 +77,10 @@ class Generator:
             r_flow = np.random.Generator(np.random.PCG64(ss.spawn(1)[0]))
             self.flows = Flows([transaction(n) for n in scenario.traffic.flows], r_flow,
                                self.reg.fraud_type_names(), shard)
+        self.blocks = None
+        if scenario.traffic.event_blocks:
+            from .blocks import Blocks
+            self.blocks = Blocks(world, list(scenario.traffic.event_blocks), scenario.seed)
         self.sessions = None
         if scenario.traffic.event_types:
             from .sessions import Sessions
@@ -149,7 +153,7 @@ class Generator:
         else:
             camp = make_chunk(0)
         legit = self.legit.generate(max(0, n - n_due), t0, t1, order0=self.seq)
-        batch = finalize(concat_chunks([legit, camp]), self.gen_id, self.seq, self.auth)
+        batch = finalize(concat_chunks([legit, camp]), self.gen_id, self.seq, self.auth, self.blocks)
         self.seq += len(batch)
         if self.flows is not None:
             batch.records = self.flows.expand(batch.columns, batch.payloads, batch.keys, t1)

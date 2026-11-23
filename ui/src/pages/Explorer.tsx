@@ -221,6 +221,7 @@ function DecisionPanel({ run, eventId, onClose, onEntity }: { run: string; event
             <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-subtle"><CreditCard className="size-3.5" />Transaction</div>
             <TransactionFields ev={ev} onEntity={onEntity} />
             {d.decision?.transaction && <AssembledFrom t={d.decision.transaction} />}
+            {ev.blocks && typeof ev.blocks === "object" ? <EventBlocks blocks={ev.blocks as Record<string, Record<string, unknown> | unknown[]>} /> : null}
           </div>
           <div className="p-5">
             <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-subtle"><Fingerprint className="size-3.5" />Rules fired</div>
@@ -682,6 +683,38 @@ function LensBar({ lenses, active, onLens }: { lenses: Lens[]; active: string | 
           className={cn("shrink-0 rounded-full border px-3 py-1 text-[12px] font-medium transition-colors cursor-pointer",
             active === l.name ? "border-accent bg-accent/10 text-fg" : "border-border text-muted hover:border-accent/50 hover:text-fg")}>{l.title}</button>
       ))}
+    </div>
+  );
+}
+
+/** The payment's rich blocks (card_info, merchant_info, items...): what nested features and rules read. */
+function EventBlocks({ blocks }: { blocks: Record<string, Record<string, unknown> | unknown[]> }) {
+  const entries = Object.entries(blocks).filter(([, v]) => v && (Array.isArray(v) ? v.length : Object.keys(v).length));
+  if (!entries.length) return null;
+  const show = (v: unknown): React.ReactNode => {
+    if (Array.isArray(v)) return v.length ? <span className="flex flex-wrap gap-1">{v.map((x, i) => (
+      <span key={i} className="rounded border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px]">{typeof x === "object" ? JSON.stringify(x) : String(x)}</span>))}</span> : <span className="text-subtle">—</span>;
+    if (v && typeof v === "object") return <span className="font-mono text-[11.5px]">{Object.entries(v as Record<string, unknown>).filter(([, x]) => x !== "" && x !== 0).map(([k, x]) => `${k}: ${String(x)}`).join(" · ") || "—"}</span>;
+    if (v === "" || v === null || v === undefined) return <span className="text-subtle">—</span>;
+    return <span className="font-mono text-[12px]">{String(v)}</span>;
+  };
+  return (
+    <div className="mt-4" data-testid="event-blocks">
+      <div className="mb-2 text-[12px] font-semibold uppercase tracking-[0.1em] text-subtle">Rich blocks</div>
+      <div className="space-y-3">
+        {entries.map(([name, b]) => (
+          <div key={name} className="rounded-lg border border-border px-3 py-2">
+            <div className="mb-1 font-mono text-[11.5px] text-accent">{name}</div>
+            {Array.isArray(b) ? show(b) : (
+              <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-[12px]">
+                {Object.entries(b).map(([k, v]) => (
+                  <React.Fragment key={k}><dt className="text-muted">{k}</dt><dd className="min-w-0 break-words text-fg">{show(v)}</dd></React.Fragment>
+                ))}
+              </dl>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

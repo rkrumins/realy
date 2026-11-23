@@ -1,0 +1,22 @@
+# The payment event read with its rich blocks (TransactionEvent fields 40-47): the same message as
+# `payment`, with the card keyed from its block (card_info.id) instead of the flat card_id, to show that
+# any field path, nested ones included, can hold an entity key. Bound by pipeline payments-rich
+# (`event_types: {payment: {binding: payment_rich}}`).
+name: payment_rich
+message: realy.payments.v1.TransactionEvent
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  account:  account_id
+  card:     card_info.id
+  device:   device_id
+  ip:       ip_v4
+  merchant: merchant_id
+  terminal: terminal_id
+  payee:    payee_id
+location: { lat: lat, lon: lon }
+amount: amount_usd_minor
+labels: { join: event_id }
+warehouse:
+  table: events_raw

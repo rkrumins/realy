@@ -1,0 +1,33 @@
+# Features defined on the nested blocks of a rich payment (pipeline payments-rich). Extends the base
+# schema: its entities, filters and 62 features come first, unchanged; the features below are appended.
+#
+# Nested fields are addressed by dotted path everywhere: a filter's CEL (`event.card_info.status`, lists
+# with macros: `event.items.exists(i, ...)`), a stream feature's `value:` (`authentication.attempts`; an
+# enum reads as its number, a bool as 1 / 0), an entity's key (`card_info.id`), and derived expressions.
+# Flink decodes each event once into a row holding every path a feature, filter or key reads, so its keyed
+# stages never see the nesting.
+schema_version: 4
+extends: feature_schema.yaml
+
+entities:
+  card: { key: card_info.id }            # the card from its block (contracts/events/payment_rich.yaml)
+
+filters:
+  foreign_bin:          { when: "event.card_info.bin_country != '' && event.card_info.bin_country != event.merchant_country" }
+  card_not_active:      { when: "event.card_info.status in ['CARD_STATUS_BLOCKED', 'CARD_STATUS_LOST', 'CARD_STATUS_STOLEN']" }
+  gift_card_basket:     { when: "event.items.exists(i, i.category == 'GIFT_CARD')" }
+  tampered_device:      { when: "event.device_info.emulator || event.device_info.rooted" }
+  payee_name_mismatch:  { when: "event.payee_info.name_match == 'NO_MATCH'" }
+
+features:
+  - { name: card_foreign_bin_count_24h,   source: stream, entity: card, agg: count, filter: foreign_bin, window: 24h, granularity: 30m }
+  - { name: card_inactive_attempts_24h,   source: stream, entity: card, agg: count, filter: card_not_active, window: 24h, granularity: 30m }
+  - { name: card_max_status_30d,          source: stream, entity: card, agg: max, value: card_info.status, window: 30d, granularity: 1d }
+  - { name: cust_gift_card_baskets_24h,   source: stream, entity: customer, agg: count, filter: gift_card_basket, window: 24h, granularity: 30m }
+  - { name: cust_auth_attempts_sum_1h,    source: stream, entity: customer, agg: sum, value: authentication.attempts, window: 1h, granularity: 1m }
+  - { name: cust_distinct_wallets_30d,    source: stream, entity: customer, agg: distinct, value: card_info.wallet, window: 30d, granularity: 1d }
+  - { name: merch_max_risk_tier_1h,       source: stream, entity: merchant, agg: max, value: merchant_info.risk_tier, window: 1h, granularity: 1m }
+  - { name: dev_tampered_payments_24h,    source: stream, entity: device, agg: count, filter: tampered_device, window: 24h, granularity: 1h }
+  - { name: payee_name_mismatch_24h,      source: stream, entity: payee, agg: count, filter: payee_name_mismatch, window: 24h, granularity: 1h }
+  - { name: basket_items,                 source: derived, expr: "double(size(event.items))" }
+  - { name: account_aml_hold,             source: derived, expr: "'AML_HOLD' in event.account_info.flags" }

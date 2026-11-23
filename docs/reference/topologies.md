@@ -80,7 +80,7 @@ With multi-message transactions (`traffic.flows`):
 
 **Scales by:** gateway replicas (one consumer group, up to the partition count) and Flink parallelism, independently. **Tail:** two Kafka hops (in and out) and the Redis round trip; on a small shared host the broker's produce and fetch tails dominate.
 
-**Bundled scenarios:** `app-scam-mules`, `atm-cashout-unlimited`, `ato-campaign`, `baseline-10k`, `black-friday`, `capacity-saturation`, `card-testing-wave`, `everyday-baseline`, `flows-smoke`, `fraud-eval`, `fraud-train`, `impossible-travel`, `lost-stolen-contactless`, `merchant-breach`, `mixed-realistic`, `multi-type-smoke`, `smoke`, `soak-60m`, `step-ramp`, `tail-stress`, `user-example-100ms`.
+**Bundled scenarios:** `app-scam-mules`, `atm-cashout-unlimited`, `ato-campaign`, `baseline-10k`, `black-friday`, `capacity-saturation`, `card-testing-wave`, `everyday-baseline`, `flows-smoke`, `fraud-eval`, `fraud-train`, `impossible-travel`, `lost-stolen-contactless`, `merchant-breach`, `mixed-realistic`, `multi-type-smoke`, `rich-smoke`, `smoke`, `soak-60m`, `step-ramp`, `tail-stress`, `user-example-100ms`.
 
 ### Limits and the enhancements that would lift them
 
@@ -190,7 +190,7 @@ With multi-message transactions (`traffic.flows`):
 
 **Scales by:** Flink parallelism (scorer and state together), up to the partition count for the source. **Tail:** the keyBy shuffles between the keyed stages sit on the decision path.
 
-**Bundled scenarios:** `ato-sessions`, `eos-cost`, `flink-inline-smoke`, `flows-inline`, `multi-type-inline`.
+**Bundled scenarios:** `ato-sessions`, `eos-cost`, `flink-inline-smoke`, `flows-inline`, `multi-type-inline`, `rich-inline`.
 
 ### Limits and the enhancements that would lift them
 

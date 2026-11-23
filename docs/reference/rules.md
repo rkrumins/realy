@@ -27,6 +27,19 @@ Model thresholds: review >= `None`, decline >= `None`.
 | `ATO_REMOTE_ACCESS` | DECLINE | `event.txn.remote_access && event.txn.new_payee` | a remote-access tool is running while a new payee is paid |
 | `CNP_3DS_HIGH_RISK_UNAUTHENTICATED` | REVIEW | `event.txn.acs_risk_score >= 60 && event.txn.three_ds_status != 'TDS_AUTHENTICATED'` | the 3-D Secure server scored the cardholder 60+ and the payment was not authenticated |
 
+## `baseline-rich` - version `baseline-v5-rich1`
+
+Model thresholds: review >= `None`, decline >= `None`.
+
+| Rule | Action | When | Reason |
+|---|---|---|---|
+| `CARD_NOT_ACTIVE` | DECLINE | `event.card_info.status in ['CARD_STATUS_BLOCKED', 'CARD_STATUS_LOST', 'CARD_STATUS_STOLEN']` | the card is blocked, lost or stolen (the status the payment carries) |
+| `ACCOUNT_AML_HOLD` | REVIEW | `'AML_HOLD' in event.account_info.flags` | the account is on an AML hold |
+| `TAMPERED_DEVICE_PAYMENT` | CHALLENGE | `(event.device_info.emulator \|\| event.device_info.rooted) && f.amount_usd > 100.0` | over 100 from an emulator or a rooted device |
+| `NEW_PAYEE_NAME_MISMATCH` | REVIEW | `event.payee_info.new_payee && event.payee_info.name_match == 'NO_MATCH'` | a first payment to a payee whose name does not match the account |
+| `GIFT_CARD_BURST` | REVIEW | `event.items.exists(i, i.category == 'GIFT_CARD') && f.cust_gift_card_baskets_24h >= 2.0` | a second gift-card basket within a day |
+| `FOREIGN_BIN_VELOCITY` | REVIEW | `f.cust_auth_attempts_sum_1h >= 4.0 \|\| f.card_foreign_bin_count_24h >= 3.0` | repeated authentication attempts, or a card used repeatedly away from its issuing country |
+
 ## `baseline-v1` - version `baseline-v1`
 
 Model thresholds: review >= `0.55`, decline >= `0.9`.

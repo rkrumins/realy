@@ -129,7 +129,8 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
         if not buf:
             return
         cols = {k: np.concatenate([b[k] for b in buf]) for k in buf[0]}
-        table = pa.table(cols)
+        from ..gen.blocks import ARROW_TYPES   # lists and maps of the rich blocks: one schema for every batch
+        table = pa.table({k: (pa.array(list(v), type=ARROW_TYPES[k]) if k in ARROW_TYPES else v) for k, v in cols.items()})
         if writer is None:
             writer = pq.ParquetWriter(Path(plan.run_dir) / f"events-{plan.shard}.parquet", table.schema, compression="zstd")
         writer.write_table(table)

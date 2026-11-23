@@ -122,9 +122,10 @@ class EventBatch:
         return len(self.payloads)
 
 
-def finalize(chunk: dict[str, np.ndarray], gen_id: int, seq0: int, auth=None) -> EventBatch:
+def finalize(chunk: dict[str, np.ndarray], gen_id: int, seq0: int, auth=None, blocks=None) -> EventBatch:
     """Sort a merged chunk by (event_time, order), assign event ids, draw the authorisation signals
-    (`auth`: gen.auth.AuthSignals; None leaves them at their defaults), serialize."""
+    (`auth`: gen.auth.AuthSignals; None leaves them at their defaults) and the rich blocks (`blocks`:
+    gen.blocks.Blocks; None: payments without them, byte-identical), serialize."""
     g = geo()
     n = chunk["event_time_us"].shape[0]
     idx = np.lexsort((chunk["order"], chunk["event_time_us"]))
@@ -152,7 +153,10 @@ def finalize(chunk: dict[str, np.ndarray], gen_id: int, seq0: int, auth=None) ->
         "cryptogram_valid": c["cryptogram_valid"], "scheme_score": c["scheme_score"],
         "is_fraud": c["is_fraud"], "fraud_type": c["fraud_type"].astype(np.int32), "campaign_id": c["campaign_id"],
     }
-    payloads = serialize_events(cols, n)
+    bcols = blocks.draw(c, cols, event_ids) if blocks is not None else None
+    payloads = serialize_events(cols, n, bcols, blocks.enabled if blocks is not None else None)
+    if bcols:
+        cols.update(bcols)
     # what the institution LEARNS, and when (ground truth above is what really happened): the event log
     # keeps both so training can use labels as known at training time (realy train --labels observed)
     cols.update(label_delay_us=c["label_delay_us"], label_is_fraud=c["label_is_fraud"],
@@ -175,9 +179,15 @@ def finalize(chunk: dict[str, np.ndarray], gen_id: int, seq0: int, auth=None) ->
                       columns=cols, labels=labels)
 
 
-def serialize_events(cols: dict[str, np.ndarray], n: int) -> list[bytes]:
+def serialize_events(cols: dict[str, np.ndarray], n: int, bcols: dict | None = None, enabled=None) -> list[bytes]:
     lists = {k: (cols[k].tolist()) for k in EVENT_FIELDS}
     TE = transaction_pb2.TransactionEvent
     keys = EVENT_FIELDS
     vals = [lists[k] for k in keys]
-    return [TE(**dict(zip(keys, row))).SerializeToString() for row in zip(*vals)] if n else []
+    if not n:
+        return []
+    if not bcols:
+        return [TE(**dict(zip(keys, row))).SerializeToString() for row in zip(*vals)]
+    from .blocks import block_messages
+    return [TE(**dict(zip(keys, row)), **block_messages(bcols, i, enabled)).SerializeToString()
+            for i, row in enumerate(zip(*vals))]

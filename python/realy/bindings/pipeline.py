@@ -30,8 +30,15 @@ class Pipeline:
     transactions: list[str] = field(default_factory=list)
     source: str | None = None
 
+    def binding_of(self, n: str) -> str:
+        """The binding file of an event type: its `binding:` (contracts/events/<binding>.yaml), else its name."""
+        return (self.event_types.get(n) or {}).get("binding", n)
+
+    def type(self, n: str) -> EventType:
+        return event_type(self.binding_of(n))
+
     def types(self) -> dict[str, EventType]:
-        return {n: event_type(n) for n in self.event_types}
+        return {n: self.type(n) for n in self.event_types}
 
     def scored(self) -> list[str]:
         return [n for n, spec in self.event_types.items() if (spec or {}).get("scored", False)]
@@ -97,7 +104,7 @@ class Pipeline:
             problems.append(f"pipeline {self.name}: default_type {self.default_type!r} is not one of its event types")
         for n in self.event_types:
             try:
-                t = event_type(n)
+                t = self.type(n)
             except KeyError as e:
                 problems.append(str(e))
                 continue
@@ -147,7 +154,7 @@ def _schema_problems(p: "Pipeline") -> list[str]:
     fields = {}       # per type: its top-level fields (what `event.X` names) and every leaf by dotted path
     for n in p.event_types:
         try:
-            c = event_type(n).codec
+            c = p.type(n).codec
         except KeyError:
             continue
         fields[n] = set(c.top_names) | set(c.by_name)
@@ -166,7 +173,7 @@ def _schema_problems(p: "Pipeline") -> list[str]:
                 continue
             if ty == p.default_type or ty not in fields:
                 continue
-            t = event_type(ty)
+            t = p.type(ty)
             if f.entity not in t.entities:
                 out.append(f"{f.name}: {ty} does not carry its entity ({f.entity})")
             if f.value and f.value not in fields[ty]:

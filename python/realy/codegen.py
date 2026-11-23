@@ -60,15 +60,18 @@ def _fraud_type_enum() -> list[str]:
     from .usecases import registry
     names = registry().fraud_type_names()
     return [("NONE" if i == 0 else names[i].upper()) if i in names else f"TYPE_{i}" for i in range(max(names) + 1)]
-def _event_cols() -> list[tuple[str, str]]:
+def _event_cols(nested: bool = False) -> list[tuple[str, str]]:
     """(proto field, ClickHouse type) of the payment event, from its protobuf descriptor and binding
-    (contracts/events/payment.yaml): a field appended to TransactionEvent becomes a column here."""
+    (contracts/events/payment.yaml): a field appended to TransactionEvent becomes a column here. With
+    `nested`, the rich blocks too: every nested leaf by its dotted path (`card_info.status`), a repeated
+    message as one array per leaf (`items.sku`), a map as Map(String, T)."""
     from .bindings import event_type
     t = event_type("payment")
-    return t.codec.columns(t.warehouse.get("column_types"))
+    return t.codec.columns(t.warehouse.get("column_types"), nested=nested)
 
 
-EVENT_COLS = _event_cols()
+EVENT_COLS = _event_cols()                 # decisions keep the flat event (audit volume unchanged)
+EVENT_COLS_RAW = _event_cols(nested=True)  # events_raw keeps every block
 KAFKA = "SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = '{topic}', kafka_group_name = '{group}',\n" \
         "         kafka_format = 'ProtobufSingle', kafka_schema = '{schema}', kafka_num_consumers = {consumers},\n" \
         "         kafka_flush_interval_ms = 1000, kafka_max_block_size = 65536, kafka_thread_per_consumer = 1,\n" \
@@ -91,17 +94,17 @@ def generate(consumers: int = 2) -> dict[str, str]:
     files["01_database.sql"] = HEADER + "CREATE DATABASE IF NOT EXISTS realy;\n"
 
     # ------------------------------------------------------------------ events_raw
-    ev_q = ",\n  ".join(f"`{c}` {t}" for c, t in EVENT_COLS)
+    ev_q = ",\n  ".join(f"`{c}` {t}" for c, t in EVENT_COLS_RAW)
     ev_t = ",\n  ".join(f"`{c}` {'LowCardinality(String)' if c in ('payment_type', 'channel', 'entry_mode', 'card_type') else t}"
-                        for c, t in EVENT_COLS)
+                        for c, t in EVENT_COLS_RAW)
     ev_sel = ",\n  ".join(
         (_enum(c, c) + f" AS `{c}`") if c in ("payment_type", "channel", "entry_mode") else
-        (f"toString(card_type) AS `card_type`" if c == "card_type" else f"`{c}`") for c, _ in EVENT_COLS)
+        (f"toString(card_type) AS `card_type`" if c == "card_type" else f"`{c}`") for c, _ in EVENT_COLS_RAW)
     # the Kafka queue and its view hold no data: rebuilt on every apply (offsets live in the consumer group),
     # so an install from an earlier release gains new event columns; events_raw gains them by ALTER
     ev_alter = "\n".join(f"ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `{c}` "
                          f"{'LowCardinality(String)' if c in ('payment_type', 'channel', 'entry_mode', 'card_type') else t};"
-                         for c, t in EVENT_COLS)
+                         for c, t in EVENT_COLS_RAW)
     files["02_events.sql"] = HEADER + f"""
 DROP VIEW IF EXISTS realy.events_mv;
 DROP TABLE IF EXISTS realy.events_queue;
