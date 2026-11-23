@@ -44,7 +44,16 @@ public final class RowPlan {
         this.valFields = List.copyOf(val);
         for (int i = 0; i < numFields.size(); i++) numIndex.put(numFields.get(i), i);
         for (int i = 0; i < valFields.size(); i++) valIndex.put(valFields.get(i), i);
+        // fields another event type carries (a login's ip, a device report's risk_score): a payment reads 0
+        var pay = TransactionEvent.getDescriptor();
+        this.numOnPayment = new boolean[numFields.size()];
+        for (int i = 0; i < numOnPayment.length; i++) numOnPayment[i] = pay.findFieldByName(numFields.get(i)) != null;
+        this.valOnPayment = new boolean[valFields.size()];
+        for (int i = 0; i < valOnPayment.length; i++) valOnPayment[i] = pay.findFieldByName(valFields.get(i)) != null;
     }
+
+    private final boolean[] numOnPayment;
+    private final boolean[] valOnPayment;
 
     public int entityOrdinal(String entity) {
         Integer i = entityIndex.get(entity);
@@ -129,9 +138,9 @@ public final class RowPlan {
         r.keys = new long[entities.size()];
         for (int i = 0; i < r.keys.length; i++) r.keys[i] = EventView.entityKey(e, entities.get(i));
         r.num = new double[numFields.size()];
-        for (int i = 0; i < r.num.length; i++) r.num[i] = EventView.numeric(e, numFields.get(i));
+        for (int i = 0; i < r.num.length; i++) r.num[i] = numOnPayment[i] ? EventView.numeric(e, numFields.get(i)) : 0;
         r.val = new long[valFields.size()];
-        for (int i = 0; i < r.val.length; i++) r.val[i] = EventView.valueKey(e, valFields.get(i));
+        for (int i = 0; i < r.val.length; i++) r.val[i] = valOnPayment[i] ? EventView.valueKey(e, valFields.get(i)) : 0;
         return r;
     }
 }

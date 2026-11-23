@@ -266,6 +266,8 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     from ..common.metrics import snapshot_json
 
     producer = make_producer()
+    # event types on topics of their own (device telemetry, keyed by device); every other type: the events topic
+    type_topics: dict[str, str] = dict(plan.extra.get("type_topics") or {})
     est = int(max(1000, plan.scenario.get("traffic", {}).get("profile", {}).get("tps", 1000)) * plan.duration_s
               / plan.n_shards * 1.5) + 10_000
     tm = _Timing(min(est, 50_000_000))
@@ -335,7 +337,8 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                         time.sleep(ahead)
                 while True:
                     try:
-                        producer.produce(plan.events_topic, p_, k_, headers=h_)
+                        producer.produce(type_topics.get(btypes[bi], plan.events_topic) if btypes else plan.events_topic,
+                                         p_, k_, headers=h_)
                         break
                     except BufferError:
                         producer.poll(0.01)
@@ -374,7 +377,8 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     next_metrics = (now_us() // 1_000_000 + 1) * 1_000_000
     sec_lags: list[int] = []
     sec_sent = 0
-    parts_sent = 0            # messages of multi-message transactions besides their triggers
+    parts_sent = 0            # typed messages that expect no decision (transaction parts, logins, telemetry...)
+    typed_sent: dict[str, int] = {}
     sec_bytes = 0
     gen_cpu_ms = 0.0          # generator process, cumulative (reported with each batch)
     gen_cpu_prev = 0.0
@@ -415,13 +419,14 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                     # a part of a multi-message transaction: typed, not traced (the decision is the trigger's)
                     while True:
                         try:
-                            producer.produce(topic, payloads[i], keys[i],
+                            producer.produce(type_topics.get(rtypes[i], topic), payloads[i], keys[i],
                                              headers=[("x-event-type", rtypes[i].encode()), ("x-run-id", run_b)],
                                              timestamp=(t0 + int(offs[i])) // 1000)
                             break
                         except BufferError:
                             producer.poll(0.001)
                     parts_sent += 1
+                    typed_sent[rtypes[i]] = typed_sent.get(rtypes[i], 0) + 1
                     sec_bytes += len(payloads[i])
                     i += 1
                     continue
@@ -503,6 +508,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     summary = {
         "shard": plan.shard, "gen_id": plan.shard, "emitted": int(n), "generated": total_gen, "backfilled": backfilled,
         "errors": errors[0], "undelivered": int(remaining), "labels": labels_sent, "parts_sent": parts_sent,
+        "typed_sent": typed_sent,
         "first_seq": int(ev[0] & np.uint64(0xFFFFFFFFFFFF)) if n else None,
         "last_seq": int(ev[-1] & np.uint64(0xFFFFFFFFFFFF)) if n else None,
         "schedule_lag_p99_ms": float(np.percentile(lag, 99) / 1000) if n else None,

@@ -28,40 +28,77 @@ def _read(s: FeatureSpec, f: _Feat, ev: dict, t: int, match: bool) -> float:
 
 
 class ReferenceEngine:
-    """Stateful per-entity aggregation over events processed in order."""
+    """Stateful per-entity aggregation over events processed in order.
 
-    def __init__(self, schema: FeatureSchema, entities: list[str] | None = None) -> None:
+    Several event types can feed one entity's features (a login feeds customer, device and IP; a payment
+    feeds all seven): an event folds into the features whose `event_types` lists its type (the default type when a
+    feature names none), a scored event reads the others as of its time without folding, and a fold-only
+    event (a login) leaves them alone. Mirrors EntityAggregator (Java)."""
+
+    def __init__(self, schema: FeatureSchema, entities: list[str] | None = None, default_type: str | None = None,
+                 scored_types: tuple[str, ...] | None = None) -> None:
         self.schema = schema
         self.entities = entities or schema.stream_entities()
         self.specs = {e: schema.stream_features(e) for e in self.entities}
         self.aggs = {e: [_aggs.get(s.agg) for s in self.specs[e]] for e in self.entities}
         self.state: dict[str, dict[int, list[_Feat]]] = {e: {} for e in self.entities}
         self.filter_index = {name: i for i, name in enumerate(schema.filters)}
+        if default_type is None or scored_types is None:
+            from ..bindings.pipeline import pipeline
+            p = pipeline()
+            default_type = default_type or p.default_type
+            scored_types = scored_types if scored_types is not None else tuple(p.scored())
+        self.default_type = default_type
+        self.scored_types = set(scored_types) | {default_type}
+        # per entity: which of its features each type folds (cached per type)
+        self._folds: dict[tuple[str, str], list[bool]] = {}
 
-    def process(self, ev: dict, filter_mask: int, out: list[float]) -> None:
-        """Update with one event (dict of TransactionEvent fields) and write stream features into out."""
+    def _fold_mask(self, ent: str, ty: str) -> list[bool]:
+        k = (ent, ty)
+        m = self._folds.get(k)
+        if m is None:
+            m = self._folds[k] = [self.schema.folds(s, ty, self.default_type) for s in self.specs[ent]]
+        return m
+
+    def process(self, ev: dict, filter_mask: int, out: list[float] | None, event_type: str | None = None) -> None:
+        """Update with one event (a dict of its fields, entity keys under the schema's key names) and, for a
+        scored type, write the stream features into `out`."""
+        ty = event_type or self.default_type
+        scored = ty in self.scored_types and out is not None
         t = int(ev["event_time_us"])
         for ent in self.entities:
             specs = self.specs[ent]
-            key = int(ev[self.schema.entities[ent]])
+            key = int(ev.get(self.schema.entities[ent], 0) or 0)
             if key == 0:
-                for s in specs:
-                    out[s.index] = s.default
+                if scored:
+                    for s in specs:
+                        out[s.index] = s.default
                 continue
+            folds = self._fold_mask(ent, ty)
             feats = self.state[ent].get(key)
             if feats is None:
+                if not any(folds):
+                    if scored:                      # nothing to record: read an empty window
+                        for s, a in zip(specs, self.aggs[ent]):
+                            match = s.filter is None or bool(filter_mask >> self.filter_index[s.filter] & 1)
+                            out[s.index] = a.read(s, _Feat(), ev, t, match)
+                    continue
                 feats = [_Feat() for _ in specs]
                 self.state[ent][key] = feats
-            for s, f, a in zip(specs, feats, self.aggs[ent]):
+            for s, f, a, fold in zip(specs, feats, self.aggs[ent], folds):
+                if not fold and not scored:
+                    continue
                 match = s.filter is None or bool(filter_mask >> self.filter_index[s.filter] & 1)
-                out[s.index] = a.apply(s, f, ev, t, match)
+                v = a.apply(s, f, ev, t, match) if fold else a.read(s, f, ev, t, match)
+                if scored:
+                    out[s.index] = v
 
     def read(self, ev: dict, filter_mask: int, out: list[float]) -> None:
         """Stream features of an event that is not folded into state (a re-scored stage), as of its time."""
         t = int(ev["event_time_us"])
         for ent in self.entities:
             specs = self.specs[ent]
-            key = int(ev[self.schema.entities[ent]])
+            key = int(ev.get(self.schema.entities[ent], 0) or 0)
             feats = self.state[ent].get(key) if key else None
             for i, s in enumerate(specs):
                 if key == 0:

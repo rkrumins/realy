@@ -26,7 +26,7 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `DRAIN_TIMEOUT_MS` | `20_000` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/KafkaIngress.java` |
 | `EMITTER_JAVA_OPTS` | `-XX:+UseZGC -XX:+ZGenerational -Xmx3g` | runner |  | `python/realy/runner/sync.py` |
 | `EVENTS_TOPIC` | `payments.events.raw` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java` |
-| `FEATURE_SCHEMA` |  | gateway + Flink (scoring core), python (shared) |  | `python/realy/features/schema.py`<br>`python/realy/infra.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/features/FeatureSchema.java` |
+| `FEATURE_SCHEMA` |  | gateway + Flink (scoring core), python (shared) |  | `python/realy/features/schema.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/features/FeatureSchema.java` |
 | `FLINK_CHECKPOINTS_LOCAL` |  | runner | console | `python/realy/runner/flink.py` |
 | `FLINK_CHECKPOINTS_URI` | `file:///checkpoints` | runner |  | `python/realy/runner/flink.py` |
 | `FLINK_CHECKPOINT_MS` | `10000` | runner |  | `python/realy/runner/flink.py`<br>`python/realy/runner/run.py` |
@@ -100,7 +100,7 @@ Every environment variable the code reads, found by scanning it (so this page ca
 | `MODEL_WEIGHTS` |  | model server, verifier | mock-model | `python/realy/verify/verify.py`<br>`java/mock-model-server/src/main/java/io/realy/model/MockModelServerMain.java` |
 | `ON_PIPELINE_ERROR` | `REVIEW` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/Pipeline.java` |
 | `PARALLELISM` | `4` | Flink job |  | `java/flink-job/src/main/java/io/realy/flink/FraudJob.java` |
-| `PIPELINE` | `payments` | gateway + Flink (scoring core), python (shared) |  | `python/realy/bindings/pipeline.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/binding/PipelineBinding.java` |
+| `PIPELINE` | `payments` | gateway + Flink (scoring core), python (shared) | console, flink-jobmanager, flink-taskmanager, gateway, mock-model | `python/realy/bindings/pipeline.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/binding/PipelineBinding.java` |
 | `PLUGINS_DIR` |  | gateway, gateway + Flink (scoring core), python (shared) | console, flink-jobmanager, flink-taskmanager, gateway | `python/realy/plugins.py`<br>`java/scoring-core/src/main/java/io/realy/scoring/Plugins.java`<br>`java/scoring-gateway/src/main/java/io/realy/gateway/AdminInfo.java` |
 | `PORT` | `8080` | gateway |  | `java/scoring-gateway/src/main/java/io/realy/gateway/GatewayMain.java` |
 | `PROMETHEUS_URL` |  | console | console | `python/realy/control/env.py` |

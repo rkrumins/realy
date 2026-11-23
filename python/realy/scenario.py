@@ -123,6 +123,11 @@ class TrafficSpec(_Model):
     # transactions formed by several linked messages (contracts/transactions): the generator sends each
     # matching payment as its messages, which the pipeline assembles back into one transaction
     flows: list[str] = Field(default_factory=list)
+    # message types other than payments (the pipeline's standalone types: logins, profile changes, card
+    # lifecycle, device telemetry): messages of each type per payment generated, so the load mix is explicit
+    # (2,000 payments/s with login: 0.6 also sends 1,200 logins/s). Each carries the entities of a payment of
+    # the same batch: its customer, card, device, IP (gen/sessions.py)
+    event_types: dict[str, float] = Field(default_factory=dict)
 
 
 class CampaignSpec(_Model):
@@ -213,7 +218,7 @@ class SyncSpec(_Model):
 # Scenario settings added after the fingerprints were pinned (contracts/testdata/golden/scenarios.json):
 # dotted paths left out of `Scenario.fingerprint()` while they equal their default. Every new setting is
 # added here (tests/test_golden_payments.py fails otherwise), so existing runs keep their policy_version.
-FINGERPRINT_OPTIONAL: tuple[str, ...] = ("traffic.flows",)
+FINGERPRINT_OPTIONAL: tuple[str, ...] = ("traffic.flows", "traffic.event_types", "pipeline")
 
 
 def _drop_if_default(d: dict[str, Any], base: dict[str, Any], path: str) -> None:
@@ -248,6 +253,9 @@ class Scenario(_Model):
     # any EOS consumer would - decisions become visible only when the checkpoint commits.
     exactly_once: bool = False
     expect: dict[str, Any] = Field(default_factory=dict)  # e.g. {verdict: FAIL}
+    # the pipeline this scenario needs (contracts/pipelines/<name>.yaml); empty = any. The stack runs one
+    # pipeline (PIPELINE on every service), so a scenario of another pipeline is refused before it starts
+    pipeline: str = ""
 
     @model_validator(mode="after")
     def _wire(self) -> "Scenario":

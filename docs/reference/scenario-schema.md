@@ -27,6 +27,7 @@ A scenario is one YAML file in `scenarios/` (or saved from the console's builder
 | `flink_state` | `Literal["warm", "fresh"]` | `"warm"` | warm: keep Flink keyed state + online-store blobs from earlier runs (realistic state size) fresh: start from empty state so `realy verify` can demand exact feature equality |
 | `exactly_once` | `bool` | `False` | Flink transactional (exactly-once) decisions sink; the collector then reads read_committed, like any EOS consumer would - decisions become visible only when the checkpoint commits. |
 | `expect` | `dict[str, Any]` | `{}` | e.g. {verdict: FAIL} |
+| `pipeline` | `str` | `""` | the pipeline this scenario needs (contracts/pipelines/<name>.yaml); empty = any. The stack runs one pipeline (PIPELINE on every service), so a scenario of another pipeline is refused before it starts |
 
 ## `world` - WorldSpec
 
@@ -51,6 +52,7 @@ A scenario is one YAML file in `scenarios/` (or saved from the console's builder
 | `sim_start` | `str` | `"2026-11-02T00:00:00Z"` |  |
 | `backfill_days` | `float` | `0.0` | unpaced history replay before the measured run |
 | `flows` | `list[str]` | `[]` | transactions formed by several linked messages (contracts/transactions): the generator sends each matching payment as its messages, which the pipeline assembles back into one transaction |
+| `event_types` | `dict[str, float]` | `{}` | message types other than payments (the pipeline's standalone types: logins, profile changes, card lifecycle, device telemetry): messages of each type per payment generated, so the load mix is explicit (2,000 payments/s with login: 0.6 also sends 1,200 logins/s). Each carries the entities of a payment of the same batch: its customer, card, device, IP (gen/sessions.py) |
 
 ## `traffic.profile` - RateProfile
 

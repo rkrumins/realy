@@ -35,6 +35,16 @@ topics:
     timestamp: LogAppendTime   # broker-stamped, an independent clock for egress
     retention_ms: 86400000     # 24h: system of record until ClickHouse has ingested
     config: { compression.type: lz4, message.timestamp.type: LogAppendTime }
+  payments.devices.telemetry:
+    partitions: 24
+    key: device_id (decimal string)  # a device's observations stay ordered; no customer to key by
+    value: realy.devices.v1.DeviceTelemetry
+    # device intelligence for pipelines that fold it into device / IP features (payments-ext): it joins
+    # the Flink job's keyed stages at the device stage. x-event-type: device_telemetry
+    headers: [x-event-type, x-run-id, x-backfill]
+    timestamp: CreateTime
+    retention_ms: 21600000
+    config: { compression.type: lz4, message.timestamp.type: CreateTime }
   payments.events.dlq:
     partitions: 6
     key: the original record's key

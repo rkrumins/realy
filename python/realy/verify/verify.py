@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import collections
 import glob
 import json
 import math
@@ -166,6 +167,10 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     txn_ctx: dict[int, dict] = {}
     assembled_rows: dict[int, dict] = {}
     parts = _read(run_dir, "parts-*.parquet")
+    # standalone event types (logins, device telemetry...): folded into state in emission order, never decided
+    typed = None
+    if parts is not None and parts.num_rows:
+        parts, typed = split_standalone(parts)
     if parts is not None and parts.num_rows:
         order, txn_ctx, flow_info, assembled_rows = flow_order(cols, parts, dec)
         out["transactions"] = flow_info
@@ -188,7 +193,11 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
             if bits.size and bits.any():
                 missing[int(i)] = np.pad(bits, (0, nf - bits.size)).astype(bool)
     engine = ReferenceEngine(schema, entities)
-    filt = [cel.compile(expr) for expr in schema.filters.values()]
+    filt = schema.compiled_filters()      # the default type's filters (a scoped filter of another type: None)
+    typed_items = typed_stream(typed, schema, mod) if typed is not None else []
+    if typed is not None:
+        out["event_types"] = {"standalone": dict(collections.Counter(t for _, t, _, _ in typed_items)),
+                              "note": "folded into state in emission order; not decided"}
     from ..runner.seed import profile_entities
     # every entity with profile features: (its world columns, its features, the world row of each event)
     profiles = {e: (world.profile_arrays(e), schema.profile_features(e),
@@ -197,7 +206,14 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     lists = {k: cols[k].tolist() for k in names}
     ref: dict[int, np.ndarray] = {}
     buf = [0.0] * nf
+    ti = 0
+    etime = lists["event_time_us"]
     for i in order.tolist():
+        # the standalone messages sent before this event (a message at the same microsecond goes first)
+        while ti < len(typed_items) and typed_items[ti][0] <= etime[i]:
+            _, ty, tev, tmask = typed_items[ti]
+            engine.process(tev, tmask, None, event_type=ty)
+            ti += 1
         ev = {k: lists[k][i] for k in names}
         # an assembled transaction as the pipeline saw it: a part that came too late is absent from it
         ev.update(assembled_rows.get(int(ev["event_id"]), {}))
@@ -208,7 +224,7 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         ctx.add_variable("f", {})
         mask = 0
         for b, p in enumerate(filt):
-            if p.execute(ctx):
+            if p is not None and p.execute(ctx):
                 mask |= 1 << b
         # a re-scored stage of an assembled transaction reads its features, it is not counted again
         if tctx is not None and tctx.get("stage") not in ("", "assembled"):
@@ -377,6 +393,59 @@ def verify_external(run_dir: Path, sc: Scenario, dec: pa.Table, expected: int, c
 def _scorer_in_task(topology: str) -> bool:
     from ..topologies import runtime
     return runtime(topology).scorer == "flink"
+
+
+def split_standalone(parts: pa.Table) -> tuple[pa.Table | None, pa.Table | None]:
+    """The parts log split into the messages of multi-message transactions and those of standalone types
+    (neither the default type nor a transaction part: a login, device telemetry)."""
+    from ..bindings.pipeline import pipeline
+    pipe = pipeline()
+    ptypes = parts["type"].to_pylist()
+    is_std = {t: pipe.standalone(t) for t in set(ptypes)}
+    m = pa.array([is_std[t] for t in ptypes])
+    std = parts.filter(m)
+    rest = parts.filter(pa.compute.invert(m))
+    return (rest if rest.num_rows else None), (std if std.num_rows else None)
+
+
+def typed_stream(typed: pa.Table, schema, mod: int = 1) -> list[tuple[int, str, dict, int]]:
+    """Each standalone message as the engine folds it, in emission order: (time, type, its fields with the
+    entity keys under the schema's key names, its filter mask over its own type's filters). With customer
+    sampling (mod > 1) only the sampled customers' messages (customer and card features are checked)."""
+    import cel
+    from ..bindings import event_type
+    from ..bindings.codec import message_class
+    from ..bindings.pipeline import pipeline
+    default = pipeline().default_type
+    per: dict[str, tuple] = {}
+    out = []
+    ptypes = typed["type"].to_pylist()
+    payloads = typed["payload"].to_pylist()
+    times = typed["event_time_us"].to_numpy()
+    for j in np.argsort(times, kind="stable").tolist():
+        ty = ptypes[j]
+        if ty not in per:
+            t = event_type(ty)
+            unit = {"us": 1, "ms": 1000, "s": 1_000_000}.get(t.time_unit or "us", 1)
+            keys = {f: schema.entities[e] for e, f in t.entities.items() if e in schema.entities}
+            per[ty] = (t.codec, message_class(t.message), t.time, unit, keys, schema.compiled_filters(ty, default))
+        c, cls, tf, unit, keys, filt = per[ty]
+        row = c.row(cls.FromString(payloads[j]))
+        ev = dict(row)
+        for f, k in keys.items():
+            ev[k] = row.get(f, 0)
+        ev["event_time_us"] = int(row[tf]) * unit
+        if mod > 1 and (int(ev.get(schema.entities.get("customer", "customer_id"), 0) or 0) % mod) != 0:
+            continue
+        ctx = cel.Context()
+        ctx.add_variable("event", c.view(row))
+        ctx.add_variable("f", {})
+        mask = 0
+        for b, p in enumerate(filt):
+            if p is not None and p.execute(ctx):
+                mask |= 1 << b
+        out.append((ev["event_time_us"], ty, ev, mask))
+    return out
 
 
 def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table

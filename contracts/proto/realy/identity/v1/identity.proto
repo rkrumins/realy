@@ -1,0 +1,69 @@
+// Identity events: what happens to a customer's access before (and between) payments. Each carries the
+// customer (the events topic's partition key) and only the entities it involves: a login names the device
+// and IP it came from, a profile change the session it was made in. They update the customer's, device's
+// and IP's features (feature_schema `on:`) without being decided themselves (pipelines/payments-ext.yaml).
+syntax = "proto3";
+
+package realy.identity.v1;
+
+option java_package = "io.realy.contracts.identity.v1";
+option java_multiple_files = true;
+
+enum LoginOutcome {
+  LOGIN_OUTCOME_UNSPECIFIED = 0;
+  LOGIN_SUCCESS = 1;
+  LOGIN_FAILED_PASSWORD = 2;
+  LOGIN_FAILED_MFA = 3;
+  LOGIN_LOCKED = 4;              // too many failures: the account is locked
+}
+
+enum LoginMethod {
+  LOGIN_METHOD_UNSPECIFIED = 0;
+  LOGIN_PASSWORD = 1;
+  LOGIN_BIOMETRIC = 2;
+  LOGIN_OTP = 3;
+  LOGIN_SSO = 4;
+}
+
+message LoginEvent {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  uint64 customer_id = 3;
+  uint64 device_id = 4;
+  uint32 ip_v4 = 5;
+  string ip_country = 6;
+  LoginOutcome outcome = 7;
+  LoginMethod method = 8;
+  bool new_device = 9;           // first login from this device for this customer
+  double lat = 10;
+  double lon = 11;
+}
+
+enum ProfileChange {
+  PROFILE_CHANGE_UNSPECIFIED = 0;
+  PROFILE_PASSWORD = 1;
+  PROFILE_EMAIL = 2;
+  PROFILE_PHONE = 3;
+  PROFILE_ADDRESS = 4;
+  PROFILE_PAYEE_ADDED = 5;
+  PROFILE_MFA_RESET = 6;
+}
+
+enum ProfileChannel {
+  PROFILE_CHANNEL_UNSPECIFIED = 0;
+  PROFILE_APP = 1;
+  PROFILE_WEB = 2;
+  PROFILE_CALL_CENTRE = 3;
+  PROFILE_BRANCH = 4;
+}
+
+message ProfileChangeEvent {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  uint64 customer_id = 3;
+  uint64 device_id = 4;          // 0 when not made from a device (call centre, branch)
+  uint32 ip_v4 = 5;
+  ProfileChange change = 6;
+  ProfileChannel channel = 7;
+  bool verified = 8;             // confirmed out of band (a code to the old phone or email)
+}

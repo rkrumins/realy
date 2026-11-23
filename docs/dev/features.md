@@ -27,6 +27,31 @@ then a prefix of today's, so old decisions, old models and old event logs keep w
 their inputs by name; narrower vectors are padded with defaults). Moving or deleting a feature would
 silently shift every model input after it.
 
+## Features fed by other message types
+
+A stream feature folds the events of its pipeline's default type (payments) unless it says otherwise:
+
+```yaml
+filters:
+  login_failed: { when: "event.outcome != 'LOGIN_SUCCESS'", event_types: [login] }   # a login's field
+features:
+  - { name: cust_failed_logins_1h, source: stream, entity: customer, agg: count, filter: login_failed,
+      event_types: [login], window: 1h, granularity: 1m }
+  - { name: dev_distinct_customers_all_24h, source: stream, entity: device, agg: distinct, value: customer_id,
+      event_types: [payment, login], window: 24h, granularity: 30m }
+```
+
+- `event_types` lists the types that fold into the feature; a payment reads it as of its own time
+  without being counted. The key is `event_types`, not `on`, because YAML 1.1 reads a bare `on` as
+  `true`, so the two languages would disagree; both loaders reject `on:`.
+- A filter with `event_types` applies only to those types and reads their fields; a plain filter
+  applies to the default type. For any other type its bit is 0.
+- A feature file can `extends: <base file>`: the base's entities, filters and features come first,
+  unchanged (same indices, same state bytes), then the file's own. Both languages hash the bundle
+  (base, then extension), and a name defined twice is a load error.
+
+Which messages exist, how they are routed and which features stay exact: [schemas](schemas.md#message-types-that-carry-a-subset-of-the-entities).
+
 ## Walkthrough 1: an expression feature (no code)
 
 Flag online payments well above the customer's usual ticket that were not 3-D Secure authenticated:

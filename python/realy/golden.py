@@ -172,7 +172,7 @@ def write_flows(out: Path = FLOWS) -> dict[str, Any]:
     # state, re-scored stages only read it (the Flink job must give exactly these)
     schema = load_schema()
     engine = ReferenceEngine(schema, ["customer", "card"])
-    filters = [cel.compile(x) for x in schema.filters.values()]
+    filters = schema.compiled_filters()
     watched = [f for f in schema.features if f.source == "stream" and f.entity in ("customer", "card")]
     buf = [0.0] * len(schema.features)
 
@@ -183,7 +183,7 @@ def write_flows(out: Path = FLOWS) -> dict[str, Any]:
             ctx = cel.Context()
             ctx.add_variable("event", event_view(row, o.context))
             ctx.add_variable("f", {})
-            mask = sum(1 << b for b, p in enumerate(filters) if p.execute(ctx))
+            mask = sum(1 << b for b, p in enumerate(filters) if p is not None and p.execute(ctx))
             (engine.read if o.read_only else engine.process)(row, mask, buf)
             expected.append({"kind": o.kind, "event_id": int(row["event_id"]), "transaction": o.transaction,
                              "stage": o.stage, "parts_present": o.parts_present, "partial": o.partial,

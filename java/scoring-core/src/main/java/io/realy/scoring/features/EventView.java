@@ -91,7 +91,10 @@ public final class EventView {
         return switch (field) {
             case "amount_usd_minor" -> e.getAmountUsdMinor();
             case "amount_minor" -> e.getAmountMinor();
-            default -> throw new IllegalArgumentException("unsupported numeric field " + field);
+            default -> {
+                Object v = field(e, field, "numeric");
+                yield v instanceof Boolean b ? (b ? 1 : 0) : v instanceof Number n ? n.doubleValue() : 0;
+            }
         };
     }
 
@@ -107,7 +110,26 @@ public final class EventView {
             case "mcc" -> e.getMcc();
             case "merchant_country" -> io.realy.common.Hashing.fnv1a64(e.getMerchantCountry());
             case "ip_country" -> io.realy.common.Hashing.fnv1a64(e.getIpCountry());
-            default -> throw new IllegalArgumentException("unsupported key field " + field);
+            case "ip_v4" -> Integer.toUnsignedLong(e.getIpV4());
+            default -> {
+                // any other flat field, read as the generic codec reads it (WireCodec, RowPlan.row): strings
+                // and enum names hashed, booleans 1 / 0, unsigned 32-bit ints unsigned
+                Object v = field(e, field, "key");
+                yield v instanceof String str ? io.realy.common.Hashing.fnv1a64(str)
+                        : v instanceof com.google.protobuf.Descriptors.EnumValueDescriptor ev ? io.realy.common.Hashing.fnv1a64(ev.getName())
+                        : v instanceof Boolean b ? (b ? 1 : 0) : ((Number) v).longValue();
+            }
         };
+    }
+
+    private static Object field(TransactionEvent e, String name, String use) {
+        var f = TransactionEvent.getDescriptor().findFieldByName(name);
+        if (f == null || f.isRepeated() || f.getJavaType() == com.google.protobuf.Descriptors.FieldDescriptor.JavaType.MESSAGE)
+            throw new IllegalArgumentException("unsupported " + use + " field " + name);
+        Object v = e.getField(f);
+        var t = f.getType();
+        if (v instanceof Integer i && (t == com.google.protobuf.Descriptors.FieldDescriptor.Type.UINT32
+                || t == com.google.protobuf.Descriptors.FieldDescriptor.Type.FIXED32)) return Integer.toUnsignedLong(i);
+        return v;
     }
 }

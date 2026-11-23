@@ -1,0 +1,45 @@
+# payments, extended with message types that are not payments, each carrying a subset of the keyed
+# entities, and features they feed (contracts/features/feature_schema_ext.yaml, which extends the base
+# schema: every payment feature keeps its index, the new ones are appended).
+#
+#   event type        entities                    topic (partition key)
+#   payment           all seven                   events (customer)        scored
+#   login             customer, device, ip        events (customer)        fold: updates features, not decided
+#   profile_change    customer, device, ip        events (customer)        fold
+#   card_lifecycle    customer, card, device      events (customer)        fold
+#   device_telemetry  device, ip                  device_telemetry (device) fold
+#
+# Types on the events topic share one order per customer, so the customer's and card's features stay exact
+# across types. Device telemetry has no customer: it has its own topic keyed by device and joins the keyed
+# stages at the device stage (device and IP features are agreement-only, as they already are).
+#
+# The same keys as `payments` keep the default namespace: run one of the two pipelines on a stack at a time.
+name: payments-ext
+namespace: ""
+partition_key: customer
+topics: { events: payments.events.raw, decisions: payments.decisions, labels: payments.labels,
+          assembled: payments.events.assembled, dlq: payments.events.dlq,
+          device_telemetry: payments.devices.telemetry }
+default_type: payment
+event_types:
+  payment: { scored: true }
+  login: {}
+  profile_change: {}
+  card_lifecycle: {}
+  device_telemetry: { topic: device_telemetry, partition_key: device }
+  # the messages of an account-to-account transfer and of a card payment, as in `payments`
+  payment_initiation: {}
+  device_context: {}
+  payee_check: {}
+  sca_result: {}
+  payment_submission: {}
+  payment_status: {}
+  card_authentication: {}
+  card_authorization: {}
+  card_capture: {}
+  card_reversal: {}
+  card_refund: {}
+  chargeback: {}
+transactions: [a2a_transfer, card_payment]
+features: contracts/features/feature_schema_ext.yaml
+model: { client: kserve-v2, name: fraud_mlp, input: input__0, output: output__0 }

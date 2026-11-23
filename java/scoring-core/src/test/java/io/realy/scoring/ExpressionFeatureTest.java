@@ -23,10 +23,10 @@ class ExpressionFeatureTest {
     @Test
     void expressionsOverTheEventAndOtherFeatures() throws Exception {
         FeatureSchema s = FeatureSchema.parse(schemaWith("""
-                  - { name: cvv_mismatch, source: derived, expr: "event.cvv_match ? 0.0 : 1.0" }
+                  - { name: cvv_mismatch_t, source: derived, expr: "event.cvv_match ? 0.0 : 1.0" }
                   - { name: big_vs_avg, source: derived, expr: "f.amount_usd > 2.0 * f.cust_avg_ticket_usd ? 1.0 : 0.0" }
                 """));
-        int cvv = s.indexOf("cvv_mismatch"), big = s.indexOf("big_vs_avg"), avg = s.indexOf("cust_avg_ticket_usd");
+        int cvv = s.indexOf("cvv_mismatch_t"), big = s.indexOf("big_vs_avg"), avg = s.indexOf("cust_avg_ticket_usd");
         float[] v = new float[s.features.size()];
         v[avg] = 40f;
         TransactionEvent e = TransactionEvent.newBuilder().setEventId(1).setPaymentType(PaymentType.CARD_PURCHASE)

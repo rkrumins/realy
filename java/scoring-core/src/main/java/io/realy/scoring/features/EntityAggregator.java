@@ -36,8 +36,16 @@ public final class EntityAggregator {
     private final int[] slots;   // per feature: its EventRow num or val slot (-1: reads no value)
     private final Aggregation[] aggs;       // per feature: its aggregation (Aggregations registry)
     private final Aggregation.Shape[] shapes;
+    private final long[] onMasks;           // per feature: the event types (pipeline ordinals) that fold into it
+    private final int defaultType;          // the pipeline's default type ordinal
+    private long anyMask;                   // the types that fold into at least one of this entity's features
 
     public EntityAggregator(FeatureSchema schema, String entity) {
+        this(schema, entity, io.realy.scoring.binding.PipelineBinding.current());
+    }
+
+    /** The aggregator of {@code entity} for the event types of pipeline {@code pipe}. */
+    public EntityAggregator(FeatureSchema schema, String entity, io.realy.scoring.binding.PipelineBinding pipe) {
         this.entity = entity;
         this.specs = schema.stream(entity);
         this.plan = schema.rowPlan();
@@ -47,8 +55,23 @@ public final class EntityAggregator {
         this.slots = new int[specs.size()];
         this.aggs = new Aggregation[specs.size()];
         this.shapes = new Aggregation.Shape[specs.size()];
+        this.onMasks = new long[specs.size()];
+        this.defaultType = pipe.defaultOrdinal();
         for (int i = 0; i < specs.size(); i++) {
             FeatureSpec s = specs.get(i);
+            List<String> on = schema.on(s);
+            long m = 0;
+            if (on == null) {
+                m = 1L << defaultType;
+            } else {
+                for (String t : on) {
+                    int o = pipe.typeOrdinal(t);
+                    if (o < 0) throw new IllegalArgumentException(s.name() + ": `event_types` names " + t + ", not an event type of pipeline " + pipe.name);
+                    m |= 1L << o;
+                }
+            }
+            onMasks[i] = m;
+            anyMask |= m;
             filterBits[i] = s.filter() == null ? -1 : schema.filterBit(s.filter());
             indices[i] = s.index();
             aggs[i] = Aggregations.get(s.agg());
@@ -94,14 +117,38 @@ public final class EntityAggregator {
 
     /** {@link #process} on an event decoded once ({@link RowPlan#row}): the keyed stages' path. */
     public byte[] process(byte[] stateBytes, EventRow r, long filterMask, float[] out) {
+        return process(stateBytes, r, filterMask, out, defaultType);
+    }
+
+    /**
+     * An event of type {@code type} (its pipeline ordinal): it folds into the features whose `event_types` lists the
+     * type and, when {@code out} is given (a scored event), reads the others as of its time without folding;
+     * a fold-only event ({@code out == null}) leaves them alone. Returns the new state, or {@code stateBytes}
+     * itself when nothing folded (the caller then writes nothing). Mirrors ReferenceEngine.process (Python).
+     */
+    public byte[] process(byte[] stateBytes, EventRow r, long filterMask, float[] out, int type) {
+        long bit = 1L << type;
+        if ((anyMask & bit) == 0 && out == null) return stateBytes;
         State st = State.decode(stateBytes, shapes);
         long t = r.timeUs;
+        boolean folded = false;
         for (int i = 0; i < specs.size(); i++) {
+            boolean fold = (onMasks[i] & bit) != 0;
+            if (!fold && out == null) continue;
             boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
-            out[indices[i]] = (float) aggs[i].apply(specs.get(i), st.feats[i], r, slots[i], t, match);
+            double v = fold ? aggs[i].apply(specs.get(i), st.feats[i], r, slots[i], t, match)
+                    : aggs[i].read(specs.get(i), st.feats[i], r, slots[i], t, match);
+            folded |= fold;
+            if (out != null) out[indices[i]] = (float) v;
         }
+        if (!folded) return stateBytes;
         st.lastEventUs = Math.max(st.lastEventUs, t);
         return st.encode(shapes);
+    }
+
+    /** Whether events of this type (pipeline ordinal) fold into any of this entity's features. */
+    public boolean folds(int type) {
+        return (anyMask & (1L << type)) != 0;
     }
 
     /**
@@ -115,12 +162,25 @@ public final class EntityAggregator {
     }
 
     public void evaluate(byte[] stateBytes, EventRow r, long filterMask, float[] out) {
+        evaluate(stateBytes, r, filterMask, out, defaultType);
+    }
+
+    /** {@link #evaluate} for an event of type {@code type}: features it does not fold into are read, not updated. */
+    public void evaluate(byte[] stateBytes, EventRow r, long filterMask, float[] out, int type) {
         State st = State.decode(stateBytes, shapes);
         long t = r.timeUs;
+        long bit = 1L << type;
         for (int i = 0; i < specs.size(); i++) {
             boolean match = filterBits[i] < 0 || (filterMask & (1L << filterBits[i])) != 0;
-            out[indices[i]] = (float) aggs[i].apply(specs.get(i), st.feats[i], r, slots[i], t, match);
+            out[indices[i]] = (float) ((onMasks[i] & bit) != 0
+                    ? aggs[i].apply(specs.get(i), st.feats[i], r, slots[i], t, match)
+                    : aggs[i].read(specs.get(i), st.feats[i], r, slots[i], t, match));
         }
+    }
+
+    /** Whether events of the default type fold into feature {@code i} of this entity (self-inclusion applies). */
+    public boolean foldsDefault(int i) {
+        return (onMasks[i] & (1L << defaultType)) != 0;
     }
 
     /**

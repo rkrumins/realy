@@ -520,6 +520,121 @@
    "type": "double"
   }
  },
+ "realy.cards.v1.CardAction": {
+  "0": {
+   "name": "CARD_ACTION_UNSPECIFIED"
+  },
+  "1": {
+   "name": "CARD_ISSUED"
+  },
+  "2": {
+   "name": "CARD_ACTIVATED"
+  },
+  "3": {
+   "name": "CARD_PIN_CHANGED"
+  },
+  "4": {
+   "name": "CARD_BLOCKED"
+  },
+  "5": {
+   "name": "CARD_UNBLOCKED"
+  },
+  "6": {
+   "name": "CARD_REPLACED"
+  },
+  "7": {
+   "name": "CARD_TOKEN_PROVISIONED"
+  }
+ },
+ "realy.cards.v1.CardLifecycleEvent": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "4": {
+   "name": "card_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "device_id",
+   "type": "uint64"
+  },
+  "6": {
+   "name": "action",
+   "type": "CardAction"
+  },
+  "7": {
+   "name": "wallet",
+   "type": "Wallet"
+  },
+  "8": {
+   "name": "step_up_passed",
+   "type": "bool"
+  }
+ },
+ "realy.cards.v1.Wallet": {
+  "0": {
+   "name": "WALLET_UNSPECIFIED"
+  },
+  "1": {
+   "name": "WALLET_APPLE"
+  },
+  "2": {
+   "name": "WALLET_GOOGLE"
+  },
+  "3": {
+   "name": "WALLET_SAMSUNG"
+  },
+  "4": {
+   "name": "WALLET_MERCHANT"
+  }
+ },
+ "realy.devices.v1.DeviceTelemetry": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "device_id",
+   "type": "uint64"
+  },
+  "4": {
+   "name": "ip_v4",
+   "type": "uint32"
+  },
+  "5": {
+   "name": "risk_score",
+   "type": "double"
+  },
+  "6": {
+   "name": "emulator",
+   "type": "bool"
+  },
+  "7": {
+   "name": "rooted",
+   "type": "bool"
+  },
+  "8": {
+   "name": "ip_reputation_risk",
+   "type": "double"
+  },
+  "9": {
+   "name": "vpn",
+   "type": "bool"
+  }
+ },
  "realy.features.v1.Entity": {
   "0": {
    "name": "ENTITY_UNSPECIFIED"
@@ -1336,6 +1451,160 @@
   "5": {
    "name": "ingest_us",
    "type": "sfixed64"
+  }
+ },
+ "realy.identity.v1.LoginEvent": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "10": {
+   "name": "lat",
+   "type": "double"
+  },
+  "11": {
+   "name": "lon",
+   "type": "double"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "4": {
+   "name": "device_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "ip_v4",
+   "type": "uint32"
+  },
+  "6": {
+   "name": "ip_country",
+   "type": "string"
+  },
+  "7": {
+   "name": "outcome",
+   "type": "LoginOutcome"
+  },
+  "8": {
+   "name": "method",
+   "type": "LoginMethod"
+  },
+  "9": {
+   "name": "new_device",
+   "type": "bool"
+  }
+ },
+ "realy.identity.v1.LoginMethod": {
+  "0": {
+   "name": "LOGIN_METHOD_UNSPECIFIED"
+  },
+  "1": {
+   "name": "LOGIN_PASSWORD"
+  },
+  "2": {
+   "name": "LOGIN_BIOMETRIC"
+  },
+  "3": {
+   "name": "LOGIN_OTP"
+  },
+  "4": {
+   "name": "LOGIN_SSO"
+  }
+ },
+ "realy.identity.v1.LoginOutcome": {
+  "0": {
+   "name": "LOGIN_OUTCOME_UNSPECIFIED"
+  },
+  "1": {
+   "name": "LOGIN_SUCCESS"
+  },
+  "2": {
+   "name": "LOGIN_FAILED_PASSWORD"
+  },
+  "3": {
+   "name": "LOGIN_FAILED_MFA"
+  },
+  "4": {
+   "name": "LOGIN_LOCKED"
+  }
+ },
+ "realy.identity.v1.ProfileChange": {
+  "0": {
+   "name": "PROFILE_CHANGE_UNSPECIFIED"
+  },
+  "1": {
+   "name": "PROFILE_PASSWORD"
+  },
+  "2": {
+   "name": "PROFILE_EMAIL"
+  },
+  "3": {
+   "name": "PROFILE_PHONE"
+  },
+  "4": {
+   "name": "PROFILE_ADDRESS"
+  },
+  "5": {
+   "name": "PROFILE_PAYEE_ADDED"
+  },
+  "6": {
+   "name": "PROFILE_MFA_RESET"
+  }
+ },
+ "realy.identity.v1.ProfileChangeEvent": {
+  "1": {
+   "name": "event_id",
+   "type": "fixed64"
+  },
+  "2": {
+   "name": "event_time_us",
+   "type": "sfixed64"
+  },
+  "3": {
+   "name": "customer_id",
+   "type": "uint64"
+  },
+  "4": {
+   "name": "device_id",
+   "type": "uint64"
+  },
+  "5": {
+   "name": "ip_v4",
+   "type": "uint32"
+  },
+  "6": {
+   "name": "change",
+   "type": "ProfileChange"
+  },
+  "7": {
+   "name": "channel",
+   "type": "ProfileChannel"
+  },
+  "8": {
+   "name": "verified",
+   "type": "bool"
+  }
+ },
+ "realy.identity.v1.ProfileChannel": {
+  "0": {
+   "name": "PROFILE_CHANNEL_UNSPECIFIED"
+  },
+  "1": {
+   "name": "PROFILE_APP"
+  },
+  "2": {
+   "name": "PROFILE_WEB"
+  },
+  "3": {
+   "name": "PROFILE_CALL_CENTRE"
+  },
+  "4": {
+   "name": "PROFILE_BRANCH"
   }
  },
  "realy.payments.v1.CardType": {

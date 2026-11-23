@@ -25,15 +25,15 @@ def _event(**over):
 
 
 def test_expressions_over_the_event_and_other_features(tmp_path):
-    s = _schema(tmp_path, '  - { name: cvv_mismatch, source: derived, expr: "event.cvv_match ? 0.0 : 1.0" }\n'
+    s = _schema(tmp_path, '  - { name: cvv_mismatch_t, source: derived, expr: "event.cvv_match ? 0.0 : 1.0" }\n'
                           '  - { name: avs_fail, source: derived, expr: "!event.avs_match" }\n'
                           '  - { name: big_vs_avg, source: derived, expr: "f.amount_usd > 2.0 * f.cust_avg_ticket_usd ? 1.0 : 0.0" }\n')
     v = np.zeros(len(s.features), np.float32)
     v[s.index_of("cust_avg_ticket_usd")] = 40.0
     compute_derived(s, _event(), None, v)
-    assert (v[s.index_of("cvv_mismatch")], v[s.index_of("avs_fail")], v[s.index_of("big_vs_avg")]) == (1.0, 1.0, 1.0)
+    assert (v[s.index_of("cvv_mismatch_t")], v[s.index_of("avs_fail")], v[s.index_of("big_vs_avg")]) == (1.0, 1.0, 1.0)
     compute_derived(s, _event(cvv_match=True, avs_match=True, amount_usd_minor=5_000), None, v)
-    assert (v[s.index_of("cvv_mismatch")], v[s.index_of("avs_fail")], v[s.index_of("big_vs_avg")]) == (0.0, 0.0, 0.0)
+    assert (v[s.index_of("cvv_mismatch_t")], v[s.index_of("avs_fail")], v[s.index_of("big_vs_avg")]) == (0.0, 0.0, 0.0)
 
 
 def test_bad_definitions_fail_at_load(tmp_path):

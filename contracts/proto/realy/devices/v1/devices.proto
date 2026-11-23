@@ -1,0 +1,21 @@
+// Device telemetry: what the device-intelligence service observes about a device and the IP it uses,
+// independently of any customer (a device farm serves many). It carries no customer, so it travels on its
+// own topic keyed by device (pipelines/payments-ext.yaml) and updates device and IP features only.
+syntax = "proto3";
+
+package realy.devices.v1;
+
+option java_package = "io.realy.contracts.devices.v1";
+option java_multiple_files = true;
+
+message DeviceTelemetry {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  uint64 device_id = 3;
+  uint32 ip_v4 = 4;
+  double risk_score = 5;          // the device service's risk, 0..1
+  bool emulator = 6;
+  bool rooted = 7;
+  double ip_reputation_risk = 8;  // the IP's reputation risk, 0..1
+  bool vpn = 9;
+}

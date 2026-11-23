@@ -199,7 +199,8 @@ public final class FeatureAssembler {
             FeatureSpec s = specs.get(i);
             boolean have = blob != null && i < blob.values().length;
             double val = have ? blob.values()[i] : s.defaultValue();
-            if (selfInclusion && !includesCurrent) {
+            // self-inclusion only for features the payment itself folds into (`event_types`): the others are read as they are
+            if (selfInclusion && !includesCurrent && a.foldsDefault(i)) {
                 boolean match = s.filter() == null || (mask & (1L << schema.filterBit(s.filter()))) != 0;
                 double base = have ? val : 0.0;
                 switch (s.agg()) {

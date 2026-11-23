@@ -55,6 +55,13 @@ public final class FraudJob {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         configure(env, p);
         String bootstrap = p.get("bootstrap", Env.str("KAFKA_BOOTSTRAP", "localhost:9092"));
+        // the pipeline the runner planned the run for: this cluster's PIPELINE must be the same one (its
+        // services resolve topics, event types and features from it)
+        String want = p.get("pipeline", "");
+        String have = io.realy.scoring.binding.PipelineBinding.current().name;
+        if (!want.isEmpty() && !want.equals(have))
+            throw new IllegalArgumentException("this Flink cluster runs pipeline " + have + ", the run needs " + want
+                    + ": set PIPELINE=" + want + " on the JobManager and TaskManagers (make up PIPELINE=" + want + ")");
         // resolved here, once, and shipped to every operator in the job graph: TaskManagers never read
         // their own FEATURE_SCHEMA, so the graph and every stage agree on one schema
         String schemaYaml = FeatureSchema.loadText();
@@ -69,7 +76,8 @@ public final class FraudJob {
                 .setStartingOffsets(p.getLong("start-ms", 0L) > 0
                         ? OffsetsInitializer.timestamp(p.getLong("start-ms", 0L))
                         : OffsetsInitializer.committedOffsets(OffsetResetStrategy.LATEST))
-                .setDeserializer(new EventDeserializer(schemaYaml, !"features".equals(mode), !p.get("assemble", "").isBlank()))
+                .setDeserializer(new EventDeserializer(schemaYaml, !"features".equals(mode), !p.get("assemble", "").isBlank(),
+                        io.realy.scoring.binding.PipelineBinding.current().name))
                 .setProperty("fetch.max.wait.ms", "100")
                 .setProperty("fetch.min.bytes", "1")
                 .setProperty("max.poll.records", "2000")
@@ -79,7 +87,28 @@ public final class FraudJob {
                 .build();
         DataStream<Envelope> events = env.fromSource(source, WatermarkStrategy.noWatermarks(), "events.raw")
                 .uid("source").name("payments.events.raw");
-        DataStream<DecisionBytes> decisions = build(events, mode, p, schemaYaml);
+        // event types on topics of their own (device telemetry, keyed by device): one source per topic, joined
+        // to the keyed stages at the first stage that folds its types
+        Map<String, DataStream<Envelope>> extra = new java.util.LinkedHashMap<>();
+        for (var t : io.realy.scoring.binding.PipelineBinding.current().extraTopics().entrySet()) {
+            KafkaSource<Envelope> src = KafkaSource.<Envelope>builder()
+                    .setBootstrapServers(bootstrap)
+                    .setTopics(t.getKey())
+                    .setGroupId(p.get("group", "realy-flink-" + mode))
+                    .setStartingOffsets(p.getLong("start-ms", 0L) > 0
+                            ? OffsetsInitializer.timestamp(p.getLong("start-ms", 0L))
+                            : OffsetsInitializer.committedOffsets(OffsetResetStrategy.LATEST))
+                    .setDeserializer(new EventDeserializer(schemaYaml, !"features".equals(mode), false,
+                            io.realy.scoring.binding.PipelineBinding.current().name))
+                    .setProperty("fetch.max.wait.ms", "100")
+                    .setProperty("commit.offsets.on.checkpoint", "true")
+                    .setProperty("partition.discovery.interval.ms", "60000")
+                    .setProperties(io.realy.common.KafkaProps.security())
+                    .build();
+            extra.put(t.getKey(), env.fromSource(src, WatermarkStrategy.noWatermarks(), t.getKey())
+                    .uid("source-" + t.getKey()).name(t.getKey()));
+        }
+        DataStream<DecisionBytes> decisions = build(events, mode, p, schemaYaml, extra);
         if (decisions != null) {
             decisions.sinkTo(sink(bootstrap, p)).uid("decisions-sink").name("payments.decisions");
         }
@@ -128,6 +157,12 @@ public final class FraudJob {
 
     public static DataStream<DecisionBytes> build(DataStream<Envelope> events, String mode, ParameterTool p,
                                                   String schemaYaml) {
+        return build(events, mode, p, schemaYaml, Map.of());
+    }
+
+    /** @param extra streams of event types on their own topics, by topic (joined at the first stage that folds them) */
+    public static DataStream<DecisionBytes> build(DataStream<Envelope> events, String mode, ParameterTool p,
+                                                  String schemaYaml, Map<String, DataStream<Envelope>> extra) {
         if ("echo".equals(mode)) {
             return events.map(FraudJob::echo).returns(TypeInformation.of(DecisionBytes.class)).name("echo");
         }
@@ -158,15 +193,18 @@ public final class FraudJob {
             String topic = p.get("assembled-topic", "");
             if (!topic.isBlank()) {
                 // the gateway topologies score from here: every scoreable event, assembled or passed through
-                s.filter(e -> !e.backfill && !e.mirrored).name("skip-history")
+                s.filter(e -> !e.backfill && !e.mirrored && e.type == null).name("skip-history")
                         .sinkTo(assembledSink(p.get("bootstrap", Env.str("KAFKA_BOOTSTRAP", "localhost:9092")), topic,
                                 schema.rowPlan().entityOrdinal(part)))
                         .uid("assembled-sink").name(topic);
             }
         }
         // spans travel with the envelope only when a decision will carry them (inline / both)
-        s = features(s, entities, writeStore, stateEntities, !"features".equals(mode), schemaYaml, preKeyed);
-        if (!"features".equals(mode)) s = s.filter(e -> !e.backfill).name("skip-backfill");
+        var pipe = io.realy.scoring.binding.PipelineBinding.current();
+        s = features(s, entities, writeStore, stateEntities, !"features".equals(mode), schemaYaml, preKeyed,
+                joinAt(extra, entities, schema, pipe), pipe.name);
+        // fold-only types end at their last stage; a backfilled event is never scored
+        if (!"features".equals(mode)) s = s.filter(e -> !e.backfill && e.features != null).name("skip-backfill");
         if ("features".equals(mode)) {
             s.addSink(new org.apache.flink.streaming.api.functions.sink.legacy.DiscardingSink<>()).name("discard");
             return null;
@@ -203,19 +241,53 @@ public final class FraudJob {
     public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore,
                                                 List<String> stateEntities, boolean spans, String schemaYaml,
                                                 String preKeyed) {
+        return features(in, entities, writeStore, stateEntities, spans, schemaYaml, preKeyed, Map.of(), null);
+    }
+
+    /**
+     * @param join     streams to union in before the stage of an entity (event types on their own topics)
+     * @param pipeline the pipeline the graph is planned for, shipped to every stage (null = PIPELINE)
+     */
+    public static DataStream<Envelope> features(DataStream<Envelope> in, List<String> entities, boolean writeStore,
+                                                List<String> stateEntities, boolean spans, String schemaYaml,
+                                                String preKeyed, Map<String, List<DataStream<Envelope>>> join,
+                                                String pipeline) {
         var plan = FeatureSchema.of(schemaYaml).rowPlan();
         DataStream<Envelope> s = in;
         for (int i = 0; i < entities.size(); i++) {
             String entity = entities.get(i);
             EntityKey key = new EntityKey(plan.entityOrdinal(entity));
-            var keyed = i == 0 && entity.equals(preKeyed)
+            List<DataStream<Envelope>> here = join.getOrDefault(entity, List.of());
+            for (DataStream<Envelope> j : here) s = s.union(j);
+            var keyed = i == 0 && entity.equals(preKeyed) && here.isEmpty()
                     ? org.apache.flink.streaming.api.datastream.DataStreamUtils.reinterpretAsKeyedStream(s, key,
                             org.apache.flink.api.common.typeinfo.Types.LONG)
                     : s.keyBy(key);
-            s = keyed.process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity), spans, schemaYaml))
+            s = keyed.process(new EntityFeatureFunction(entity, writeStore, stateEntities.contains(entity), spans, schemaYaml,
+                            entities.subList(i + 1, entities.size()), pipeline))
                     .uid("features-" + entity).name("features:" + entity);
         }
         return s;
+    }
+
+    /** Each extra topic joins before the first stage (in stage order) that folds one of its event types. */
+    static Map<String, List<DataStream<Envelope>>> joinAt(Map<String, DataStream<Envelope>> extra, List<String> entities,
+                                                          FeatureSchema schema, io.realy.scoring.binding.PipelineBinding pipe) {
+        Map<String, List<DataStream<Envelope>>> out = new java.util.LinkedHashMap<>();
+        if (extra.isEmpty()) return out;
+        var byTopic = pipe.extraTopics();
+        for (var e : extra.entrySet()) {
+            String at = null;
+            for (String ent : entities) {
+                var agg = new io.realy.scoring.features.EntityAggregator(schema, ent, pipe);
+                for (String ty : byTopic.getOrDefault(e.getKey(), List.of())) {
+                    if (agg.folds(pipe.typeOrdinal(ty))) at = ent;
+                }
+                if (at != null) break;
+            }
+            if (at != null) out.computeIfAbsent(at, k -> new ArrayList<>()).add(e.getValue());
+        }
+        return out;
     }
 
     /**

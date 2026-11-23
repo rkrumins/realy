@@ -58,6 +58,36 @@ class Pipeline:
                 "entities": {e.name: {"id": e.id, "owned_by": e.owned_by, "enum": e.enum} for e in reg.entities.values()},
                 "exact_entities": self.exact_entities(), "event_types": types, "transactions": self.transactions}
 
+    def _validate_schema(self) -> list[str]:
+        return _schema_problems(self)
+
+    def topic_of(self, event_type: str) -> str:
+        """The Kafka topic an event type travels on (its `topic`, else the events topic)."""
+        return self.topics[(self.event_types.get(event_type) or {}).get("topic", "events")]
+
+    def partition_key_of(self, event_type: str) -> str:
+        return (self.event_types.get(event_type) or {}).get("partition_key", self.partition_key)
+
+    def part_types(self) -> set[str]:
+        """The event types that are parts of the pipeline's multi-message transactions."""
+        from .transactions import transaction
+        return {ty for n in self.transactions for ty in transaction(n).roles.values()}
+
+    def standalone(self, event_type: str) -> bool:
+        """A type that is neither the default type nor a transaction part: it folds into features on its own
+        (PipelineBinding.standalone)."""
+        return event_type != self.default_type and event_type in self.event_types and event_type not in self.part_types()
+
+    def extra_topics(self) -> dict[str, list[str]]:
+        """Topics other than the events topic, with the event types that travel on each."""
+        out: dict[str, list[str]] = {}
+        events = self.topics.get("events")
+        for t in self.event_types:
+            topic = self.topic_of(t)
+            if topic != events:
+                out.setdefault(topic, []).append(t)
+        return out
+
     def validate(self) -> list[str]:
         problems = []
         reg = registry()
@@ -72,9 +102,14 @@ class Pipeline:
                 problems.append(str(e))
                 continue
             problems += t.validate()
-            if self.partition_key not in t.entities:
-                problems.append(f"pipeline {self.name}: event type {n} does not carry the partition key "
-                                f"({self.partition_key}): its records cannot be keyed")
+            spec = self.event_types[n] or {}
+            topic, key = spec.get("topic", "events"), spec.get("partition_key", self.partition_key)
+            if topic not in self.topics:
+                problems.append(f"pipeline {self.name}: event type {n}'s topic {topic!r} is not one of its topics")
+            if key not in t.entities:
+                problems.append(f"pipeline {self.name}: event type {n} does not carry its topic's partition key "
+                                f"({key}): its records cannot be keyed")
+        problems += self._validate_schema()
         from .transactions import transaction
         for n in self.transactions:
             try:
@@ -87,6 +122,57 @@ class Pipeline:
                 if ty not in self.event_types:
                     problems.append(f"pipeline {self.name}: transaction {n} role {role} ({ty}) is not one of its event types")
         return problems
+
+
+def _event_fields(expr: str) -> set[str]:
+    import re
+    return set(re.findall(r"\bevent\.([A-Za-z_][A-Za-z0-9_]*)", expr))
+
+
+def _schema_problems(p: "Pipeline") -> list[str]:
+    """The feature schema against the pipeline's event types: every type a feature or filter names is one of
+    the pipeline's, carries the feature's entity and its value field, and has every field a scoped filter
+    reads (a payment's fields are not a login's)."""
+    if not p.features:
+        return []
+    from ..features.schema import REPO_ROOT, _load_schema
+    path = Path(p.features) if Path(p.features).is_absolute() else REPO_ROOT / p.features
+    if not path.exists():
+        return [f"pipeline {p.name}: features file {p.features} does not exist"]
+    try:
+        schema = _load_schema(str(path))
+    except Exception as e:  # noqa: BLE001 - a broken schema is a problem to report, not a crash
+        return [f"pipeline {p.name}: features {p.features}: {e}"]
+    out: list[str] = []
+    fields = {}
+    for n in p.event_types:
+        try:
+            fields[n] = {f.name for f in event_type(n).codec.fields}
+        except KeyError:
+            continue
+    for name, types in schema.filter_on.items():
+        for ty in types:
+            if ty not in p.event_types:
+                out.append(f"filter {name}: event type {ty!r} is not one of pipeline {p.name}'s")
+            elif ty in fields:
+                missing = _event_fields(schema.filters[name]) - fields[ty]
+                if missing:
+                    out.append(f"filter {name}: {ty} has no field {', '.join(sorted(missing))}")
+    for f in schema.stream_features():
+        for ty in f.on or ():
+            if ty not in p.event_types:
+                out.append(f"{f.name}: event type {ty!r} is not one of pipeline {p.name}'s")
+                continue
+            if ty == p.default_type or ty not in fields:
+                continue
+            t = event_type(ty)
+            if f.entity not in t.entities:
+                out.append(f"{f.name}: {ty} does not carry its entity ({f.entity})")
+            if f.value and f.value not in fields[ty]:
+                out.append(f"{f.name}: {ty} has no field {f.value} (its `value`)")
+            if f.filter and not schema.filter_applies(f.filter, ty, p.default_type):
+                out.append(f"{f.name}: its filter {f.filter} is not evaluated for {ty} (add it to the filter's event_types)")
+    return out
 
 
 @functools.lru_cache(maxsize=8)

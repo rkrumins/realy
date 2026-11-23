@@ -1,0 +1,10 @@
+# Device intelligence (realy.devices.v1.DeviceTelemetry): device and IP only, no customer. It travels on
+# its own topic keyed by device (payments-ext `topics.device_telemetry`) and joins the keyed stages at the
+# device stage.
+name: device_telemetry
+message: realy.devices.v1.DeviceTelemetry
+id: event_id
+time: event_time_us
+entities:
+  device: device_id
+  ip: ip_v4

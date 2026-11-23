@@ -129,6 +129,35 @@ def transactions_summary(run_dir: Path) -> dict[str, Any] | None:
             "by_contract": by_contract}
 
 
+def message_mix(run_dir: Path, decided: int) -> dict[str, Any] | None:
+    """The standalone event types the emitters sent (logins, device telemetry...) besides the decided
+    payments: each type's count and messages per decided payment, the extra load to size for."""
+    sent: dict[str, int] = {}
+    for f in glob.glob(str(run_dir / "emit-*.json")):
+        try:
+            for k, v in (_json.loads(Path(f).read_text()).get("typed_sent") or {}).items():
+                sent[k] = sent.get(k, 0) + int(v)
+        except (OSError, ValueError):
+            pass
+    from ..bindings.pipeline import pipeline
+    try:
+        pipe = pipeline()
+        sent = {k: v for k, v in sent.items() if pipe.standalone(k)}
+    except KeyError:
+        pass
+    if not sent:
+        return None
+    total = sum(sent.values())
+    return {"decided": decided, "messages": total, "per_payment": total / decided if decided else None,
+            "by_type": {k: {"sent": v, "per_payment": v / decided if decided else None} for k, v in sorted(sent.items())}}
+
+
+def _render_mix(mx: dict[str, Any]) -> list[str]:
+    per = ", ".join(f"{k} {v['sent']:,} ({v['per_payment']:.2f}/payment)" if v["per_payment"] is not None else f"{k} {v['sent']:,}"
+                    for k, v in mx["by_type"].items())
+    return [f"message mix: {mx['messages']:,} messages besides {mx['decided']:,} decided payments: {per}"]
+
+
 def build_report(run_dir: Path | str) -> dict[str, Any]:
     run_dir = Path(run_dir)
     man = json.loads((run_dir / "manifest.json").read_text())
@@ -458,6 +487,9 @@ def build_report(run_dir: Path | str) -> dict[str, Any]:
     txn = transactions_summary(run_dir)
     if txn:
         rep["transactions"] = txn
+    mix = message_mix(run_dir, int(summary.get("decided") or summary.get("events") or 0))
+    if mix:
+        rep["message_mix"] = mix
     from ..runner.startup import read as read_startup
     startup = read_startup(run_dir)
     if startup:
@@ -882,6 +914,8 @@ def render_text(rep: dict[str, Any]) -> str:
     tx = rep.get("transactions")
     if tx:
         lines.extend(_render_transactions(tx))
+    if rep.get("message_mix"):
+        lines.extend(_render_mix(rep["message_mix"]))
     det = rep.get("detection")
     if det and det.get("fraud_events"):
         lines.append(f"detection: recall(flagged) {_f(det['recall_flagged'])}  precision {_f(det['precision_flagged'])}  "

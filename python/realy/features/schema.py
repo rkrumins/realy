@@ -37,6 +37,7 @@ class FeatureSpec:
     field: str | None = None     # profile
     fn: str | None = None        # derived: a library function (features/derived.py)
     expr: str | None = None      # derived: a CEL expression over `event` and `f` returning a double
+    on: tuple[str, ...] | None = None   # stream: `event_types`, the types that fold into it (None: the default type)
 
     @property
     def n_buckets(self) -> int:
@@ -51,6 +52,7 @@ class FeatureSchema:
     features: list[FeatureSpec]
     countries: list[str]
     profile_attributes: dict[str, list[str]] = field(default_factory=dict)
+    filter_on: dict[str, tuple[str, ...]] = field(default_factory=dict)   # name -> types (absent: the default type)
 
     @property
     def names(self) -> list[str]:
@@ -86,9 +88,27 @@ class FeatureSchema:
         derived and profile features do not touch it."""
         import hashlib
         import json
+        # `event_types` joins the layout only when given, so a payment-only schema keeps its hash
         spec = [[f.name, f.entity, f.agg, f.value, f.filter, self.filters.get(f.filter or "", ""), f.window_us,
-                 f.granularity_us, f.default] for f in self.stream_features()]
+                 f.granularity_us, f.default] + ([list(f.on)] if f.on is not None else []) for f in self.stream_features()]
         return hashlib.sha256(json.dumps(spec).encode()).hexdigest()[:12]
+
+    def filter_applies(self, name: str, event_type: str, default_type: str = "payment") -> bool:
+        """Whether filter `name` is evaluated for events of `event_type` (its `event_types`; else the default type)."""
+        on = self.filter_on.get(name)
+        return event_type in on if on is not None else event_type == default_type
+
+    def compiled_filters(self, event_type: str | None = None, default_type: str = "payment") -> list:
+        """The filters compiled (CEL), by bit, for events of `event_type` (default: the default type); a filter
+        that does not apply to the type is None (its bit stays 0), as Java's Filters.mask does."""
+        import cel
+        ty = event_type or default_type
+        return [cel.compile(expr) if self.filter_applies(n, ty, default_type) else None
+                for n, expr in self.filters.items()]
+
+    def folds(self, f: FeatureSpec, event_type: str, default_type: str = "payment") -> bool:
+        """Whether an event of `event_type` folds into stream feature `f` (otherwise it only reads it)."""
+        return event_type in f.on if f.on is not None else event_type == default_type
 
     def stream_entities(self) -> list[str]:
         seen: list[str] = []
@@ -104,16 +124,70 @@ class FeatureSchema:
             return -1
 
 
-def load_schema(path: str | Path | None = None) -> FeatureSchema:
-    """The feature schema: `path`, else $FEATURE_SCHEMA (the same override the Java services honour),
-    else contracts/features/feature_schema.yaml. Cached per path."""
+def schema_path(path: str | Path | None = None) -> Path:
+    """The feature schema file this process uses: `path`, else $FEATURE_SCHEMA (the override the Java
+    services honour too), else the pipeline's `features` (contracts/pipelines/<PIPELINE>.yaml), else
+    contracts/features/feature_schema.yaml."""
     import os
-    return _load_schema(str(path or os.environ.get("FEATURE_SCHEMA") or SCHEMA_PATH))
+    if path or os.environ.get("FEATURE_SCHEMA"):
+        return Path(path or os.environ["FEATURE_SCHEMA"])
+    try:
+        from ..bindings.pipeline import pipeline
+        f = pipeline().features
+        if f:
+            p = Path(f) if Path(f).is_absolute() else REPO_ROOT / f
+            if p.exists():
+                return p
+    except KeyError:
+        pass
+    return SCHEMA_PATH
+
+
+def schema_bundle(path: str | Path) -> str:
+    """The schema as both languages read and hash it: a file that `extends:` another is preceded by its
+    base (recursively), as YAML documents separated by `---`. A file without `extends:` is its own text,
+    so a schema that extends nothing keeps the hash it always had."""
+    p = Path(path)
+    text = p.read_text()
+    base = (yaml.safe_load(text) or {}).get("extends")
+    if not base:
+        return text
+    return schema_bundle(p.parent / base) + "\n---\n" + text
+
+
+def _merge(docs: list[dict]) -> dict:
+    """Merge a base-first chain of schema documents: entities, filters and profile attributes add up (a
+    filter may not be redefined differently), countries and the version come from the last that sets
+    them, features are appended in order (append-only: a base's features keep their tensor indices)."""
+    out: dict = {"entities": {}, "filters": {}, "profile_attributes": {}, "features": [], "countries": []}
+    for d in docs:
+        out["entities"].update(d.get("entities") or {})
+        for k, v in (d.get("filters") or {}).items():
+            if k in out["filters"] and out["filters"][k] != v:
+                raise ValueError(f"filter {k} is redefined differently by an extending schema")
+            out["filters"][k] = v
+        out["profile_attributes"].update(d.get("profile_attributes") or {})
+        if d.get("countries"):
+            out["countries"] = list(d["countries"])
+        if "schema_version" in d:
+            out["schema_version"] = d["schema_version"]
+        out["features"] += list(d.get("features") or [])
+    return out
+
+
+def load_schema(path: str | Path | None = None) -> FeatureSchema:
+    """The feature schema (see schema_path), with what it extends. Cached per path."""
+    return _load_schema(str(schema_path(path)))
 
 
 @lru_cache(maxsize=8)
 def _load_schema(path: str) -> FeatureSchema:
-    raw = yaml.safe_load(Path(path).read_text())
+    docs = [d for d in yaml.safe_load_all(schema_bundle(path)) if d]
+    raw = _merge(docs) if len(docs) > 1 else docs[0]
+    names = [f["name"] for f in raw["features"]]
+    dup = sorted({n for n in names if names.count(n) > 1})
+    if dup:
+        raise ValueError(f"features defined twice: {', '.join(dup)}")
     feats: list[FeatureSpec] = []
     for i, f in enumerate(raw["features"]):
         src = f["source"]
@@ -132,8 +206,13 @@ def _load_schema(path: str) -> FeatureSchema:
                                  f"(registered: {', '.join(aggregations.names())})")
             if aggregations.get(f["agg"]).input in ("numeric", "key") and not f.get("value"):
                 raise ValueError(f"{f['name']}: aggregation {f['agg']} needs `value:` (the event field it reads)")
+            if True in f or "on" in f:          # YAML 1.1 reads a bare `on:` key as the boolean true
+                raise ValueError(f"{f['name']}: name the folding types with `event_types:` (not `on:`)")
+            on = f.get("event_types")
+            if on is not None and (not isinstance(on, list) or not on or not all(isinstance(x, str) for x in on)):
+                raise ValueError(f"{f['name']}: `event_types` lists the event types that fold into it, e.g. [payment, login]")
             kw.update(entity=f["entity"], agg=f["agg"], value=f.get("value"), filter=f.get("filter"),
-                      window_us=w, granularity_us=g)
+                      window_us=w, granularity_us=g, on=tuple(on) if on is not None else None)
         elif src == "profile":
             kw.update(entity=f["entity"], field=f["field"])
         elif src == "derived":
@@ -151,10 +230,20 @@ def _load_schema(path: str) -> FeatureSchema:
         else:
             raise ValueError(f"{f['name']}: unknown source {src}")
         feats.append(FeatureSpec(**kw))
+    filters, filter_on = {}, {}
+    for k, v in (raw["filters"] or {}).items():
+        if isinstance(v, dict):                 # {when: CEL, event_types: [types]}: evaluated for those types only
+            if "when" not in v or True in v or "on" in v:
+                raise ValueError(f"filter {k}: a scoped filter is {{when: <CEL>, event_types: [types]}}")
+            filters[k] = v["when"]
+            if v.get("event_types") is not None:
+                filter_on[k] = tuple(v["event_types"])
+        else:
+            filters[k] = v
     return FeatureSchema(
         version=int(raw["schema_version"]),
         entities={k: v["key"] for k, v in raw["entities"].items()},
-        filters=dict(raw["filters"]),
+        filters=filters, filter_on=filter_on,
         features=feats,
         countries=list(raw["countries"]),
         profile_attributes={k: list(v) for k, v in (raw.get("profile_attributes") or {}).items()},

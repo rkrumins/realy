@@ -23,6 +23,7 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
     private final String schemaYaml;
     private final boolean keepRaw;
     private final boolean assembling;   // the job assembles multi-message transactions (--assemble)
+    private final String pipelineName;
     private transient io.realy.scoring.binding.PipelineBinding pipeline;
     private transient Filters filters;
     private transient FeatureSchema schema;
@@ -41,13 +42,19 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
     }
 
     public EventDeserializer(String schemaYaml, boolean keepRaw, boolean assembling) {
+        this(schemaYaml, keepRaw, assembling, null);
+    }
+
+    /** @param pipelineName the pipeline the job was planned for (null = this process's PIPELINE) */
+    public EventDeserializer(String schemaYaml, boolean keepRaw, boolean assembling, String pipelineName) {
+        this.pipelineName = pipelineName;
         this.schemaYaml = schemaYaml;
         this.keepRaw = keepRaw;
         this.assembling = assembling;
     }
 
     private io.realy.scoring.binding.PipelineBinding pipeline() {
-        if (pipeline == null) pipeline = io.realy.scoring.binding.PipelineBinding.current();
+        if (pipeline == null) pipeline = io.realy.scoring.binding.PipelineBinding.of(pipelineName);
         return pipeline;
     }
 
@@ -71,10 +78,39 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
         return env;
     }
 
+    /**
+     * A standalone message type: decoded once with its binding's codec into the row the keyed stages read
+     * (each entity's key, the values features read), its own type's filters evaluated over its own fields.
+     * Fold-only types (not scored) carry no feature vector: the stages fold them into state and drop them
+     * after the last stage they update.
+     */
+    public static Envelope standalone(io.realy.scoring.binding.PipelineBinding pipeline, FeatureSchema schema, Filters filters,
+                                      String type, byte[] raw, byte[] trace, long ingest) throws IOException {
+        var b = pipeline.binding(type);
+        var codec = io.realy.scoring.binding.WireCodec.of(b.message);
+        Object[] values = codec.decode(raw);
+        Envelope env = new Envelope();
+        env.type = type;
+        env.event = raw;
+        env.trace = trace;
+        env.row = schema.rowPlan().row(b, codec, values);
+        if (env.row.timeUs == 0) throw new IllegalArgumentException(type + ": event time is 0 (a garbled payload)");
+        String key = pipeline.partitionKeyOf(type);
+        if (env.row.keys[schema.rowPlan().entityOrdinal(key)] == 0)
+            throw new IllegalArgumentException(type + ": its partition key (" + key + ") is 0");
+        env.eventId = env.row.eventId;
+        env.eventTimeUs = env.row.timeUs;
+        env.filterMask = filters.mask(codec.view(values), pipeline.typeOrdinal(type));
+        if (pipeline.scored(type)) env.features = new float[schema.size()];
+        env.ingestUs = ingest;
+        env.lastEmitUs = BenchClock.nowUs();
+        return env;
+    }
+
     @Override
     public void open(DeserializationSchema.InitializationContext context) {
         schema = FeatureSchema.of(schemaYaml);
-        filters = new Filters(schema);
+        filters = new Filters(schema, pipeline());
     }
 
     private transient io.realy.common.DeadLetters deadLetters;
@@ -102,6 +138,17 @@ public final class EventDeserializer implements KafkaRecordDeserializationSchema
         Header rid = r.headers().lastHeader("x-run-id");
         if (ty != null) {
             String type = new String(ty.value(), java.nio.charset.StandardCharsets.UTF_8);
+            if (pipeline().standalone(type)) {
+                // a message type of its own (a login, a card lifecycle event, device telemetry): it folds into
+                // the features whose event_types list it, at the stages of the entities it carries
+                Header tr = r.headers().lastHeader("x-bench-trace");
+                Envelope st = standalone(pipeline(), schema, filters, type, r.value(), tr == null ? null : tr.value(), ingest);
+                st.backfill = r.headers().lastHeader("x-backfill") != null;
+                st.runId = rid == null ? null : rid.value();
+                FlinkMetrics.get().add("typed_" + type, 1);
+                out.collect(st);
+                return;
+            }
             if (!type.equals(pipeline().defaultType)) {
                 Header tr = r.headers().lastHeader("x-bench-trace");
                 Envelope p = part(pipeline(), schema, type, r.value(), tr == null ? null : tr.value(), ingest);

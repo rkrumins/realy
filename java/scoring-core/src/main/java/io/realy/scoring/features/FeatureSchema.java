@@ -31,6 +31,10 @@ public final class FeatureSchema {
     private final Map<String, FeatureSpec> byName = new LinkedHashMap<>();
     private final Map<String, List<FeatureSpec>> streamByEntity = new LinkedHashMap<>();
     private final Map<String, List<FeatureSpec>> profileByEntity = new LinkedHashMap<>();
+    /** Stream features' `event_types` (the types that fold into them), by feature index; absent = the default type. */
+    private final Map<Integer, List<String>> onTypes = new java.util.HashMap<>();
+    /** Scoped filters' `event_types` (the types they are evaluated for); absent = the default type. */
+    public final Map<String, List<String>> filterOn = new LinkedHashMap<>();
 
     private FeatureSchema(JsonNode root) {
         version = root.get("schema_version").asInt();
@@ -38,7 +42,21 @@ public final class FeatureSchema {
         root.get("entities").fields().forEachRemaining(e -> ek.put(e.getKey(), e.getValue().get("key").asText()));
         entityKeys = Collections.unmodifiableMap(ek);
         Map<String, String> fl = new LinkedHashMap<>();
-        root.get("filters").fields().forEachRemaining(e -> fl.put(e.getKey(), e.getValue().asText()));
+        root.get("filters").fields().forEachRemaining(e -> {
+            JsonNode v = e.getValue();
+            if (v.isObject()) {                 // {when: CEL, event_types: [types]}: evaluated for those types only
+                if (!v.has("when") || v.has("on"))
+                    throw new IllegalArgumentException("filter " + e.getKey() + ": a scoped filter is {when: <CEL>, event_types: [types]}");
+                fl.put(e.getKey(), v.get("when").asText());
+                if (v.hasNonNull("event_types")) {
+                    List<String> types = new ArrayList<>();
+                    v.get("event_types").forEach(x -> types.add(x.asText()));
+                    filterOn.put(e.getKey(), List.copyOf(types));
+                }
+            } else {
+                fl.put(e.getKey(), v.asText());
+            }
+        });
         filters = Collections.unmodifiableMap(fl);
         filterNames = List.copyOf(fl.keySet());
         if (filterNames.size() > 63) throw new IllegalArgumentException("at most 63 filters supported");
@@ -78,6 +96,15 @@ public final class FeatureSchema {
                     if ((in == Aggregation.Input.NUMERIC || in == Aggregation.Input.KEY) && text(f, "value") == null)
                         throw new IllegalArgumentException(name + ": aggregation " + agg + " needs `value:` (the event field it reads)");
                     spec = new FeatureSpec(i, name, src, entity, agg, text(f, "value"), filter, w, g, def, null, null, null);
+                    if (f.has("on")) throw new IllegalArgumentException(name + ": name the folding types with `event_types:` (not `on:`)");
+                    JsonNode on = f.get("event_types");
+                    if (on != null && !on.isNull()) {
+                        if (!on.isArray() || on.isEmpty())
+                            throw new IllegalArgumentException(name + ": `event_types` lists the event types that fold into it, e.g. [payment, login]");
+                        List<String> types = new ArrayList<>();
+                        on.forEach(x -> types.add(x.asText()));
+                        onTypes.put(i, List.copyOf(types));
+                    }
                 }
                 case "profile" -> spec = new FeatureSpec(i, name, src, f.get("entity").asText(), null, null, null, 0, 0, def,
                         f.get("field").asText(), null, null);
@@ -94,6 +121,7 @@ public final class FeatureSchema {
                 default -> throw new IllegalArgumentException(name + ": unknown source " + src);
             }
             fs.add(spec);
+            if (byName.containsKey(name)) throw new IllegalArgumentException("feature defined twice: " + name);
             byName.put(name, spec);
             i++;
         }
@@ -123,12 +151,58 @@ public final class FeatureSchema {
         };
     }
 
+    /**
+     * The schema of a YAML text: one document, or a bundle ({@link #loadText}) of a base followed by the
+     * schemas that extend it, merged as the Python loader merges them (entities, filters and profile
+     * attributes add up, a filter may not be redefined differently, countries and the version come from the
+     * last that sets them, features are appended in order).
+     */
     public static FeatureSchema parse(String yaml) {
         try {
-            return new FeatureSchema(ProtoJson.yamlMapper().readTree(yaml));
+            List<JsonNode> docs = new ArrayList<>();
+            try (com.fasterxml.jackson.databind.MappingIterator<JsonNode> it =
+                         ProtoJson.yamlMapper().readerFor(JsonNode.class).readValues(yaml)) {
+                while (it.hasNext()) {
+                    JsonNode d = it.next();
+                    if (d != null && !d.isNull() && !d.isMissingNode()) docs.add(d);
+                }
+            }
+            return new FeatureSchema(docs.size() == 1 ? docs.get(0) : merge(docs));
         } catch (IOException e) {
             throw new IllegalArgumentException(e);
         }
+    }
+
+    private static JsonNode merge(List<JsonNode> docs) {
+        var m = ProtoJson.yamlMapper();
+        var out = m.createObjectNode();
+        var entities = m.createObjectNode();
+        var filters = m.createObjectNode();
+        var attrs = m.createObjectNode();
+        var feats = m.createArrayNode();
+        for (JsonNode d : docs) {
+            d.path("entities").fields().forEachRemaining(e -> entities.set(e.getKey(), e.getValue()));
+            d.path("filters").fields().forEachRemaining(e -> {
+                JsonNode prev = filters.get(e.getKey());
+                if (prev != null && !prev.equals(e.getValue()))
+                    throw new IllegalArgumentException("filter " + e.getKey() + " is redefined differently by an extending schema");
+                filters.set(e.getKey(), e.getValue());
+            });
+            d.path("profile_attributes").fields().forEachRemaining(e -> attrs.set(e.getKey(), e.getValue()));
+            if (d.has("countries") && d.get("countries").size() > 0) out.set("countries", d.get("countries"));
+            if (d.has("schema_version")) out.set("schema_version", d.get("schema_version"));
+            d.path("features").forEach(feats::add);
+        }
+        out.set("entities", entities);
+        out.set("filters", filters);
+        out.set("profile_attributes", attrs);
+        out.set("features", feats);
+        return out;
+    }
+
+    /** The event types that fold into stream feature {@code s} (`event_types`), or null for the pipeline's default type. */
+    public List<String> on(FeatureSpec s) {
+        return onTypes.get(s.index());
     }
 
     private static volatile FeatureSchema DEFAULT;
@@ -143,15 +217,38 @@ public final class FeatureSchema {
     public static String loadText() {
         try {
             String path = Env.str("FEATURE_SCHEMA", "");
-            if (!path.isEmpty()) return Files.readString(Path.of(path));
-            try (InputStream in = FeatureSchema.class.getClassLoader()
-                    .getResourceAsStream("realy/contracts/features/feature_schema.yaml")) {
-                if (in == null) throw new IllegalStateException("feature_schema.yaml not on classpath");
-                return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            }
+            if (!path.isEmpty()) return bundle(Path.of(path));
+            String pf = io.realy.scoring.binding.PipelineBinding.current().features;
+            if (pf != null && pf.startsWith("contracts/features/")) return bundle(pf.substring("contracts/".length()));
+            return bundle("features/feature_schema.yaml");
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * A schema file preceded by what it `extends:` (recursively), as YAML documents separated by "---": the
+     * text both languages parse and hash (python/realy/features/schema.py schema_bundle). A file that
+     * extends nothing is its own text.
+     */
+    static String bundle(Path file) throws IOException {
+        String text = Files.readString(file);
+        String base = extendsOf(text);
+        return base == null ? text : bundle(file.getParent().resolve(base)) + "\n---\n" + text;
+    }
+
+    /** The same from the contracts on the classpath (or REALY_CONTRACTS): {@code rel} under contracts/. */
+    public static String bundle(String rel) throws IOException {
+        String text = io.realy.scoring.binding.Contracts.text(rel);
+        String base = extendsOf(text);
+        if (base == null) return text;
+        String dir = rel.contains("/") ? rel.substring(0, rel.lastIndexOf('/') + 1) : "";
+        return bundle(dir + base) + "\n---\n" + text;
+    }
+
+    private static String extendsOf(String text) throws IOException {
+        JsonNode r = ProtoJson.yamlMapper().readTree(text);
+        return r != null && r.hasNonNull("extends") ? r.get("extends").asText() : null;
     }
 
     /** The schema of this YAML text, parsed once per process (null = {@link #load()}). */

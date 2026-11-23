@@ -1,0 +1,39 @@
+// Card lifecycle events: what the issuer does to a card outside payments. Each carries the customer (the
+// events topic's partition key) and the card; provisioning a token to a wallet also names the device it was
+// provisioned to. They update card (and device) features without being decided themselves.
+syntax = "proto3";
+
+package realy.cards.v1;
+
+option java_package = "io.realy.contracts.cards.v1";
+option java_multiple_files = true;
+
+enum CardAction {
+  CARD_ACTION_UNSPECIFIED = 0;
+  CARD_ISSUED = 1;
+  CARD_ACTIVATED = 2;
+  CARD_PIN_CHANGED = 3;
+  CARD_BLOCKED = 4;
+  CARD_UNBLOCKED = 5;
+  CARD_REPLACED = 6;
+  CARD_TOKEN_PROVISIONED = 7;    // added to a wallet (a new device can now pay with the card)
+}
+
+enum Wallet {
+  WALLET_UNSPECIFIED = 0;
+  WALLET_APPLE = 1;
+  WALLET_GOOGLE = 2;
+  WALLET_SAMSUNG = 3;
+  WALLET_MERCHANT = 4;           // a merchant's card-on-file token
+}
+
+message CardLifecycleEvent {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  uint64 customer_id = 3;
+  uint64 card_id = 4;
+  uint64 device_id = 5;          // token provisioning: the device the card was provisioned to (else 0)
+  CardAction action = 6;
+  Wallet wallet = 7;
+  bool step_up_passed = 8;       // the issuer's verification for provisioning or a PIN change
+}

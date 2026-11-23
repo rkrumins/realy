@@ -1,0 +1,10 @@
+# An issuer action on a card (realy.cards.v1.CardLifecycleEvent): customer and card, and for a token
+# provisioned to a wallet the device it went to.
+name: card_lifecycle
+message: realy.cards.v1.CardLifecycleEvent
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  card: card_id
+  device: device_id

@@ -341,6 +341,8 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 "--group", group, "--scoring-config", scoring,
                 "--checkpoint-ms", str(int(os.environ.get("FLINK_CHECKPOINT_MS", "10000"))),
                 "--exactly-once", "true" if sc.exactly_once else "false"]
+        from ..bindings import pipeline as _pipeline
+        args += ["--pipeline", _pipeline().name]      # the job refuses a cluster that runs another pipeline
         if flows:
             from ..bindings import pipeline
             from ..bindings.transactions import transaction

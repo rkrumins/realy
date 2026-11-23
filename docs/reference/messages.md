@@ -11,6 +11,7 @@ Every message that goes in or out of the pipeline. The protobuf files are the co
 | `payments.events.raw` | `realy.payments.v1.TransactionEvent` | customer_id (decimal string) | `x-bench-trace`, `x-run-id`, `x-backfill`, `x-mirrored`, `x-event-type` | 48 | emitter (`emit/driver.py`, Java load-emitter), gateway mirror of sync decisions | Flink feature job (`FraudJob` source), gateway Kafka ingress (`KafkaIngress`), ClickHouse `events_raw` (Kafka engine) |
 | `payments.events.assembled` | `realy.payments.v1.TransactionEvent` | customer_id (decimal string) | `x-bench-trace`, `x-run-id`, `x-txn`, `x-read-only` | 48 |  |  |
 | `payments.decisions` | `realy.scoring.v1.DecisionRecord` | customer_id (decimal string) |  | 48 | gateway (`DecisionSink`), Flink inline job (`decisions-sink`) | collector (`collect/collector.py`), ClickHouse `decisions` (Kafka engine), console live feed |
+| `payments.devices.telemetry` | `realy.devices.v1.DeviceTelemetry` | device_id (decimal string) | `x-event-type`, `x-run-id`, `x-backfill` | 24 |  |  |
 | `payments.events.dlq` | `the original record's bytes, unchanged` | the original record's key | `x-dlq-error`, `x-dlq-service`, `x-dlq-source` | 6 |  |  |
 | `payments.labels` | `realy.payments.v1.FraudLabel` | customer_id (decimal string) |  | 12 | emitter, at each label's simulated time (needs the `x-run-id` header) | ClickHouse `labels` (Kafka engine) for training and reports |
 | `bench.control` | `realy.bench.v1.ControlMessage (proto3 JSON)` | <target> |  | 1 | runner (`common/control.py`), console control drawer (`/api/live/*`) | gateway, model server, Flink jobs, emitters (`<target>:<cmd>` keys; `*` = every service) |
@@ -271,6 +272,64 @@ Source: `contracts/proto/realy/bench/v1/trace.proto`
 | 7 | `payload_crc32` | `fixed32` | crc32 of the serialized TransactionEvent |
 | 8 | `flags` | `uint32` | bit0: sample full features into the decision record |
 | 9 | `spans` | `repeated Span` |  |
+
+## `realy.cards.v1` (cards.proto)
+
+Source: `contracts/proto/realy/cards/v1/cards.proto`
+
+### `CardAction` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `CARD_ACTION_UNSPECIFIED` | 0 |  |
+| `CARD_ISSUED` | 1 |  |
+| `CARD_ACTIVATED` | 2 |  |
+| `CARD_PIN_CHANGED` | 3 |  |
+| `CARD_BLOCKED` | 4 |  |
+| `CARD_UNBLOCKED` | 5 |  |
+| `CARD_REPLACED` | 6 |  |
+| `CARD_TOKEN_PROVISIONED` | 7 | added to a wallet (a new device can now pay with the card) |
+
+### `Wallet` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `WALLET_UNSPECIFIED` | 0 |  |
+| `WALLET_APPLE` | 1 |  |
+| `WALLET_GOOGLE` | 2 |  |
+| `WALLET_SAMSUNG` | 3 |  |
+| `WALLET_MERCHANT` | 4 | a merchant's card-on-file token |
+
+### `CardLifecycleEvent`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `customer_id` | `uint64` |  |
+| 4 | `card_id` | `uint64` |  |
+| 5 | `device_id` | `uint64` | token provisioning: the device the card was provisioned to (else 0) |
+| 6 | `action` | `CardAction` |  |
+| 7 | `wallet` | `Wallet` |  |
+| 8 | `step_up_passed` | `bool` | the issuer's verification for provisioning or a PIN change |
+
+## `realy.devices.v1` (devices.proto)
+
+Source: `contracts/proto/realy/devices/v1/devices.proto`
+
+### `DeviceTelemetry`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `device_id` | `uint64` |  |
+| 4 | `ip_v4` | `uint32` |  |
+| 5 | `risk_score` | `double` | the device service's risk, 0..1 |
+| 6 | `emulator` | `bool` |  |
+| 7 | `rooted` | `bool` |  |
+| 8 | `ip_reputation_risk` | `double` | the IP's reputation risk, 0..1 |
+| 9 | `vpn` | `bool` |  |
 
 ## `realy.features.v1` (features.proto)
 
@@ -630,6 +689,81 @@ The assembler's state of one open transaction (Flink keyed state, keyed by the p
 | 3 | `event_time_us` | `sfixed64` |  |
 | 4 | `trace` | `bytes` | its x-bench-trace (a scored stage is timed from its own message) |
 | 5 | `ingest_us` | `sfixed64` |  |
+
+## `realy.identity.v1` (identity.proto)
+
+Source: `contracts/proto/realy/identity/v1/identity.proto`
+
+### `LoginOutcome` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `LOGIN_OUTCOME_UNSPECIFIED` | 0 |  |
+| `LOGIN_SUCCESS` | 1 |  |
+| `LOGIN_FAILED_PASSWORD` | 2 |  |
+| `LOGIN_FAILED_MFA` | 3 |  |
+| `LOGIN_LOCKED` | 4 | too many failures: the account is locked |
+
+### `LoginMethod` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `LOGIN_METHOD_UNSPECIFIED` | 0 |  |
+| `LOGIN_PASSWORD` | 1 |  |
+| `LOGIN_BIOMETRIC` | 2 |  |
+| `LOGIN_OTP` | 3 |  |
+| `LOGIN_SSO` | 4 |  |
+
+### `LoginEvent`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `customer_id` | `uint64` |  |
+| 4 | `device_id` | `uint64` |  |
+| 5 | `ip_v4` | `uint32` |  |
+| 6 | `ip_country` | `string` |  |
+| 7 | `outcome` | `LoginOutcome` |  |
+| 8 | `method` | `LoginMethod` |  |
+| 9 | `new_device` | `bool` | first login from this device for this customer |
+| 10 | `lat` | `double` |  |
+| 11 | `lon` | `double` |  |
+
+### `ProfileChange` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `PROFILE_CHANGE_UNSPECIFIED` | 0 |  |
+| `PROFILE_PASSWORD` | 1 |  |
+| `PROFILE_EMAIL` | 2 |  |
+| `PROFILE_PHONE` | 3 |  |
+| `PROFILE_ADDRESS` | 4 |  |
+| `PROFILE_PAYEE_ADDED` | 5 |  |
+| `PROFILE_MFA_RESET` | 6 |  |
+
+### `ProfileChannel` (enum)
+
+| Value | Number | Meaning |
+|---|---|---|
+| `PROFILE_CHANNEL_UNSPECIFIED` | 0 |  |
+| `PROFILE_APP` | 1 |  |
+| `PROFILE_WEB` | 2 |  |
+| `PROFILE_CALL_CENTRE` | 3 |  |
+| `PROFILE_BRANCH` | 4 |  |
+
+### `ProfileChangeEvent`
+
+| # | Field | Type | Description |
+|---|---|---|---|
+| 1 | `event_id` | `fixed64` |  |
+| 2 | `event_time_us` | `sfixed64` |  |
+| 3 | `customer_id` | `uint64` |  |
+| 4 | `device_id` | `uint64` | 0 when not made from a device (call centre, branch) |
+| 5 | `ip_v4` | `uint32` |  |
+| 6 | `change` | `ProfileChange` |  |
+| 7 | `channel` | `ProfileChannel` |  |
+| 8 | `verified` | `bool` | confirmed out of band (a code to the old phone or email) |
 
 ## `realy.payments.v1` (label.proto)
 

@@ -1,0 +1,44 @@
+# Features fed by message types that are not payments (pipeline payments-ext). This file extends the base
+# schema: the base's entities, filters and its 62 features come first, unchanged (same tensor indices), and
+# the features below are appended.
+#
+#   event_types   the event types that fold into a stream feature; absent = the pipeline's default type
+#                 (payment), so every base feature behaves exactly as before. (Not `on:`: YAML 1.1 reads a
+#                 bare `on` as the boolean true, so the two languages would disagree.) A scored event of another
+#                 type (a payment) reads a feature it does not fold into as of its own time (a payment sees
+#                 the failed logins of the last hour without being counted as one); a fold-only event (a
+#                 login) leaves the features it does not fold into alone.
+#   filters       {when: <CEL>, event_types: [types]} is evaluated only for those types, over that type's message
+#                 (event.outcome is a login's field); a plain filter applies to payments. For any other
+#                 type its bit is 0.
+#
+# Exactness: customer and card features are exact across login, profile change, card lifecycle and
+# payments (one topic keyed by customer, one order). Device and IP features are agreement-only, as in the
+# base schema; device telemetry arrives on its own topic keyed by device.
+schema_version: 3
+extends: feature_schema.yaml
+
+filters:
+  login_failed:      { when: "event.outcome != 'LOGIN_SUCCESS'", event_types: [login] }
+  login_new_device:  { when: "event.new_device", event_types: [login] }
+  credential_change: { when: "event.change == 'PROFILE_PASSWORD' || event.change == 'PROFILE_EMAIL' || event.change == 'PROFILE_PHONE' || event.change == 'PROFILE_MFA_RESET'", event_types: [profile_change] }
+  token_provisioned: { when: "event.action == 'CARD_TOKEN_PROVISIONED'", event_types: [card_lifecycle] }
+  pin_change:        { when: "event.action == 'CARD_PIN_CHANGED'", event_types: [card_lifecycle] }
+  device_tampered:   { when: "event.emulator || event.rooted", event_types: [device_telemetry] }
+
+features:
+  # logins (customer, device, ip)
+  - { name: cust_failed_logins_1h,        source: stream, entity: customer, agg: count, filter: login_failed, event_types: [login], window: 1h, granularity: 1m }
+  - { name: cust_new_device_logins_24h,   source: stream, entity: customer, agg: count, filter: login_new_device, event_types: [login], window: 24h, granularity: 30m }
+  - { name: cust_distinct_login_ips_24h,  source: stream, entity: customer, agg: distinct, value: ip_v4, event_types: [login], window: 24h, granularity: 30m }
+  # one feature fed by two types: every customer seen on the device, by a login or a payment
+  - { name: dev_distinct_customers_all_24h, source: stream, entity: device, agg: distinct, value: customer_id, event_types: [payment, login], window: 24h, granularity: 30m }
+  # profile and credential changes (customer)
+  - { name: cust_secs_since_credential_change, source: stream, entity: customer, agg: time_since_last, filter: credential_change, event_types: [profile_change], window: 30d, granularity: 1d, default: 2592000 }
+  # card lifecycle (card)
+  - { name: card_tokens_provisioned_30d,  source: stream, entity: card, agg: count, filter: token_provisioned, event_types: [card_lifecycle], window: 30d, granularity: 1d }
+  - { name: card_secs_since_pin_change,   source: stream, entity: card, agg: time_since_last, filter: pin_change, event_types: [card_lifecycle], window: 30d, granularity: 1d, default: 2592000 }
+  # device telemetry (device, ip; its own topic)
+  - { name: dev_max_risk_24h,             source: stream, entity: device, agg: max, value: risk_score, event_types: [device_telemetry], window: 24h, granularity: 1h }
+  - { name: dev_tampered_reports_24h,     source: stream, entity: device, agg: count, filter: device_tampered, event_types: [device_telemetry], window: 24h, granularity: 1h }
+  - { name: ip_max_reputation_risk_24h,   source: stream, entity: ip, agg: max, value: ip_reputation_risk, event_types: [device_telemetry], window: 24h, granularity: 1h }

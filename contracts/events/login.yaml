@@ -1,0 +1,11 @@
+# A customer's login (realy.identity.v1.LoginEvent): customer, device and IP; no card, merchant or payee.
+# Fold-only in payments-ext: it updates the features whose `on` lists it and is not decided.
+name: login
+message: realy.identity.v1.LoginEvent
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  device: device_id
+  ip: ip_v4
+location: { lat: lat, lon: lon }

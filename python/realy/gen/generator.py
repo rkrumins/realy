@@ -77,6 +77,12 @@ class Generator:
             r_flow = np.random.Generator(np.random.PCG64(ss.spawn(1)[0]))
             self.flows = Flows([transaction(n) for n in scenario.traffic.flows], r_flow,
                                self.reg.fraud_type_names(), shard)
+        self.sessions = None
+        if scenario.traffic.event_types:
+            from .sessions import Sessions
+            # a stream of its own, seeded apart from the spawned children above (unchanged by it)
+            r_ses = np.random.Generator(np.random.PCG64(np.random.SeedSequence([scenario.seed, shard, n_shards, 0x5E55])))
+            self.sessions = Sessions(scenario.traffic.event_types, r_ses, shard) or None
         self.pending = make_chunk(0)
         self.seq = 0
         self.order = 1 << 40
@@ -147,6 +153,18 @@ class Generator:
         self.seq += len(batch)
         if self.flows is not None:
             batch.records = self.flows.expand(batch.columns, batch.payloads, batch.keys, t1)
+        if self.sessions is not None:
+            # the standalone types' messages, merged into the records in event-time order
+            from .flows import Record
+            recs = batch.records
+            if recs is None:
+                ids = batch.columns["event_id"].tolist()
+                times = batch.columns["event_time_us"].tolist()
+                recs = [Record(int(t), "", p, k, int(e), True, j)
+                        for j, (t, p, k, e) in enumerate(zip(times, batch.payloads, batch.keys, ids))]
+            recs = recs + self.sessions.expand(batch.columns, t0, t1)
+            recs.sort(key=lambda r: (r.t_us, r.order))
+            batch.records = recs
         return batch
 
     @property

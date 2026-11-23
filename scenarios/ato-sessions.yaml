@@ -1,0 +1,26 @@
+name: ato-sessions
+description: "Account takeover seen across message types (pipeline payments-ext): failed logins from a new device and a credential change before the fraudulent payments, card tokens provisioned to wallets, tampered devices. Flink scores inline, so the customer and card features fed by logins are exact; the rule set baseline-ext adds candidate rules over them (replay it against baseline with `pulsebench rules-whatif`). Needs `make up PIPELINE=payments-ext`."
+seed: 7
+pipeline: payments-ext
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 400 }
+  duration_s: 120
+  warmup_s: 20
+  event_types: { login: 0.8, profile_change: 0.05, card_lifecycle: 0.05, device_telemetry: 0.3 }
+topology: flink-inline
+rules: baseline-ext
+fraud: { background_per_1k: 6.0, mix: { account_takeover: 4.0, card_testing: 1.0, app_scam_mule: 1.0 } }
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  self_inclusion: true
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+  max_batch: 1
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }
+flink_state: fresh

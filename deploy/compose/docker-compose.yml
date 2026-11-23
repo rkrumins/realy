@@ -150,6 +150,8 @@ services:
       <<: *jvm-env
       # trained proxy (realy train); empty -> bundled hand-set default weights
       MODEL_WEIGHTS: ${MODEL_WEIGHTS:-/models/proxy/fraud_mlp.weights.json}
+      # the model reads its inputs by name from the pipeline's schema (a wider schema scores unchanged)
+      PIPELINE: "${PIPELINE:-payments}"
       JAVA_OPTS: "-XX:+UseZGC -XX:+ZGenerational -Xmx1g -XX:+ExitOnOutOfMemoryError"
     # shared with the console: `realy train` writes versioned weights here and `realy deploy-model`
     # hot-swaps them in (ModelServerConfig.weights_path) - retrain -> redeploy -> measure, no rebuild.
@@ -164,6 +166,9 @@ services:
     ports: ["8080:8080"]
     environment:
       <<: *jvm-env
+      # the pipeline every service runs (contracts/pipelines/<name>.yaml): one value for the gateway, Flink
+      # and the console (`make up PIPELINE=payments-ext`); the runner and the Flink job refuse a mismatch
+      PIPELINE: "${PIPELINE:-payments}"
       REDIS_URI: redis://redis:6379
       MODEL_TARGET: mock-model:8001
       INGRESS_KAFKA: "false"
@@ -193,6 +198,7 @@ services:
     environment:
       FLINK_PROPERTIES: *flink-common
       PLUGINS_DIR: /opt/realy/plugins
+      PIPELINE: "${PIPELINE:-payments}"
     volumes: ["flink-checkpoints:/checkpoints", "./plugins:/opt/realy/plugins:ro"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/overview > /dev/null || exit 1"]
@@ -211,6 +217,7 @@ services:
       REDIS_URI: redis://redis:6379
       MODEL_TARGET: mock-model:8001
       RUN_SEED: "42"
+      PIPELINE: "${PIPELINE:-payments}"
       # online-store writes per subtask in flight (backpressure beyond), and a longer command timeout than
       # the gateway's: a write is not on the decision path, a timeout declines the checkpoint
       STORE_MAX_IN_FLIGHT: "${STORE_MAX_IN_FLIGHT:-1000}"
@@ -236,6 +243,7 @@ services:
     environment:
       KAFKA_BOOTSTRAP: kafka:29092
       REDIS_URI: redis://redis:6379
+      PIPELINE: "${PIPELINE:-payments}"
       GATEWAY_ADMIN: http://gateway:8080
       GATEWAY_GRPC: gateway:8080
       MODEL_ADMIN: http://mock-model:8002

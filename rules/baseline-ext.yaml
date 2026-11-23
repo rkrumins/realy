@@ -1,0 +1,36 @@
+# baseline-v5 + rules over the features other message types feed (pipeline payments-ext,
+# contracts/features/feature_schema_ext.yaml): logins, profile and credential changes, card lifecycle and
+# device telemetry, which a payment alone cannot carry. Everything else (thresholds, step-up, the payment
+# rules) comes from `extends`. Needs a stack on payments-ext (the features exist only there).
+#
+# Candidates, not tuned: each threshold is a starting point to replay with `pulsebench rules-whatif` on a
+# training run and confirm on an evaluation run, as the baseline's were.
+#
+#   account takeover    failed logins and a login from a new device in the last day, then a remote payment;
+#                       a credential changed within the hour, then a payment from a device never seen
+#   card provisioning   tokens provisioned to wallets in the last 30 days, then card-not-present spend
+#   device intelligence a device the telemetry flagged (emulator or rooted, high risk); a device many
+#                       customers log in or pay from (a device farm)
+extends: baseline
+version: baseline-v5-ext1
+rules:
+  - id: ATO_FAILED_LOGINS_NEW_DEVICE
+    when: "f.cust_failed_logins_1h >= 2.0 && f.cust_new_device_logins_24h >= 1.0 && f.is_cnp > 0.5"
+    action: CHALLENGE
+    reason: "failed logins in the last hour and a login from a new device, then a remote payment"
+  - id: ATO_CREDENTIAL_CHANGE_NEW_DEVICE
+    when: "f.cust_secs_since_credential_change < 3600.0 && f.cust_device_novel > 0.5 && f.amount_usd > 100.0"
+    action: REVIEW
+    reason: "a password, email, phone or MFA change within the hour, then a payment from a device never seen"
+  - id: CARD_TOKEN_THEN_CNP
+    when: "f.card_tokens_provisioned_30d >= 2.0 && f.is_cnp > 0.5 && f.amount_usd > 200.0"
+    action: REVIEW
+    reason: "the card was provisioned to wallets twice or more in 30 days, then a remote payment over 200"
+  - id: TAMPERED_DEVICE
+    when: "f.dev_tampered_reports_24h >= 1.0 && f.dev_max_risk_24h >= 0.7"
+    action: REVIEW
+    reason: "the device reported an emulator or root in the last day, with a risk score of 0.7 or more"
+  - id: DEVICE_FARM
+    when: "f.dev_distinct_customers_all_24h >= 5.0"
+    action: REVIEW
+    reason: "five or more customers logged in or paid from this device in the last day"

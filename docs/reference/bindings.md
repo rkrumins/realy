@@ -25,6 +25,7 @@ Order is the Flink job's keyed-stage order (append only).
 
 | Pipeline | Namespace | Partition key | Event types | Exact entities | Topics |
 |---|---|---|---|---|---|
+| `payments-ext` | (default) | customer | `payment` (scored), `login` (fold), `profile_change` (fold), `card_lifecycle` (fold), `device_telemetry` (fold), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold), `card_authentication` (fold), `card_authorization` (fold), `card_capture` (fold), `card_reversal` (fold), `card_refund` (fold), `chargeback` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq`, device_telemetry: `payments.devices.telemetry` |
 | `payments` | (default) | customer | `payment` (scored), `payment_initiation` (fold), `device_context` (fold), `payee_check` (fold), `sca_result` (fold), `payment_submission` (fold), `payment_status` (fold), `card_authentication` (fold), `card_authorization` (fold), `card_capture` (fold), `card_reversal` (fold), `card_refund` (fold), `chargeback` (fold) | customer, card, account, txn | events: `payments.events.raw`, decisions: `payments.decisions`, labels: `payments.labels`, assembled: `payments.events.assembled`, dlq: `payments.events.dlq` |
 
 ## Transaction `a2a_transfer`
@@ -150,6 +151,21 @@ Message `realy.flows.v1.CardCapture`; id `event_id`; time `event_time_us` (us); 
 | 8 | `currency` | string | String |  |
 | 9 | `amount_usd_minor` | int | Int64 |  |
 
+## Event type `card_lifecycle`
+
+Message `realy.cards.v1.CardLifecycleEvent`; id `event_id`; time `event_time_us` (us); amount ``.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `customer_id` | u64 | UInt64 | customer |
+| 4 | `card_id` | u64 | UInt64 | card |
+| 5 | `device_id` | u64 | UInt64 | device |
+| 6 | `action` | enum CardAction | Int8 |  |
+| 7 | `wallet` | enum Wallet | Int8 |  |
+| 8 | `step_up_passed` | bool | UInt8 |  |
+
 ## Event type `card_refund`
 
 Message `realy.flows.v1.CardRefund`; id `event_id`; time `event_time_us` (us); amount `amount_usd_minor`.
@@ -212,6 +228,40 @@ Message `realy.flows.v1.DeviceContext`; id `event_id`; time `event_time_us` (us)
 | 10 | `remote_access` | bool | UInt8 |  |
 | 11 | `emulator` | bool | UInt8 |  |
 | 12 | `on_call` | bool | UInt8 |  |
+
+## Event type `device_telemetry`
+
+Message `realy.devices.v1.DeviceTelemetry`; id `event_id`; time `event_time_us` (us); amount ``.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `device_id` | u64 | UInt64 | device |
+| 4 | `ip_v4` | u32 | UInt32 | ip |
+| 5 | `risk_score` | float | Float64 |  |
+| 6 | `emulator` | bool | UInt8 |  |
+| 7 | `rooted` | bool | UInt8 |  |
+| 8 | `ip_reputation_risk` | float | Float64 |  |
+| 9 | `vpn` | bool | UInt8 |  |
+
+## Event type `login`
+
+Message `realy.identity.v1.LoginEvent`; id `event_id`; time `event_time_us` (us); amount ``.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `customer_id` | u64 | UInt64 | customer |
+| 4 | `device_id` | u64 | UInt64 | device |
+| 5 | `ip_v4` | u32 | UInt32 | ip |
+| 6 | `ip_country` | string | String |  |
+| 7 | `outcome` | enum LoginOutcome | Int8 |  |
+| 8 | `method` | enum LoginMethod | Int8 |  |
+| 9 | `new_device` | bool | UInt8 |  |
+| 10 | `lat` | float | Float64 |  |
+| 11 | `lon` | float | Float64 |  |
 
 ## Event type `payee_check`
 
@@ -316,6 +366,21 @@ Message `realy.flows.v1.PaymentSubmission`; id `event_id`; time `event_time_us` 
 | 8 | `currency` | string | String |  |
 | 9 | `amount_usd_minor` | int | Int64 |  |
 | 10 | `scheme` | enum A2aScheme | Int8 |  |
+
+## Event type `profile_change`
+
+Message `realy.identity.v1.ProfileChangeEvent`; id `event_id`; time `event_time_us` (us); amount ``.
+
+| # | Field | Kind | ClickHouse | Entity |
+|---|---|---|---|---|
+| 1 | `event_id` | u64 | UInt64 |  |
+| 2 | `event_time_us` | int | Int64 |  |
+| 3 | `customer_id` | u64 | UInt64 | customer |
+| 4 | `device_id` | u64 | UInt64 | device |
+| 5 | `ip_v4` | u32 | UInt32 | ip |
+| 6 | `change` | enum ProfileChange | Int8 |  |
+| 7 | `channel` | enum ProfileChannel | Int8 |  |
+| 8 | `verified` | bool | UInt8 |  |
 
 ## Event type `sca_result`
 

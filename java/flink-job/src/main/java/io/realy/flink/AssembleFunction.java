@@ -97,9 +97,9 @@ public final class AssembleFunction extends KeyedProcessFunction<Long, Envelope,
     @Override
     public void processElement(Envelope env, Context ctx, Collector<Envelope> out) throws Exception {
         long now = BenchClock.nowUs();
-        if (env.type == null) {
+        if (env.type == null || !core.isPart(env.type)) {
             emit(core.closeOverdue(store, env.eventTimeUs), env, out);
-            out.collect(env);                       // a one-message payment: through, after any wait it closed
+            out.collect(env);                       // a one-message payment or a standalone type: through
             return;
         }
         List<Assembly.Out> outs = core.process(store, env.type, env.event, env.eventTimeUs, env.trace, env.ingestUs, now,

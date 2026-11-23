@@ -1,0 +1,10 @@
+# A change to a customer's profile or credentials (realy.identity.v1.ProfileChangeEvent): customer, and
+# the device and IP of the session (0 when made by phone or in branch).
+name: profile_change
+message: realy.identity.v1.ProfileChangeEvent
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  device: device_id
+  ip: ip_v4

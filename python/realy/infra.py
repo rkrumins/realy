@@ -241,9 +241,9 @@ def check_flink() -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------- gateway + model
 def _schema_sha() -> str:
-    from .features.schema import SCHEMA_PATH
-    p = Path(os.environ.get("FEATURE_SCHEMA") or SCHEMA_PATH)
-    return hashlib.sha256(p.read_text().encode()).hexdigest()[:12]
+    """The schema as the gateway hashes it (FeatureSchema.loadText: the file preceded by what it extends)."""
+    from .features.schema import schema_bundle, schema_path
+    return hashlib.sha256(schema_bundle(schema_path()).encode()).hexdigest()[:12]
 
 
 def check_gateway_and_model(scorer: str) -> list[dict[str, Any]]:

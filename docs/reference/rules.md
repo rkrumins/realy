@@ -4,6 +4,18 @@
 
 Rule sets are CEL over `f` (features, doubles) and `event` (transaction fields, enums by name). Evaluated by the Java scoring core and re-evaluated by `pulsebench verify` for parity. Precedence: DECLINE rule > ALLOW rule > score >= decline > REVIEW rule > score >= review > APPROVE.
 
+## `baseline-ext` - version `baseline-v5-ext1`
+
+Model thresholds: review >= `None`, decline >= `None`.
+
+| Rule | Action | When | Reason |
+|---|---|---|---|
+| `ATO_FAILED_LOGINS_NEW_DEVICE` | CHALLENGE | `f.cust_failed_logins_1h >= 2.0 && f.cust_new_device_logins_24h >= 1.0 && f.is_cnp > 0.5` | failed logins in the last hour and a login from a new device, then a remote payment |
+| `ATO_CREDENTIAL_CHANGE_NEW_DEVICE` | REVIEW | `f.cust_secs_since_credential_change < 3600.0 && f.cust_device_novel > 0.5 && f.amount_usd > 100.0` | a password, email, phone or MFA change within the hour, then a payment from a device never seen |
+| `CARD_TOKEN_THEN_CNP` | REVIEW | `f.card_tokens_provisioned_30d >= 2.0 && f.is_cnp > 0.5 && f.amount_usd > 200.0` | the card was provisioned to wallets twice or more in 30 days, then a remote payment over 200 |
+| `TAMPERED_DEVICE` | REVIEW | `f.dev_tampered_reports_24h >= 1.0 && f.dev_max_risk_24h >= 0.7` | the device reported an emulator or root in the last day, with a risk score of 0.7 or more |
+| `DEVICE_FARM` | REVIEW | `f.dev_distinct_customers_all_24h >= 5.0` | five or more customers logged in or paid from this device in the last day |
+
 ## `baseline-flows` - version `baseline-v5-flows2`
 
 Model thresholds: review >= `None`, decline >= `None`.

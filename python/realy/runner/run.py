@@ -718,6 +718,9 @@ class _Run:
         # ... and what its events mean (entity registry, event type bindings, fields): run directories
         # without one were payments-only
         from ..bindings import pipeline
+        if sc.pipeline and sc.pipeline != pipeline().name:
+            raise RuntimeError(f"scenario {sc.name} needs pipeline {sc.pipeline}; this stack runs {pipeline().name} "
+                               f"(start it with `make up PIPELINE={sc.pipeline}`)")
         (self.run_dir / "pipeline.json").write_text(json.dumps(pipeline().snapshot(), indent=1))
         self.check("prepare")
         st.start("topics")
@@ -832,6 +835,12 @@ class _Run:
             time.sleep(0.2)
         self.sleep(1.0, "collector start")
 
+    @staticmethod
+    def type_topics() -> dict[str, str]:
+        """The event types the pipeline sends on a topic other than its events topic, with that topic."""
+        from ..bindings.pipeline import pipeline
+        return {t: topic for topic, types in pipeline().extra_topics().items() for t in types}
+
     def start_emitters(self) -> None:
         sc, ctx, h = self.sc, self.ctx, self.h
         n_shards = 1 if self.sync else max(1, sc.traffic.generators)
@@ -840,7 +849,7 @@ class _Run:
                                 scenario=sc.model_dump(mode="json"), world_dir=str(sc.world_dir), t_start_us=t_start,
                                 time_scale=self.ts, sim_start_us=self.sim0, duration_s=sc.traffic.duration_s,
                                 extra={"history": self.history, "prime_tps": self.base_tps / n_shards,
-                                       "usecases": self.usecases})
+                                       "usecases": self.usecases, "type_topics": self.type_topics()})
                       for s in range(n_shards)]
         self.manifest.update({"t_start_us": t_start, "time_scale": self.ts, "sim_start_us": self.sim0,
                               "shards": n_shards, "collectors": self.n_coll, "world_hash": self.world.content_hash,

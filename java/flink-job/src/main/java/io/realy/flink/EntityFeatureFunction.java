@@ -10,6 +10,7 @@ import io.realy.scoring.features.FeatureSchema;
 import io.realy.scoring.store.RedisOnlineStore;
 import io.realy.scoring.store.StoreBlob;
 import java.time.Duration;
+import java.util.List;
 import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
@@ -53,6 +54,12 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
     private transient int schemaVersion;
     private transient StageMetrics metrics;
     private transient long ttlSeconds;
+    private final List<String> later;          // the entities of the stages after this one
+    private final String pipeline;             // the pipeline the job was planned for
+    private transient boolean[] laterFolds;    // per event type ordinal: does a later stage fold it?
+    private transient int defaultType;
+    private transient java.util.Map<String, Integer> typeOrdinals;
+    private transient float[] scratch;         // a fold-only event's values (for its store blob)
 
     public EntityFeatureFunction(String entity, boolean writeStore) {
         this(entity, writeStore, false);
@@ -63,17 +70,43 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
     }
 
     public EntityFeatureFunction(String entity, boolean writeStore, boolean storeState, boolean spans, String schemaYaml) {
+        this(entity, writeStore, storeState, spans, schemaYaml, List.of());
+    }
+
+    public EntityFeatureFunction(String entity, boolean writeStore, boolean storeState, boolean spans, String schemaYaml,
+                                 List<String> later) {
+        this(entity, writeStore, storeState, spans, schemaYaml, later, null);
+    }
+
+    /**
+     * @param later    the entities of the stages after this one (a fold-only event goes on only if one folds it)
+     * @param pipeline the pipeline the job was planned for (null = this process's PIPELINE)
+     */
+    public EntityFeatureFunction(String entity, boolean writeStore, boolean storeState, boolean spans, String schemaYaml,
+                                 List<String> later, String pipeline) {
+        this.pipeline = pipeline;
         this.schemaYaml = schemaYaml;
         this.entity = entity;
         this.writeStore = writeStore;
         this.storeState = storeState;
         this.spans = spans;
+        this.later = List.copyOf(later);
     }
 
     @Override
     public void open(OpenContext ctx) {
         FeatureSchema schema = FeatureSchema.of(schemaYaml);
-        agg = new EntityAggregator(schema, entity);
+        var pipe = io.realy.scoring.binding.PipelineBinding.of(pipeline);
+        agg = new EntityAggregator(schema, entity, pipe);
+        defaultType = pipe.defaultOrdinal();
+        typeOrdinals = new java.util.HashMap<>();
+        laterFolds = new boolean[64];
+        for (String e : later) {
+            if (schema.stream(e).isEmpty()) continue;
+            EntityAggregator a = new EntityAggregator(schema, e, pipe);
+            for (int t = 0; t < 64; t++) laterFolds[t] |= a.folds(t);
+        }
+        scratch = new float[schema.size()];
         schemaVersion = schema.version;
         entityEnum = FeatureAssembler.entityEnum(entity).getNumber();
         ValueStateDescriptor<byte[]> d = new ValueStateDescriptor<>("w-" + entity, PrimitiveArrayTypeInfo.BYTE_PRIMITIVE_ARRAY_TYPE_INFO);
@@ -101,18 +134,26 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
         int dom = BenchClock.domain();
         if (spans) env.span(Stage.SHUFFLE_VALUE, entityEnum, dom, env.lastEmitUs, start - env.lastEmitUs);
         long key = agg.key(env.row);
+        int type = env.type == null ? defaultType : typeOrdinals.computeIfAbsent(env.type,
+                t -> io.realy.scoring.binding.PipelineBinding.of(pipeline).typeOrdinal(t));
+        // a fold-only type (a login, device telemetry) carries no feature vector: it updates state, nothing reads it
+        boolean foldOnly = env.features == null;
         if (key == 0) {
-            agg.defaults(env.features);
+            if (!foldOnly) agg.defaults(env.features);
         } else if (env.readOnly) {
             // a re-scored stage of a transaction already folded in when it was assembled: read only
             agg.read(state.value(), env.row, env.filterMask, env.features);
+        } else if (foldOnly && (type < 0 || !agg.folds(type))) {
+            // nothing of this entity is fed by this type: no state access
         } else {
-            byte[] next = agg.process(state.value(), env.row, env.filterMask, env.features);
-            state.update(next);
-            if (writeStore) {
+            byte[] prev = state.value();
+            float[] values = foldOnly ? scratch : env.features;
+            byte[] next = agg.process(prev, env.row, env.filterMask, values, type);
+            if (next != prev) state.update(next);
+            if (writeStore && next != prev) {
                 int[] idx = agg.featureIndices();
                 float[] vals = new float[idx.length];
-                for (int i = 0; i < idx.length; i++) vals[i] = env.features[idx[i]];
+                for (int i = 0; i < idx.length; i++) vals[i] = values[idx[i]];
                 long asOf = EntityAggregator.lastEventUs(next);
                 long w0 = BenchClock.nowUs();
                 long ingested = env.ingestUs;
@@ -142,6 +183,12 @@ public final class EntityFeatureFunction extends KeyedProcessFunction<Long, Enve
         metrics.recordUs("state_" + entity, end - start);
         metrics.recordUs("shuffle_" + entity, start - env.lastEmitUs);
         env.lastEmitUs = end;
+        // a fold-only event goes no further than the last stage that folds its type (a login never reaches
+        // the merchant, terminal or payee shuffles)
+        if (foldOnly && (type < 0 || !laterFolds[type])) {
+            metrics.add("typed_done_" + entity, 1);
+            return;
+        }
         out.collect(env);
     }
 
