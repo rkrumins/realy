@@ -201,7 +201,9 @@ public final class FeatureAssembler {
             double val = have ? blob.values()[i] : s.defaultValue();
             // self-inclusion only for features the payment itself folds into (`event_types`): the others are read as they are
             if (selfInclusion && !includesCurrent && a.foldsDefault(i)) {
-                boolean match = s.filter() == null || (mask & (1L << schema.filterBit(s.filter()))) != 0;
+                int gate = schema.gate(s);   // a gated feature counts the payment only while its gate (computed earlier) is on
+                boolean match = (s.filter() == null || (mask & (1L << schema.filterBit(s.filter()))) != 0)
+                        && (gate < 0 || v[gate] != 0f);
                 double base = have ? val : 0.0;
                 switch (s.agg()) {
                     case "count" -> { val = base + (match ? 1 : 0); have = true; }
