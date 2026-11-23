@@ -47,13 +47,13 @@ On this repository's compose stack, on one 4-vCPU / 15 GB host shared by every c
 | Synchronous decisions within the budget | `sync-budget4`: 45,010 requests at 500/s, 100% within 150 ms, p99 51 ms |
 | Real infrastructure: SASL Kafka, a 3-node Redis Cluster with a password, ClickHouse with a user | `r8-secured-smoke5`: p99 107 ms, verify PASS |
 | Your own scorer as a black box | `r6-external`: 30,000 / 30,000 decided, 0 duplicates |
-| Payments unchanged by all of this | the golden payments set and state bytes (`GoldenPaymentsTest`, `tests/test_golden_payments.py`), and `smoke` on the payments pipeline |
+| Payments unchanged by all of this | the golden payments set and state bytes (`GoldenPaymentsTest`, `tests/test_golden_payments.py`); `m4-smoke-payments-warm` on the payments pipeline with the new images: verify PASS (exact-set 99.78%, parity 100%), e2e p99 147 ms with 99.07% within 150 ms, CPU per event as before (gateway 1.08 ms, Flink 1.63 ms). The verdict still flags p99 drift, this host's I/O noise (throughput, below) |
 
 ## What is not proven yet: throughput
 
 | Rate | Status |
 |---|---|
-| 500 payments/s, payments only | within budget on this host (`smoke`, `sync-budget4`) |
+| 500 payments/s, payments only | within budget on this host on warm state (`m4-smoke-payments-warm` p99 147 ms, `sync-budget4` p99 51 ms); a fresh-state run whose feature catch-up overlaps the measured window does not (`m3`: p99 282 ms) |
 | 500 payments/s + about 1 other message per payment | correct, **over budget**: e2e p99 300 ms (`m1`, `m2`). The host runs Kafka, Flink, Redis, ClickHouse, the gateway, the model and the load generator on 4 vCPUs |
 | 1,000 payments/s | the latest step-ramp's knee; p99 241 ms with 4.8% rules-only fallbacks |
 | 2,000 payments/s sustained | **not reached**. Measured CPU per payment at 1k: Flink 0.87 ms, gateway 0.66, emitter 0.30, model 0.22, collector 0.12, so about 4.35 cores at 2k for these five alone. The cost per event has to roughly halve, and the host's I/O (Kafka acks, checkpoint flushes, about 10.5 Redis operations per payment, ClickHouse merges) has to stop stalling |
