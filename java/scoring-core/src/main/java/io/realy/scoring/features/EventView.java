@@ -25,7 +25,7 @@ public final class EventView {
      * one-message payment.
      */
     public static Map<String, Object> of(TransactionEvent e, Map<String, Object> txn) {
-        Map<String, Object> m = new HashMap<>(48);
+        Map<String, Object> m = new HashMap<>(64);      // 34 flat entries + the 8 blocks without a resize
         m.put("txn", txn);
         m.put("event_id", e.getEventId());
         m.put("event_time_us", e.getEventTimeUs());
@@ -61,14 +61,7 @@ public final class EventView {
         m.put("scheme_score", Integer.toUnsignedLong(e.getSchemeScore()));
         // the rich blocks (sub-messages, repeated and map fields): read by the generic codec, so the view is
         // the same as any bound message's; a payment that carries none gets the shared default views
-        boolean any = false;
-        for (FieldDescriptor f : BLOCKS) {
-            if (f.isRepeated() ? e.getRepeatedFieldCount(f) > 0 : e.hasField(f)) {
-                any = true;
-                break;
-            }
-        }
-        if (!any) {
+        if (!hasBlocks(e)) {
             m.putAll(DEFAULT_BLOCKS);
         } else {
             try {
@@ -80,6 +73,16 @@ public final class EventView {
         }
         return m;
     }
+
+    /** Whether a payment carries any rich block (generated accessors: no reflection on the hot path). */
+    static boolean hasBlocks(TransactionEvent e) {
+        return e.hasCardInfo() || e.hasAccountInfo() || e.hasMerchantInfo() || e.hasDeviceInfo() || e.hasPayeeInfo()
+                || e.hasAuthentication() || e.getItemsCount() > 0 || e.getAttributesCount() > 0;
+    }
+
+    /** The blocks {@link #hasBlocks} checks: a block added to TransactionEvent must be added there too (tested). */
+    static final List<String> CHECKED_BLOCKS = List.of("card_info", "account_info", "merchant_info", "device_info",
+            "payee_info", "authentication", "items", "attributes");
 
     private static final io.realy.scoring.binding.WireCodec CODEC = io.realy.scoring.binding.WireCodec.of(TransactionEvent.getDescriptor());
     /** TransactionEvent's sub-message, repeated and map fields (the rich blocks), in field order. */

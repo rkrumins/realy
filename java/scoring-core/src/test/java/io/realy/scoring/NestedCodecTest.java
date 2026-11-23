@@ -114,6 +114,16 @@ class NestedCodecTest {
         assertThat(io.realy.scoring.features.EventView.entityKey(flat, "card")).isEqualTo(4L);
     }
 
+    @Test
+    void theFastPresenceCheckCoversEveryBlock() throws Exception {
+        var blocks = TransactionEvent.getDescriptor().getFields().stream()
+                .filter(f -> f.isRepeated() || f.getJavaType() == com.google.protobuf.Descriptors.FieldDescriptor.JavaType.MESSAGE)
+                .map(com.google.protobuf.Descriptors.FieldDescriptor::getName).toList();
+        var f = io.realy.scoring.features.EventView.class.getDeclaredField("CHECKED_BLOCKS");
+        f.setAccessible(true);
+        assertThat(f.get(null)).isEqualTo(blocks);
+    }
+
     /** A message built here: packed and unpacked repeated ints, a Timestamp, a wrapper, a map of ints. */
     @Test
     void packedUnpackedTimestampsWrappersAndMaps() throws Exception {
