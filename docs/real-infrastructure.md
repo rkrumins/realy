@@ -96,6 +96,13 @@ or Flink source tasks. The preflight warns otherwise.
 | `REDIS_CA_FILE` | | a private CA (Python callers; Java uses the JVM trust store) |
 | `REDIS_TOPOLOGY_REFRESH_S` | 30 | cluster topology refresh, plus refresh on MOVED / ASK and reconnects |
 
+On a cluster, every primary's connection is opened when the client starts. Commands sent while a node
+connection is still connecting or authenticating are queued rather than rejected. The queue is bounded
+by `REDIS_REQUEST_QUEUE` and each command by `REDIS_COMMAND_TIMEOUT_MS`, and every caller bounds what it
+has in flight. Without this, a fresh Flink job's first writes to each node failed and declined its first
+checkpoints. The secured overlay (below) reproduced that, and it is how this was found. A standalone
+server still rejects commands while disconnected, so an outage fails fast.
+
 The online store holds one blob per entity and the profiles; nothing else. Use `noeviction` (sized with
 headroom) or a `volatile-*` policy: `allkeys-*` evicts profiles silently, and the preflight warns about
 it. Put the store in the scorer's zone: every event pays one round trip to it (the preflight measures the
@@ -187,8 +194,24 @@ docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-com
 ```
 
 The passwords are development defaults (`SECURED_KAFKA_PASSWORD`, `SECURED_REDIS_PASSWORD`,
-`SECURED_CLICKHOUSE_PASSWORD` override them). Return to the bundled stack with a plain `up -d` (the
-ClickHouse container is recreated, so its tables are rebuilt and earlier audit rows are gone).
+`SECURED_CLICKHOUSE_PASSWORD` override them). ClickHouse keeps a data volume per profile, because its
+Kafka engine tables are created with the profile's broker list. Return to the bundled stack with
+`docker compose -f deploy/compose/docker-compose.yml up -d --remove-orphans`.
+
+**Measured** (2026-11-22, `smoke`, 500 TPS on one 4-vCPU host):
+- **Latency:** PASS, e2e p99 107 ms, 99.46% within budget.
+- **Verify:** PASS, exact-set features 99.78%, rule, score and outcome parity 100%.
+- **Audit:** the ClickHouse audit is complete (30,000 of 30,000) through the SASL Kafka engine.
+- **Catch-up:** 568,063 history events read over SASL and written to the cluster in 46 s.
+
+The first attempts found four defects, all fixed:
+
+| Found | Fix |
+|---|---|
+| a fresh Flink job's first writes to each cluster node were rejected while the node connection was still connecting ("Currently not connected"), declining its checkpoints | primaries' connections opened at start; cluster commands queued (bounded) while a node connects |
+| after that failure, the job restarted from the latest offset and skipped the history replay, so catch-up waited forever | a fresh job reads from its submission time (`--start-ms`) |
+| the preflight's Redis check crashed on a cluster (`INFO` has another shape there) | read from one node; a cluster check (primaries, state, slots) |
+| ClickHouse kept the plaintext broker list from an earlier profile and could not consume (0 audited) | a data volume per profile; a new preflight check fails when ClickHouse's Kafka engine is not consuming, with its error |
 
 ## What verification proves against real infrastructure
 

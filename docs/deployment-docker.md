@@ -42,8 +42,16 @@ The console container keeps its state in two volumes:
 * `realy-data` at `/data`: generated worlds (`/data/world-<customers>-<seed>`) and scenarios saved
   from the builder (`/data/scenarios`).
 
-On first start the bundled scenario packs are copied into `/data/scenarios`; your edits there are
-never overwritten. The paths can be overridden with `REALY_RUNS`, `REALY_DATA`, `REALY_SCENARIOS`
+Other services keep theirs:
+* `clickhouse-data` at `/var/lib/clickhouse`: the audit and analytics tables. The secured overlay uses
+  `clickhouse-secured` instead, because the Kafka engine tables carry their profile's broker list.
+* `gateway-spool` at `/spool`: the decision WAL spool.
+* `flink-checkpoints` at `/checkpoints`: retained checkpoints and savepoints.
+* `realy-models` at `/models`: the served model versions.
+
+On start the bundled scenario packs are copied into `/data/scenarios`. Copies you have not edited
+follow the image when it is updated. Edited ones are kept, and flagged in the console when the bundled
+version changed ("Reset" restores it). The paths can be overridden with `REALY_RUNS`, `REALY_DATA`, `REALY_SCENARIOS`
 and `REALY_HOME`.
 
 ## Building behind a corporate / TLS-intercepting proxy

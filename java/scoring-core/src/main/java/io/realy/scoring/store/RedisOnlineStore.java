@@ -137,8 +137,19 @@ public final class RedisOnlineStore implements OnlineStore {
         return server;
     }
 
+    /**
+     * Cluster connections buffer commands while a node connection is (re)connecting instead of rejecting
+     * them: Lettuce routes each command to its slot's node connection, which is briefly not yet connected
+     * while it opens and authenticates (at start-up, after a topology refresh, after a failover), and with
+     * rejection those commands failed ("Currently not connected"), declining Flink's checkpoints. The
+     * outage protection stays: the queue is bounded (REDIS_REQUEST_QUEUE), every command times out
+     * (REDIS_COMMAND_TIMEOUT_MS), and the callers bound what they have in flight (the Flink writer's
+     * STORE_MAX_IN_FLIGHT, the gateway's feature deadline).
+     */
     static ClusterClientOptions clusterOptions() {
-        io.lettuce.core.ClientOptions base = clientOptions();
+        io.lettuce.core.ClientOptions base = clientOptions().mutate()
+                .disconnectedBehavior(io.lettuce.core.ClientOptions.DisconnectedBehavior.ACCEPT_COMMANDS)
+                .build();
         return ClusterClientOptions.builder(base)
                 .topologyRefreshOptions(ClusterTopologyRefreshOptions.builder()
                         .enablePeriodicRefresh(Duration.ofSeconds(io.realy.common.Env.lng("REDIS_TOPOLOGY_REFRESH_S", 30)))

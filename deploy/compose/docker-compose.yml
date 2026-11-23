@@ -132,6 +132,9 @@ services:
       - ../../contracts/storage/clickhouse:/realy-sql:ro
       - ./clickhouse/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
       - ./clickhouse/realy.xml:/etc/clickhouse-server/config.d/realy.xml:ro
+      # named, per profile (the secured overlay mounts clickhouse-secured here): the Kafka engine tables are
+      # created with the profile's broker list on an empty data directory only
+      - clickhouse-data:/var/lib/clickhouse
     depends_on: { kafka: { condition: service_healthy } }
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client -q 'EXISTS realy.v_training_dataset' | grep -q 1"]
@@ -294,6 +297,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  clickhouse-data: {}
   flink-checkpoints: {}
   gateway-spool: {}
   realy-runs: {}

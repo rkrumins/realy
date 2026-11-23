@@ -88,6 +88,9 @@ services:
       KAFKA_SASL_PASSWORD: ${SECURED_KAFKA_PASSWORD:-pulsebench-kafka-dev}
     volumes:
       - ./clickhouse/secured.xml:/etc/clickhouse-server/config.d/secured.xml:ro
+      # its own data: the Kafka engine tables are created (with this profile's broker list) only on an empty
+      # data directory, so each profile keeps its own and switching back and forth needs no migration
+      - clickhouse-secured:/var/lib/clickhouse
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --user pulsebench --password \"$$CLICKHOUSE_PASSWORD\" -q 'EXISTS realy.v_training_dataset' | grep -q 1"]
 
@@ -113,3 +116,6 @@ services:
       CLICKHOUSE_PASSWORD: ${SECURED_CLICKHOUSE_PASSWORD:-pulsebench-ch-dev}
     depends_on:
       redis-cluster-init: { condition: service_completed_successfully }
+
+volumes:
+  clickhouse-secured: {}

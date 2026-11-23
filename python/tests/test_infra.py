@@ -100,3 +100,32 @@ def test_cluster_info_shapes_are_read_from_one_node():
     assert _one_node(flat) == flat
     assert _one_node({"redis-c1:6379": flat, "redis-c2:6379": {"redis_version": "8.8.4"}}) == flat
     assert _one_node(None) == {} and _one_node("x") == {}
+
+
+def test_clickhouse_kafka_engine_errors_fail_the_preflight():
+    """ClickHouse consumes with its own client: a recent error after its last commit means it is not ingesting."""
+    from realy.infra import _C, _check_kafka_engine
+
+    class R:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def json(self):
+            return {"data": self.rows}
+
+    class CH:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def get(self, params, timeout):
+            return R(self.rows)
+
+    failing = [{"table": "decisions_queue", "n": 0, "committed": "1970-01-01 00:00:00", "t": "2026-11-23 00:10:00",
+                "err_at": "2026-11-23 00:09:50", "err": "SASL PLAIN mechanism handshake failed"}]
+    c = _C("clickhouse", "ClickHouse", "http://clickhouse:8123")
+    _check_kafka_engine(c, CH(failing))
+    assert c.out["checks"][0]["status"] == "fail" and "decisions_queue" in c.out["checks"][0]["detail"]
+    healthy = [dict(failing[0], committed="2026-11-23 00:09:55")]          # committed after the error
+    c2 = _C("clickhouse", "ClickHouse", "http://clickhouse:8123")
+    _check_kafka_engine(c2, CH(healthy))
+    assert c2.out["checks"][0]["status"] == "pass"

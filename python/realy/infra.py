@@ -180,7 +180,35 @@ def check_clickhouse() -> dict[str, Any]:
         c.add("reachable", "pass", f"ClickHouse {c.out['version']}")
         c.add("schema", "pass" if n > 0 else "fail", f"{n} tables in database realy",
               "" if n > 0 else "apply the DDL (make migrate, or contracts/storage/clickhouse/*.sql)")
+        if n > 0:
+            _check_kafka_engine(c, chc)
     return _guard(c, run, "cannot reach ClickHouse", "check CLICKHOUSE_URL (https for TLS) and the credentials")
+
+
+def _check_kafka_engine(c: _C, chc: Any) -> None:
+    """ClickHouse reads the topics with its own Kafka client (the Kafka engine tables): its broker list is in
+    the DDL and its security settings in the server config, so it can fail while every other client works.
+    A table whose newest consumer error is recent and later than its last commit is not ingesting."""
+    q = ("SELECT table, max(num_messages_read) AS n, max(last_commit_time) AS committed, "
+         "arrayStringConcat(arraySlice(arrayReverse(groupArrayArray(exceptions.text)), 1, 1), '') AS err, "
+         "max(arrayMax(arrayConcat(exceptions.time, [toDateTime(0)]))) AS err_at, now() AS t "
+         "FROM system.kafka_consumers WHERE database = 'realy' GROUP BY table FORMAT JSON")
+    try:
+        rows = chc.get({"query": q}, timeout=TIMEOUT).json().get("data", [])
+    except Exception:  # noqa: BLE001 - an older server without the table: nothing to say
+        return
+    import datetime as _dt
+
+    def ts(x: str) -> float:
+        return _dt.datetime.fromisoformat(x).timestamp() if x else 0.0
+    bad = [r for r in rows if r.get("err") and ts(r["err_at"]) > ts(r["committed"]) and ts(r["t"]) - ts(r["err_at"]) < 600]
+    if bad:
+        r = bad[0]
+        c.add("kafka engine", "fail", f"ClickHouse cannot consume {', '.join(x['table'] for x in bad)}: {r['err'][:220]}",
+              "its broker list is in the DDL (re-apply it with the right KAFKA_BROKERS: make migrate) and its client "
+              "settings in the server config (<kafka>: security_protocol, sasl_*: docs/real-infrastructure.md)")
+    elif rows:
+        c.add("kafka engine", "pass", f"{len(rows)} Kafka engine table(s) consuming without errors")
 
 
 # ------------------------------------------------------------------------------------------- Flink

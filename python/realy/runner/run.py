@@ -57,6 +57,7 @@ class RunHandle:
     phase: str = "PREPARE"
     live: dict[str, Any] = field(default_factory=dict)
     service_errors: float = 0.0   # this run's gateway pipeline errors + Flink async timeouts (1 s windows summed)
+    error_base: tuple | None = None   # (emitted, errors) when MEASURE began: the error-rate guardrail's origin
     startup: Any = None           # runner.startup.Startup: the structured startup sequence (console Live panel)
     verifiable: bool = False      # the run will be verified exactly: it must not read state other runs built
     rate_changes: list = field(default_factory=list)   # live rate changes: [{"at_us", "mult"}] (report segments)
@@ -256,8 +257,16 @@ def _guardrails(handle: RunHandle, sc: Scenario, snap: dict, log) -> None:
     emitted = sum(v.get("counters", {}).get("emitted_total", 0) for k, v in handle.live.items() if k.startswith("emitter:"))
     errors = handle.service_errors + sum(v.get("counters", {}).get("errors_total", 0)
                                          for k, v in handle.live.items() if k.startswith("emitter:"))
-    if emitted >= 1000 and errors / emitted > g.max_error_rate:
-        reason = f"error rate {errors / emitted:.2%} > {g.max_error_rate:.0%} ({errors:.0f} errors)"
+    # errors count from the start of MEASURE: warm-up is there to absorb a cold start (a fresh JVM, a cold
+    # connection pool: the sync rail's first seconds) and is excluded from the results, so it must not
+    # abort them either; a pipeline that is broken keeps failing after it and is stopped then
+    if handle.phase == "MEASURE" and getattr(handle, "error_base", None) is None:
+        handle.error_base = (emitted, errors)
+    if handle.phase == "MEASURE":
+        m0, e0 = handle.error_base
+        n, bad = emitted - m0, errors - e0
+        if n >= 1000 and bad / n > g.max_error_rate:
+            reason = f"error rate {bad / n:.2%} > {g.max_error_rate:.0%} ({bad:.0f} errors since measure began)"
     if reason and request_abort_handle(handle, reason, "guardrail"):
         log(f"GUARDRAIL: {reason} -> aborting run")
 
@@ -559,7 +568,9 @@ class _Run:
             return False
         except (EOFError, OSError):
             return False
-        if kind in ("emitter", "collector") and isinstance(val, dict) and "error" in val:
+        # a failed child reports {"error": "<message>"}; the sync emitter's summary also counts error
+        # responses under "error" (an int), which is a result, not a failure
+        if kind in ("emitter", "collector") and isinstance(val, dict) and isinstance(val.get("error"), str):
             last = [x for x in str(val["error"]).strip().splitlines() if x.strip()][-1:] or ["?"]
             self.log(f"{kind} {idx} failed:\n{val['error']}")
             request_abort_handle(self.h, f"instrument failure: {kind} {idx}: {last[0][:200]}", "instrument")
