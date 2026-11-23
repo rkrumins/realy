@@ -89,7 +89,9 @@ def timeline(run_dir: Path, job: dict[str, Any] | None = None, now: float | None
     if verify_end is None and status("verify") in (None, "pending") and run and (run_dir / "verify.json").exists():
         verify_end = _mtime(run_dir / "verify.json")
         verify_start = verify_start or report_end
-    verifying = status("verify") == "running" or ((job or {}).get("status") == "running" and bool(run)
+    report_over = report_end is not None or status("report") in ("done", "warn", "skipped", "failed")
+    # verifying: its verify step runs, or a job that asked for it has ended its report and not verified yet
+    verifying = status("verify") == "running" or ((job or {}).get("status") == "running" and bool(run) and report_over
                                                     and bool((job or {}).get("verify")) and verify_end is None)
     ended = run and (report_end is not None or status("report") in ("skipped", "failed")) and not verifying
     if live is None:

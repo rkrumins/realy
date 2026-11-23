@@ -1607,6 +1607,128 @@
    "name": "PROFILE_BRANCH"
   }
  },
+ "realy.payments.v1.AccountInfo": {
+  "1": {
+   "name": "id",
+   "type": "uint64"
+  },
+  "2": {
+   "name": "type",
+   "type": "AccountType"
+  },
+  "3": {
+   "name": "balance_usd_minor",
+   "type": "int64"
+  },
+  "4": {
+   "name": "age_days",
+   "type": "uint32"
+  },
+  "5": {
+   "name": "flags",
+   "type": "repeated string"
+  }
+ },
+ "realy.payments.v1.AccountType": {
+  "0": {
+   "name": "ACCOUNT_TYPE_UNSPECIFIED"
+  },
+  "1": {
+   "name": "ACCOUNT_CURRENT"
+  },
+  "2": {
+   "name": "ACCOUNT_SAVINGS"
+  },
+  "3": {
+   "name": "ACCOUNT_CREDIT"
+  }
+ },
+ "realy.payments.v1.Address": {
+  "1": {
+   "name": "country",
+   "type": "string"
+  },
+  "2": {
+   "name": "city",
+   "type": "string"
+  },
+  "3": {
+   "name": "postcode",
+   "type": "string"
+  }
+ },
+ "realy.payments.v1.Authentication": {
+  "1": {
+   "name": "three_ds",
+   "type": "ThreeDsResult"
+  },
+  "2": {
+   "name": "attempts",
+   "type": "uint32"
+  },
+  "3": {
+   "name": "method",
+   "type": "string"
+  },
+  "4": {
+   "name": "sca_exempt",
+   "type": "bool"
+  }
+ },
+ "realy.payments.v1.CardInfo": {
+  "1": {
+   "name": "id",
+   "type": "uint64"
+  },
+  "2": {
+   "name": "bin",
+   "type": "string"
+  },
+  "3": {
+   "name": "bin_country",
+   "type": "string"
+  },
+  "4": {
+   "name": "status",
+   "type": "CardStatus"
+  },
+  "5": {
+   "name": "network",
+   "type": "string"
+  },
+  "6": {
+   "name": "tokenized",
+   "type": "bool"
+  },
+  "7": {
+   "name": "wallet",
+   "type": "string"
+  },
+  "8": {
+   "name": "issued_at_us",
+   "type": "int64"
+  }
+ },
+ "realy.payments.v1.CardStatus": {
+  "0": {
+   "name": "CARD_STATUS_UNSPECIFIED"
+  },
+  "1": {
+   "name": "CARD_STATUS_ACTIVE"
+  },
+  "2": {
+   "name": "CARD_STATUS_BLOCKED"
+  },
+  "3": {
+   "name": "CARD_STATUS_LOST"
+  },
+  "4": {
+   "name": "CARD_STATUS_STOLEN"
+  },
+  "5": {
+   "name": "CARD_STATUS_EXPIRED"
+  }
+ },
  "realy.payments.v1.CardType": {
   "0": {
    "name": "CARD_TYPE_UNSPECIFIED"
@@ -1645,6 +1767,32 @@
   },
   "6": {
    "name": "ONLINE_BANKING"
+  }
+ },
+ "realy.payments.v1.DeviceInfo": {
+  "1": {
+   "name": "id",
+   "type": "uint64"
+  },
+  "2": {
+   "name": "os",
+   "type": "string"
+  },
+  "3": {
+   "name": "app_version",
+   "type": "string"
+  },
+  "4": {
+   "name": "emulator",
+   "type": "bool"
+  },
+  "5": {
+   "name": "rooted",
+   "type": "bool"
+  },
+  "6": {
+   "name": "risk_score",
+   "type": "double"
   }
  },
  "realy.payments.v1.EntryMode": {
@@ -1771,6 +1919,64 @@
   },
   "3": {
    "name": "INVESTIGATION"
+  }
+ },
+ "realy.payments.v1.LineItem": {
+  "1": {
+   "name": "sku",
+   "type": "string"
+  },
+  "2": {
+   "name": "qty",
+   "type": "uint32"
+  },
+  "3": {
+   "name": "amount_usd_minor",
+   "type": "int64"
+  },
+  "4": {
+   "name": "category",
+   "type": "string"
+  }
+ },
+ "realy.payments.v1.MerchantInfo": {
+  "1": {
+   "name": "id",
+   "type": "uint64"
+  },
+  "2": {
+   "name": "name",
+   "type": "string"
+  },
+  "3": {
+   "name": "mcc",
+   "type": "uint32"
+  },
+  "4": {
+   "name": "address",
+   "type": "Address"
+  },
+  "5": {
+   "name": "risk_tier",
+   "type": "uint32"
+  }
+ },
+ "realy.payments.v1.PayeeInfo": {
+  "1": {
+   "name": "id",
+   "type": "uint64"
+  },
+  "2": {
+   "name": "bank_country",
+   "type": "string"
+  },
+  "3": {
+   "name": "new_payee",
+   "type": "bool"
+  },
+  "4": {
+   "name": "name_match",
+   "type": "string"
   }
  },
  "realy.payments.v1.PaymentType": {
@@ -1909,6 +2115,38 @@
   "4": {
    "name": "customer_id",
    "type": "uint64"
+  },
+  "40": {
+   "name": "card_info",
+   "type": "CardInfo"
+  },
+  "41": {
+   "name": "account_info",
+   "type": "AccountInfo"
+  },
+  "42": {
+   "name": "merchant_info",
+   "type": "MerchantInfo"
+  },
+  "43": {
+   "name": "device_info",
+   "type": "DeviceInfo"
+  },
+  "44": {
+   "name": "payee_info",
+   "type": "PayeeInfo"
+  },
+  "45": {
+   "name": "authentication",
+   "type": "Authentication"
+  },
+  "46": {
+   "name": "items",
+   "type": "repeated LineItem"
+  },
+  "47": {
+   "name": "attributes",
+   "type": "map<string, string>"
   },
   "5": {
    "name": "account_id",

@@ -98,4 +98,97 @@ message TransactionEvent {
   bool pin_verified = 30;        // the PIN was entered and verified (chip, ATM)
   bool cryptogram_valid = 31;    // EMV chip / network-token cryptogram verified (false for magstripe, keyed)
   uint32 scheme_score = 32;      // card network risk score 0-99 carried in the request (0 = none)
+
+  // Rich blocks: the payment's parties and context as structured sub-messages, the way a payment hub
+  // carries them. All optional (absent = proto3 defaults), so payments without them are byte-identical;
+  // the generic codec (bindings) reads every field of them by dotted path (card_info.status,
+  // merchant_info.address.country), so features, filters, entity keys and rules can use them.
+  CardInfo card_info = 40;
+  AccountInfo account_info = 41;
+  MerchantInfo merchant_info = 42;
+  DeviceInfo device_info = 43;
+  PayeeInfo payee_info = 44;
+  Authentication authentication = 45;
+  repeated LineItem items = 46;            // the basket (e-commerce)
+  map<string, string> attributes = 47;     // free-form context from the channel
+}
+
+enum CardStatus {
+  CARD_STATUS_UNSPECIFIED = 0;
+  CARD_STATUS_ACTIVE = 1;
+  CARD_STATUS_BLOCKED = 2;
+  CARD_STATUS_LOST = 3;
+  CARD_STATUS_STOLEN = 4;
+  CARD_STATUS_EXPIRED = 5;
+}
+
+// The card as the authorisation saw it.
+message CardInfo {
+  uint64 id = 1;                 // the card (equal to card_id when both are sent)
+  string bin = 2;                // first digits of the PAN (6 or 8)
+  string bin_country = 3;        // ISO 3166-1 alpha-2 of the issuing BIN
+  CardStatus status = 4;         // the issuer's status of the card
+  string network = 5;            // VISA, MASTERCARD...
+  bool tokenized = 6;            // a network token (wallet) rather than the PAN
+  string wallet = 7;             // APPLE_PAY, GOOGLE_PAY, "" for none
+  int64 issued_at_us = 8;
+}
+
+enum AccountType {
+  ACCOUNT_TYPE_UNSPECIFIED = 0;
+  ACCOUNT_CURRENT = 1;
+  ACCOUNT_SAVINGS = 2;
+  ACCOUNT_CREDIT = 3;
+}
+
+message AccountInfo {
+  uint64 id = 1;
+  AccountType type = 2;
+  int64 balance_usd_minor = 3;
+  uint32 age_days = 4;
+  repeated string flags = 5;     // e.g. AML_HOLD, OVERDRAWN
+}
+
+message Address {
+  string country = 1;
+  string city = 2;
+  string postcode = 3;
+}
+
+message MerchantInfo {
+  uint64 id = 1;
+  string name = 2;
+  uint32 mcc = 3;
+  Address address = 4;
+  uint32 risk_tier = 5;          // the acquirer's tier, 0 (low) to 3 (high)
+}
+
+message DeviceInfo {
+  uint64 id = 1;
+  string os = 2;
+  string app_version = 3;
+  bool emulator = 4;
+  bool rooted = 5;
+  double risk_score = 6;         // the device intelligence score, 0..1
+}
+
+message PayeeInfo {
+  uint64 id = 1;
+  string bank_country = 2;
+  bool new_payee = 3;            // first payment to this payee
+  string name_match = 4;         // confirmation of payee: MATCH, CLOSE_MATCH, NO_MATCH, ""
+}
+
+message Authentication {
+  ThreeDsResult three_ds = 1;
+  uint32 attempts = 2;           // authentication attempts before this one succeeded or failed
+  string method = 3;             // OTP, BIOMETRIC, PASSWORD...
+  bool sca_exempt = 4;           // an SCA exemption was applied (low value, trusted beneficiary...)
+}
+
+message LineItem {
+  string sku = 1;
+  uint32 qty = 2;
+  int64 amount_usd_minor = 3;
+  string category = 4;
 }

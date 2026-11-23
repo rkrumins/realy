@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS realy.runs (
   `status` LowCardinality(String),
   `abort_kind` LowCardinality(String),
   `measured_s` Nullable(Float64),
+  `prepare_s` Nullable(Float64),
+  `verify_s` Nullable(Float64),
+  `total_s` Nullable(Float64),
   `git_sha` LowCardinality(String),
   `images` String,
   `report` String CODEC(ZSTD(3)),
@@ -44,3 +47,6 @@ ORDER BY (scenario, run_id);
 ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS `status` LowCardinality(String);
 ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS `abort_kind` LowCardinality(String);
 ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS `measured_s` Nullable(Float64);
+ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS `prepare_s` Nullable(Float64);
+ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS `verify_s` Nullable(Float64);
+ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS `total_s` Nullable(Float64);

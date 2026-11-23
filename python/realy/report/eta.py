@@ -42,14 +42,15 @@ def _history(runs_dir: Path, limit: int = 60) -> list[dict[str, Any]]:
         dirs = []
     for d in dirs:
         man, st = _json(d / "manifest.json"), _json(d / "startup.json")
-        if not st:
-            continue
+        run = _json(d / "run.json")
+        if not st or run.get("aborted") or run.get("abort") or run.get("error"):
+            continue      # an aborted or failed run's step times say nothing about a normal run's
         durs = {}
         for s in st.get("steps") or []:
-            if s.get("status") in ("done", "warn", "skipped") and s.get("started_at") and s.get("ended_at"):
+            if s.get("status") in ("done", "warn") and s.get("started_at") and s.get("ended_at"):
                 durs[s["id"]] = max(0.0, float(s["ended_at"]) - float(s["started_at"]))
-            elif s.get("status") == "skipped":
-                durs[s["id"]] = 0.0
+            elif s.get("status") == "skipped" and s.get("id") != "verify":
+                durs[s["id"]] = 0.0   # skipped by this kind of run (verify skipped = not requested: no evidence)
         rows.append({"scenario": man.get("scenario"), "topology": man.get("topology"), "steps": durs})
     _CACHE.update(at=now, key=str(runs_dir), rows=rows)
     return rows

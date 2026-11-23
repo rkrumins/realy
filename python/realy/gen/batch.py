@@ -59,8 +59,11 @@ INTERNAL: dict[str, tuple[np.dtype, object]] = {
     "order": (np.dtype(np.int64), 0),              # tie-breaker for deterministic sorting
 }
 
-# Output column names (= proto field names) for EventBatch.columns
-EVENT_FIELDS = [f.name for f in transaction_pb2.TransactionEvent.DESCRIPTOR.fields]
+# Output column names (= proto field names) for EventBatch.columns: the flat fields. The rich blocks
+# (card_info, merchant_info, items...: sub-messages, repeated and map fields) are drawn only when a
+# scenario asks for them (traffic.event_blocks), so payments without them stay byte-identical.
+EVENT_FIELDS = [f.name for f in transaction_pb2.TransactionEvent.DESCRIPTOR.fields
+                if f.message_type is None and not getattr(f, "is_repeated", False)]
 TRUTH_FIELDS = ["is_fraud", "fraud_type", "campaign_id"]
 
 # realy.payments.v1 enums

@@ -91,6 +91,16 @@ def test_a_run_aborted_while_preparing_has_no_traffic(tmp_path):
     assert tl["aborted"] and tl["stage"] == "done"
 
 
+def test_a_verified_job_is_reporting_until_its_report_is_built(tmp_path):
+    d = _run(tmp_path, steps_until="drain")       # run.json written, report step not started yet
+    job = {"status": "running", "verify": True}
+    assert timeline(d, job=job, now=T0 + 167)["stage"] == "report"
+    st = Startup.resume(d)
+    st.steps["report"].update(status="done", started_at=T0 + 165, ended_at=T0 + 168)
+    st.write()
+    assert timeline(d, job=job, now=T0 + 170)["stage"] == "verify"
+
+
 def test_skipped_steps_take_no_time(tmp_path):
     d = _run(tmp_path)
     st = Startup.resume(d)
@@ -237,3 +247,23 @@ def test_the_console_serves_launch_order_timelines_and_verify_state(tmp_path):
         assert tl["stage"] == "done" and tl["durations"]["verify_s"] >= 0.04
         assert done["finished_at"] >= tl["verify_end"] - 0.01      # the job ends after its verification
         assert job["id"] == done["id"]
+
+
+def test_aborted_runs_and_unrequested_verification_do_not_shape_the_eta(tmp_path):
+    from realy.report import eta as eta_mod
+    eta_mod._CACHE["at"] = 0
+    _run(tmp_path, name="ok", prepare=100.0)
+    bad = _run(tmp_path, name="bad", prepare=100.0)
+    run = json.loads((bad / "run.json").read_text())
+    run["aborted"] = "preflight failed"
+    (bad / "run.json").write_text(json.dumps(run))
+    st = Startup.resume(bad)
+    st.steps["drain"].update(started_at=T0, ended_at=T0 + 0.1)   # an aborted run drains in no time
+    st.write()
+    ok = tmp_path / "ok"
+    st = Startup.resume(ok)
+    st.skip("verify", "not requested")
+    st.write()
+    est = scenario_estimate(tmp_path, "smoke", "gateway-kafka", 60.0, verify=True)
+    # drain 5 s from the good run (not 0.1 s from the aborted one); verify from the default, not 0
+    assert est["total_s"] == 60.0 + 70.0 + 5.0 + 3.0 + 60.0
