@@ -1,0 +1,132 @@
+// A card payment as the messages an issuer's processor really sees, linked by `auth_id`: the 3-D Secure
+// authentication result from the access control server (EMV 3DS, before an online authorisation), the
+// authorisation request (ISO 8583 0100-like), and its lifecycle: the capture (clearing / presentment), a
+// reversal of an authorisation that was never captured, a refund, and a chargeback (a dispute raised by
+// the cardholder's bank). Every message carries the customer (the partition key) and its own event id and
+// time; together they form one transaction (contracts/transactions/card_payment.yaml).
+syntax = "proto3";
+
+package realy.flows.v1;
+
+import "realy/payments/v1/transaction.proto";
+
+option java_package = "io.realy.contracts.flows.v1";
+option java_multiple_files = true;
+
+// EMV 3DS transaction status (ARes / RReq transStatus)
+enum ThreeDsStatus {
+  THREE_DS_STATUS_UNSPECIFIED = 0;
+  TDS_AUTHENTICATED = 1;        // Y: authenticated (frictionless or after a challenge)
+  TDS_ATTEMPTED = 2;            // A: attempted, the issuer or cardholder not enrolled
+  TDS_NOT_AUTHENTICATED = 3;    // N
+  TDS_REJECTED = 4;             // R: the issuer rejected it
+  TDS_UNAVAILABLE = 5;          // U: technical problem
+}
+
+message CardAuthentication {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 auth_id = 3;             // the transaction: every message of this card payment carries it
+  uint64 customer_id = 4;
+  uint64 card_id = 5;
+  ThreeDsStatus status = 6;
+  bool challenged = 7;             // the cardholder was challenged (OTP, app) rather than frictionless
+  uint32 acs_risk_score = 8;       // the access control server's risk score, 0-99
+  uint64 device_id = 9;            // the browser / app the 3DS data came from
+  uint32 ip_v4 = 10;
+}
+
+message CardAuthorization {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 auth_id = 3;
+  uint64 customer_id = 4;
+  uint64 account_id = 5;
+  uint64 card_id = 6;
+  realy.payments.v1.CardType card_type = 7;
+  int64 amount_minor = 8;
+  string currency = 9;
+  int64 amount_usd_minor = 10;
+  uint64 merchant_id = 11;
+  uint32 mcc = 12;
+  string merchant_country = 13;
+  uint64 terminal_id = 14;
+  realy.payments.v1.Channel channel = 15;
+  realy.payments.v1.EntryMode entry_mode = 16;
+  bool card_present = 17;
+  double lat = 18;
+  double lon = 19;
+  uint64 device_id = 20;           // merchant-supplied device data (online)
+  uint32 ip_v4 = 21;
+  string ip_country = 22;
+  uint32 ip_asn = 23;
+  bool cvv_match = 24;
+  bool avs_match = 25;
+  bool recurring = 26;
+  uint32 credit_limit_usd = 27;
+  bool pin_verified = 28;
+  bool cryptogram_valid = 29;
+  uint32 scheme_score = 30;        // the card network's risk score in the request, 0-99
+}
+
+message CardCapture {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 auth_id = 3;
+  uint64 customer_id = 4;
+  uint64 card_id = 5;
+  uint64 merchant_id = 6;
+  int64 amount_minor = 7;          // may differ from the authorisation (tips, partial shipment)
+  string currency = 8;
+  int64 amount_usd_minor = 9;
+}
+
+enum ReversalReason {
+  REVERSAL_REASON_UNSPECIFIED = 0;
+  REVERSAL_MERCHANT_CANCEL = 1;
+  REVERSAL_EXPIRED = 2;            // the authorisation hold expired uncaptured
+  REVERSAL_TIMEOUT = 3;            // the acquirer never received the response
+}
+
+message CardReversal {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 auth_id = 3;
+  uint64 customer_id = 4;
+  uint64 card_id = 5;
+  ReversalReason reason = 6;
+}
+
+message CardRefund {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 auth_id = 3;
+  uint64 customer_id = 4;
+  uint64 card_id = 5;
+  uint64 merchant_id = 6;
+  int64 amount_minor = 7;
+  string currency = 8;
+  int64 amount_usd_minor = 9;
+}
+
+// dispute categories (scheme reason codes differ; these are the common groups)
+enum ChargebackReason {
+  CHARGEBACK_REASON_UNSPECIFIED = 0;
+  CB_FRAUD_CARD_ABSENT = 1;        // "I did not make this online payment"
+  CB_FRAUD_CARD_PRESENT = 2;       // counterfeit / lost or stolen card used in person
+  CB_NOT_RECEIVED = 3;
+  CB_NOT_AS_DESCRIBED = 4;
+  CB_CANCELLED_RECURRING = 5;
+  CB_DUPLICATE = 6;
+}
+
+message Chargeback {
+  fixed64 event_id = 1;
+  sfixed64 event_time_us = 2;
+  fixed64 auth_id = 3;
+  uint64 customer_id = 4;
+  uint64 card_id = 5;
+  uint64 merchant_id = 6;
+  ChargebackReason reason = 7;
+  int64 amount_usd_minor = 8;
+}

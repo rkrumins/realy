@@ -53,8 +53,20 @@ export function StopAllButton({ size = "default", label = "Stop all" }: { size?:
   );
 }
 
-/** Shown when the pipeline is held by a run this console does not own (CLI, bench Job, another console). */
-export function PipelineBanner({ status }: { status?: Pick<Status, "current" | "lease" | "blocked_by"> | null }) {
+/** Where the run that holds the pipeline is, in one line: its active startup step with progress, or
+ *  its phase once it measures (a long preparation reads as "feature catch-up 77%", not as a stall). */
+function nowLine(status: Pick<Status, "pipeline"> | null | undefined, phase?: string | null): string {
+  const step = status?.pipeline?.startup?.steps?.find((s) => s.status === "running");
+  if (step) {
+    const p = step.progress?.total ? ` ${Math.min(100, Math.round((100 * (step.progress.done ?? 0)) / step.progress.total))}%` : "";
+    return `step ${step.index}/${status!.pipeline!.startup!.steps.length}: ${step.label.toLowerCase()}${p}`;
+  }
+  return phase ? phase.toLowerCase() : "";
+}
+
+/** Shown when the pipeline is held by a run this console did not start (CLI, bench Job, another console).
+ *  On Live (`shown`), that run's stats are on the page: the banner only says where it came from. */
+export function PipelineBanner({ status, shown }: { status?: Pick<Status, "current" | "lease" | "blocked_by" | "pipeline"> | null; shown?: boolean }) {
   const qc = useQueryClient();
   const lease: LeaseHolder | null | undefined = status?.blocked_by?.run_id ? status.blocked_by : status?.lease;
   const mine = status?.current?.run_id && lease?.run_id === status.current.run_id;
@@ -64,15 +76,18 @@ export function PipelineBanner({ status }: { status?: Pick<Status, "current" | "
     onError: (e) => toast.error("Abort failed", { description: (e as Error).message }),
   });
   if (!lease?.run_id || mine) return null;
+  const now = nowLine(status, lease.phase);
   return (
     <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-info/30 bg-info/8 px-4 py-2.5 text-[13px]" data-testid="pipeline-banner">
       <Lock className="size-4 text-info" />
       <span>
-        Pipeline busy: <span className="font-mono">{lease.run_id}</span>
-        {lease.scenario && <> ({lease.scenario}{lease.phase ? `, ${lease.phase.toLowerCase()}` : ""})</>}
-        {lease.owner && <> owned by <span className="font-mono">{lease.owner}</span></>}
-        {lease.started_at ? <>, started {fmtAgo(lease.started_at)}</> : null}.
-        {status?.blocked_by?.run_id && <span className="text-muted"> Queued jobs wait until it finishes.</span>}
+        {shown ? "Started outside this console" : <>In progress: <span className="font-mono">{lease.run_id}</span></>}
+        {lease.scenario && !shown && <> ({lease.scenario})</>}
+        {lease.owner && <> by <span className="font-mono">{lease.owner}</span></>}
+        {lease.started_at ? <>, started {fmtAgo(lease.started_at)}</> : null}
+        {now && <> · now at <span className="font-medium">{now}</span></>}.
+        <span className="text-muted">{shown ? " Its live stats, startup and log are shown below; Abort stops it wherever it runs."
+          : status?.blocked_by?.run_id ? " Queued jobs start when it finishes." : " Open Live to watch it."}</span>
       </span>
       <Button size="sm" variant="outline" className="ml-auto" onClick={() => abort.mutate(lease.run_id)} disabled={abort.isPending}>
         <OctagonX />Abort it

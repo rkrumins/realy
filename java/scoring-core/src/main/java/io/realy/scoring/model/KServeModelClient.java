@@ -5,7 +5,6 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.ByteString;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.realy.common.BenchClock;
 import io.realy.contracts.kserve.v2.GRPCInferenceServiceGrpc;
 import io.realy.contracts.kserve.v2.InferParameter;
@@ -58,10 +57,113 @@ public final class KServeModelClient implements ModelClient {
         channels = new ManagedChannel[Math.max(1, channelCount)];
         stubs = new GRPCInferenceServiceGrpc.GRPCInferenceServiceFutureStub[channels.length];
         for (int i = 0; i < channels.length; i++) {
-            channels[i] = ManagedChannelBuilder.forTarget(target).usePlaintext()
-                    .maxInboundMessageSize(16 << 20).build();
+            channels[i] = ModelChannels.build(target);
             stubs[i] = GRPCInferenceServiceGrpc.newFutureStub(channels[i]);
         }
+    }
+
+    /**
+     * A client whose request rows are as wide as the served model's input. A KServe v2 model (Triton,
+     * ONNX) reads its input positionally, so it must receive exactly the features it was trained on:
+     * features are only ever appended to the schema, so those are the first N of today's vector (a model
+     * wider than the schema, a production-width proxy, gets zeros after them). N comes from
+     * MODEL_INPUT_DIM when set, else from the server's model metadata (input shape [-1, N]), else the
+     * schema width (the mock server binds any row by feature name).
+     */
+    public static KServeModelClient forServedModel(String target, String modelName, int schemaWidth, int channels) {
+        String forced = io.realy.common.Env.str("MODEL_INPUT_DIM", "");
+        int width = schemaWidth;
+        Served sv = served(target, modelName, io.realy.common.Env.str("MODEL_INPUT_NAME", "input__0"));
+        if (!forced.isBlank()) {
+            width = Integer.parseInt(forced.trim());
+        } else if (sv.inputWidth() > 0) {
+            width = sv.inputWidth();
+        } else if (io.realy.common.Profile.production()) {
+            // a wrong width makes every call fail or mis-score: never guess it in production
+            throw new IllegalStateException("model " + modelName + " at " + target + ": its input width is unknown ("
+                    + sv.error() + "); set MODEL_INPUT_DIM or make the model's metadata reachable");
+        }
+        if (width != schemaWidth) {
+            org.slf4j.LoggerFactory.getLogger(KServeModelClient.class).info(
+                    "model {} reads {} inputs ({} schema features: {})", modelName, width, schemaWidth,
+                    width < schemaWidth ? "sending the first " + width : "zero-padded");
+        }
+        KServeModelClient c = new KServeModelClient(target, modelName, width, channels);
+        c.served = sv;
+        c.target = target;
+        return c;
+    }
+
+    /**
+     * What the model server says about the model (KServe v2 ModelMetadata): its platform ("realy_mock" for
+     * the bundled mock; e.g. "onnxruntime_onnx", "tensorrt_plan" on Triton), versions, input tensor name and
+     * last dimension (-1 unknown), output name; `error` when the metadata could not be read.
+     */
+    public record Served(String platform, List<String> versions, String inputName, int inputWidth, String outputName,
+                         String error) {
+        public boolean mock() {
+            return "realy_mock".equals(platform);
+        }
+    }
+
+    private volatile Served served = new Served("", List.of(), "", -1, "", "not queried");
+    private volatile String target = "";
+
+    public Served served() {
+        return served;
+    }
+
+    /** At least one channel is not failing (READY, IDLE or CONNECTING): the model server is reachable. */
+    public boolean reachable() {
+        for (ManagedChannel c : channels) {
+            var st = c.getState(false);
+            if (st != io.grpc.ConnectivityState.TRANSIENT_FAILURE && st != io.grpc.ConnectivityState.SHUTDOWN) return true;
+        }
+        return false;
+    }
+
+    public String target() {
+        return target;
+    }
+
+    public String inputName() {
+        return inputName;
+    }
+
+    public int width() {
+        return nFeatures;
+    }
+
+    static Served served(String target, String modelName, String inputName) {
+        ManagedChannel ch = ModelChannels.build(target);
+        try {
+            var md = GRPCInferenceServiceGrpc.newBlockingStub(ch).withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .modelMetadata(io.realy.contracts.kserve.v2.ModelMetadataRequest.newBuilder().setName(modelName).build());
+            int width = -1;
+            String in = "";
+            for (var t : md.getInputsList()) {
+                if ((t.getName().equals(inputName) || md.getInputsCount() == 1) && t.getShapeCount() > 0) {
+                    long n = t.getShape(t.getShapeCount() - 1);
+                    width = n > 0 ? (int) n : -1;
+                    in = t.getName();
+                    break;
+                }
+            }
+            String out = md.getOutputsCount() > 0 ? md.getOutputs(0).getName() : "";
+            return new Served(md.getPlatform(), List.copyOf(md.getVersionsList()), in, width, out, "");
+        } catch (RuntimeException e) {
+            org.slf4j.LoggerFactory.getLogger(KServeModelClient.class).warn(
+                    "model metadata for {} unavailable at {} ({}): sending the full schema width", modelName, target,
+                    e.getMessage());
+            return new Served("", List.of(), "", -1, "", e.getClass().getSimpleName() + ": " + e.getMessage());
+        } finally {
+            ch.shutdownNow();
+        }
+    }
+
+    /** Last dimension of the model's input tensor from KServe v2 ModelMetadata, or -1 (unknown / unreachable). */
+    static int servedInputWidth(String target, String modelName, String inputName) {
+        return served(target, modelName, inputName).inputWidth();
     }
 
     public void configureBatching(int windowUs, int maxBatch) {
@@ -208,16 +310,27 @@ public final class KServeModelClient implements ModelClient {
         }, MoreExecutors.directExecutor());
     }
 
-    private float[] decode(ModelInferResponse resp, int b) {
+    /**
+     * One score per row, each a finite probability. A short output, NaN or a value outside [0, 1] is a model
+     * error (the orchestrator then decides by its deadline policy), never a silent 0 that would approve.
+     */
+    static float[] decode(ModelInferResponse resp, int b) {
         float[] out = new float[b];
+        int got;
         if (resp.getRawOutputContentsCount() > 0) {
             ByteBuffer bb = resp.getRawOutputContents(0).asReadOnlyByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
-            for (int i = 0; i < b && bb.remaining() >= 4; i++) out[i] = bb.getFloat();
+            got = Math.min(b, bb.remaining() / 4);
+            for (int i = 0; i < got; i++) out[i] = bb.getFloat();
         } else if (resp.getOutputsCount() > 0) {
             var contents = resp.getOutputs(0).getContents();
-            for (int i = 0; i < b && i < contents.getFp32ContentsCount(); i++) out[i] = contents.getFp32Contents(i);
+            got = Math.min(b, contents.getFp32ContentsCount());
+            for (int i = 0; i < got; i++) out[i] = contents.getFp32Contents(i);
         } else {
             throw new IllegalStateException("model returned no outputs");
+        }
+        if (got < b) throw new IllegalStateException("model returned " + got + " scores for " + b + " rows");
+        for (int i = 0; i < b; i++) {
+            if (!(out[i] >= 0f && out[i] <= 1f)) throw new IllegalStateException("model returned score " + out[i] + " (not a probability)");
         }
         return out;
     }

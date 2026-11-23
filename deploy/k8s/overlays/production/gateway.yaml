@@ -1,0 +1,78 @@
+# The scoring gateway for real payments. A StatefulSet so each pod's audit spool (decisions the broker could
+# not take yet, fsynced, replayed in the background) lives on its own persistent volume and outlives the pod.
+# Readiness is /ready (ingress polling, broker acknowledging, store connected, model reachable); liveness
+# /health. Settings come from the pipeline-env ConfigMap, scoring config and rules from the scoring-config
+# ConfigMap (hot-reloaded), secrets from files.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: gateway
+  labels: { app: gateway }
+spec:
+  serviceName: gateway
+  replicas: 6
+  podManagementPolicy: Parallel
+  selector: { matchLabels: { app: gateway } }
+  template:
+    metadata:
+      labels: { app: gateway }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8080", prometheus.io/path: /metrics }
+    spec:
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 45     # DRAIN_TIMEOUT_MS (20 s) + commit + producer close
+      topologySpreadConstraints:
+        - { maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable: ScheduleAnyway,
+            labelSelector: { matchLabels: { app: gateway } } }
+        - { maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway,
+            labelSelector: { matchLabels: { app: gateway } } }
+      containers:
+        - name: gateway
+          image: realy/scoring-gateway:dev           # pin a released tag / digest
+          ports: [{ name: grpc, containerPort: 8080 }]
+          envFrom: [{ configMapRef: { name: pipeline-env } }]
+          env:
+            - { name: HOSTNAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            - { name: REDIS_URI, valueFrom: { secretKeyRef: { name: pipeline-secrets, key: redis-uri } } }
+            - { name: JAVA_OPTS, value: "-XX:+UseZGC -XX:+ZGenerational -XX:MaxRAMPercentage=70 -XX:+AlwaysPreTouch" }
+          volumeMounts:
+            - { name: spool, mountPath: /spool }
+            - { name: scoring-config, mountPath: /config, readOnly: true }
+            - { name: secrets, mountPath: /secrets, readOnly: true }
+          resources:
+            requests: { cpu: "4", memory: 6Gi }
+            limits: { cpu: "4", memory: 6Gi }
+          readinessProbe: { httpGet: { path: /ready, port: 8080 }, periodSeconds: 3, failureThreshold: 2 }
+          livenessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 10, failureThreshold: 6 }
+          securityContext: { runAsNonRoot: true, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true,
+                             capabilities: { drop: [ALL] } }
+      volumes:
+        - { name: scoring-config, configMap: { name: scoring-config } }
+        - { name: secrets, secret: { secretName: pipeline-secrets, defaultMode: 0400 } }
+  volumeClaimTemplates:
+    - metadata: { name: spool }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 5Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gateway }
+spec:
+  selector: { app: gateway }
+  ports: [{ name: grpc, port: 8080, targetPort: 8080, appProtocol: kubernetes.io/h2c }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: gateway }
+spec:
+  minAvailable: 4
+  selector: { matchLabels: { app: gateway } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: gateway }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: StatefulSet, name: gateway }
+  minReplicas: 6
+  maxReplicas: 24                     # at most the events topic's partitions / KAFKA_CONSUMERS
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 55 } }

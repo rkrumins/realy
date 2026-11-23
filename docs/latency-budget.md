@@ -1,5 +1,40 @@
 # Latency budget: what is measured, and what the local runs showed
 
+## Synchronous decisions: a purchase answered within its budget
+
+A card authorisation (or any caller that waits) uses the `gateway-grpc` topology. The caller sends the
+payment to the gateway's Score API (gRPC unary, a bidirectional stream, or HTTP/JSON), and the gateway
+answers with the decision. Everything on that path is bounded by the budget:
+
+| Step | Bounded by | When it is late |
+|---|---|---|
+| the whole decision | `scoring.budget_ms` (100 ms in `sync-smoke`) from the moment the request arrives, or the caller's own deadline (`ScoreRequest.deadline_ms`; the emitter's `sync.deadline_ms`), whichever is given | `scoring.on_deadline`: `FALLBACK_RULES` (default) answers with a rules-only decision flagged degraded; `TIMEOUT` fails the request (`DEADLINE_EXCEEDED`); `PROVISIONAL_THEN_ASYNC` answers provisionally now and publishes the final decision when the model answers |
+| feature lookup | `feature_deadline_ms` (30 ms): one pipelined Redis round trip for every entity's blob and profile. The features are precomputed by Flink off the decision path, so nothing is aggregated while the caller waits | the same deadline policy: a rules-only decision on the event, with the unread features at their defaults and marked missing, flagged degraded |
+| model call | `model_deadline_ms` (80 ms), never past what is left of the budget; `hedge_after_ms` sends a duplicate request to a second model replica when the first is slow | rules-only fallback (above) |
+| rules and policy | CEL compiled once; microseconds | n/a |
+| the acknowledgement | the decision is made durable before the reply: the broker's ack (acks=all) on the decisions topic, or an fsynced local spool when the broker cannot take it (`audit_on_failure: SPOOL_LOCAL`, replayed later). `FAIL_CLOSED` declines a payment whose decision cannot be recorded | it counts against the budget like any other step (the `audit_ack` stage) |
+
+The caller therefore always gets an answer inside its deadline, a degraded one at worst. The report
+counts how many answers were degraded, why, and the response time of every request.
+
+**What is measured.** The Java load emitter is open loop: each request is sent at its scheduled time
+whether or not earlier ones were answered. A slow gateway therefore cannot slow the load down and hide
+its own latency (coordinated omission). End to end is `t_response − t_intended` on the emitter's clock.
+Requests that miss the deadline or fail are counted, never dropped.
+
+**Measured** (`sync-smoke`, 500 TPS, unary gRPC, budget 100 ms in the gateway, 150 ms end to end, this
+4-vCPU host, 2026-11-23):
+- **Requests:** 45,010 answered, 0 missing.
+- **Latency:** e2e p50 16 ms, p99 51 ms, p99.9 96 ms; hot path p99 35 ms; **100% within budget**.
+- **Fallbacks:** 155 decisions (0.34%) were rules-only because the model missed its deadline.
+- **Verify:** PASS, exact features 99.99%, rule, score and outcome parity 100%; audit 45,010 of 45,010.
+- **Tail attribution:** the slowest 1% were dominated by the model call (36%), the response transit
+  (27%) and the audit ack (21%).
+
+`sync-vs-async` compares the unary rail with the bidirectional stream (streaming roughly halves the
+p99) and with the asynchronous rail. Run either with `pulsebench run sync-smoke --verify`, or from the
+console's Launch page.
+
 ## Per-step measurement
 
 | # | Step | Span | Clock domain |

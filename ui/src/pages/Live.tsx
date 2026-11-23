@@ -1,9 +1,9 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, AlertTriangle, ArrowRight, Clock, FileBarChart2, Gauge, Layers, OctagonX, Rocket, SlidersHorizontal, Timer, Zap,
 } from "lucide-react";
 import * as React from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { TimeChart } from "@/components/charts";
 import { EmptyState, Kpi, PageHeader, TopologyBadge } from "@/components/common";
@@ -12,6 +12,7 @@ import { DistributionEditor } from "@/components/editors";
 import { DecisionFeed, LogConsole } from "@/components/feeds";
 import { TopologyMap, useTopology } from "@/components/Topology";
 import { StartupPanel } from "@/components/startup";
+import { ghostSeries, ReplayBar, replayRun, startupAt, useReplay } from "@/components/replay";
 import { Badge, Dot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -23,9 +24,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import type { LatencyDist } from "@/lib/dist";
 import { fmtCompact, fmtDuration, fmtMs, fmtNum, fmtPct, isNum } from "@/lib/format";
-import { useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
-import { focusRunId, live, logsFor, STAGE_SERIES, type LivePoint } from "@/lib/live";
-import type { CurrentRun, Snapshot } from "@/lib/types";
+import { activeRun, useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
+import { decisionsAt, focusRunId, live, logsFor, snapshotsAt, STAGE_SERIES, type LivePoint } from "@/lib/live";
+import type { CurrentRun } from "@/lib/types";
 
 const WINDOWS = [{ value: "60", label: "1m" }, { value: "300", label: "5m" }, { value: "600", label: "10m" }] as const;
 
@@ -41,11 +42,6 @@ function lastOf(series: LivePoint[], k: keyof LivePoint) {
   return null;
 }
 
-function latestSnapshots(runId: string | null, maxAgeS = 5): Snapshot[] {
-  const all = [...live.latest.values()];
-  const now = Math.max(Date.now() * 1000, ...all.map((s) => s.ts_us));
-  return all.filter((s) => now - s.ts_us <= maxAgeS * 1e6 && ((s.source !== "emitter" && s.source !== "collector") || !runId || s.run_id === runId));
-}
 
 // ------------------------------------------------------------------ control drawer
 function ControlDrawer({ open, onOpenChange, cur }: { open: boolean; onOpenChange: (v: boolean) => void; cur: CurrentRun | null }) {
@@ -88,7 +84,7 @@ function ControlDrawer({ open, onOpenChange, cur }: { open: boolean; onOpenChang
     onError: (e) => toast.error("Scoring change failed", { description: (e as Error).message }),
   });
   const abort = useMutation({
-    mutationFn: () => api.abort(cur!.job_id),
+    mutationFn: () => api.abort(cur!.job_id ?? cur!.run_id ?? ""),
     onSuccess: () => { toast.success("Abort requested"); onOpenChange(false); },
     onError: (e) => toast.error("Abort failed", { description: (e as Error).message }),
   });
@@ -180,18 +176,42 @@ function ControlDrawer({ open, onOpenChange, cur }: { open: boolean; onOpenChang
 export default function Live() {
   const nav = useNavigate();
   const qc = useQueryClient();
-  const status = useStatus();
-  const cur = status?.current ?? null;
+  const liveStatus = useStatus();
+  // replay: ?run=<id> shows a past (or another) run with the same components, read at a scrubber clock
+  const [params, setParams] = useSearchParams();
+  const replayId = params.get("run");
+  const replay = useReplay(replayId, params.get("t") ? Number(params.get("t")) : null);
+  const store = replay.store ?? live;
+  const clock = replay.store?.clock ?? null;
+  const cur = replay.data ? replayRun(replay.data, clock) : activeRun(liveStatus);
+  const status = replay.data
+    ? { ...(liveStatus ?? { current: null, queue: [] }), lease: null, blocked_by: null,
+        pipeline: liveStatus?.pipeline ? { ...liveStatus.pipeline, nodes: {}, startup: startupAt(replay.data.startup, clock) }
+          : { topology: replay.data.run.topology ?? "", run_id: replayId, phase: cur?.phase ?? null, nodes: {}, startup: startupAt(replay.data.startup, clock) } }
+    : liveStatus;
   const [win, setWin] = React.useState<"60" | "300" | "600">("300");
   const [drawer, setDrawer] = React.useState(false);
   const runId = cur?.run_id ?? focusRunId();
-  const series = useLiveSeries(Number(win), runId);
-  const elapsed = useElapsed(cur?.started_at);
-  const topo = useTopology(cur?.topology ?? (series.length ? undefined : undefined));
+  const series = useLiveSeries(Number(win), runId, store);
+  // warm-up + measurement are timed from the start of live traffic, not from the launch: a large world
+  // spends minutes preparing (world, history replay, catch-up) and that shows as startup steps instead
+  const liveElapsed = useElapsed(replay.data ? null : cur?.measure_started_at ?? null);
+  const livePrep = useElapsed(replay.data ? null : cur?.started_at ?? null);
+  const elapsed = replay.data ? (cur?.measure_started_at && clock !== null && clock >= cur.measure_started_at ? clock - cur.measure_started_at : null) : liveElapsed;
+  const prepElapsed = replay.data ? (cur?.started_at && clock !== null ? clock - cur.started_at : null) : livePrep;
+  const activeStep = status?.pipeline?.startup?.steps?.find((s) => s.status === "running");
+  // overlay: the previous run of the same scenario, aligned on the start of traffic
+  const runsList = useQuery({ queryKey: ["runs-picker"], queryFn: () => api.runs(200), staleTime: 15_000 });
+  const finished = (runsList.data?.history ?? []).filter((r) => ["done", "aborted", "failed"].includes(r.status) && r.run_id);
+  const [ghostOn, setGhostOn] = React.useState(false);
+  const ghostId = finished.find((r) => r.scenario === cur?.scenario && r.run_id !== cur?.run_id)?.run_id ?? null;
+  const ghost = useReplay(ghostOn ? ghostId : null);
+  const topo = useTopology(cur?.topology ?? (series.length ? undefined : undefined), (cur?.flows?.length ?? 0) > 0);
   const prevRun = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     // when a run finishes, refresh lists and offer the report
+    if (replay.data) return;
     if (prevRun.current && !cur) {
       const id = prevRun.current;
       qc.invalidateQueries({ queryKey: ["runs"] });
@@ -214,34 +234,67 @@ export default function Live() {
   const total = cur ? (cur.warmup_s ?? 0) + (cur.duration_s ?? 0) : null;
   const progress = elapsed !== null && total ? Math.min(1, elapsed / total) : null;
   const active = Boolean(cur) || series.some((p) => p.emitted);
-  const snaps = latestSnapshots(runId);
+  const snaps = snapshotsAt(store, runId);
   const graph = topo.data;
   // charts: from the run start while running; when idle, the span that carried emitter/collector data
+  const ghostPts = React.useMemo(() => ghostSeries(ghost.store, ghost.data?.run.measure_started_at ?? null, cur?.measure_started_at ?? null),
+    [ghost.store, ghost.data, cur?.measure_started_at]); // eslint-disable-line react-hooks/exhaustive-deps
   const shown = React.useMemo(() => {
-    if (cur?.started_at) return series.filter((p) => p.t >= (cur.started_at as number) - 5);
-    const idx = series.flatMap((p, i) => (p.emitted !== null || p.decided !== null ? [i] : []));
-    return idx.length ? series.slice(Math.max(0, idx[0] - 5), idx[idx.length - 1] + 6) : series;
-  }, [series, cur?.started_at]);
+    let pts: LivePoint[];
+    if (cur?.started_at) pts = series.filter((p) => p.t >= (cur.started_at as number) - 5);
+    else {
+      const idx = series.flatMap((p, i) => (p.emitted !== null || p.decided !== null ? [i] : []));
+      pts = idx.length ? series.slice(Math.max(0, idx[0] - 5), idx[idx.length - 1] + 6) : series;
+    }
+    if (!ghostPts.size) return pts;
+    return pts.map((p) => {
+      const g = ghostPts.get(p.t);
+      return { ...p, g_decided: g?.decided ?? null, g_e2e_p99: g?.e2e_p99 ?? null };
+    });
+  }, [series, cur?.started_at, ghostPts]);
   const stageSeries = STAGE_SERIES.map((s) => ({ key: s.key, label: s.label, stack: "s" }))
     .filter((s) => shown.some((p) => isNum(p.stages[s.key])));
   const flat = shown.map((p) => ({ ...p, ...Object.fromEntries(STAGE_SERIES.map((s) => [s.key, p.stages[s.key] ?? null])) }));
-  const logs = logsFor(runId);
-  const warmupMark = cur?.started_at && cur.warmup_s ? [{ x: Math.round(cur.started_at + cur.warmup_s), label: "measure" }] : undefined;
+  const logs = logsFor(runId, store);
+  const t0 = cur?.measure_started_at ?? null;
+  const warmupMark = t0 && cur?.warmup_s ? [{ x: Math.round(t0 + cur.warmup_s), label: "measure" }] : undefined;
 
   return (
     <>
-      <PageHeader eyebrow={<span className="inline-flex items-center gap-2">{cur ? <><Dot tone="accent" pulse />Live · {cur.phase?.toLowerCase()}</> : "Live"}</span>}
+      <PageHeader eyebrow={<span className="inline-flex items-center gap-2">{replay.data ? <><Dot tone="info" />Replay · {cur?.phase?.toLowerCase()}</>
+          : cur ? <><Dot tone="accent" pulse />Live · {cur.phase?.toLowerCase()}</> : "Live"}</span>}
         title={cur ? <span className="font-mono">{cur.scenario}</span> : "Live pipeline"}
-        subtitle={cur ? <span className="inline-flex flex-wrap items-center gap-2"><TopologyBadge topology={cur.topology} /><span className="font-mono text-[12.5px]">{cur.run_id ?? "preparing…"}</span></span>
+        subtitle={cur ? <span className="inline-flex flex-wrap items-center gap-2"><TopologyBadge topology={cur.topology} /><span className="font-mono text-[12.5px]">{cur.run_id ?? "preparing…"}</span>
+            {replay.data?.run.verdict && <Badge tone={replay.data.run.verdict === "PASS" ? "pass" : "fail"}>{replay.data.run.verdict}</Badge>}</span>
           : runId ? <>No run is active. Showing the last telemetry seen ({runId}).</> : "Nothing is running. Launch a scenario to watch it flow through the pipeline."}
         actions={<>
+          <Select size="sm" className="w-[230px]" value={replayId ?? ""} ariaLabel="Run to show"
+            onChange={(v) => setParams((p) => { if (v) p.set("run", v); else p.delete("run"); p.delete("t"); return p; }, { replace: true })}
+            options={[{ value: "", label: "Live now" }, ...finished.slice(0, 60).map((r) => ({ value: r.run_id!, label: <span className="font-mono text-[12px]">{r.run_id}</span>, hint: r.verdict ?? r.status }))]} />
           <Segmented value={win} onChange={setWin} options={WINDOWS.map((w) => ({ ...w }))} />
-          <Button variant="secondary" onClick={() => setDrawer(true)} data-testid="open-controls"><SlidersHorizontal />Controls</Button>
-          {!cur && runId && <Button variant="outline" onClick={() => nav(`/runs/${encodeURIComponent(runId)}`)}><FileBarChart2 />Report</Button>}
-          {(cur || status?.lease) && <StopAllButton />}
-          {!cur && <Button variant="gradient" onClick={() => nav("/launch")}><Rocket />Launch</Button>}
+          {ghostId && <Button variant={ghostOn ? "secondary" : "outline"} onClick={() => setGhostOn((g) => !g)} title={`overlay ${ghostId}, aligned on the start of traffic`} data-testid="ghost-toggle">{ghostOn ? "Hide previous" : "Overlay previous"}</Button>}
+          {!replay.data && <Button variant="secondary" onClick={() => setDrawer(true)} data-testid="open-controls"><SlidersHorizontal />Controls</Button>}
+          {(replay.data || !cur) && runId && <Button variant="outline" onClick={() => nav(`/runs/${encodeURIComponent(runId)}`)}><FileBarChart2 />Report</Button>}
+          {!replay.data && (cur || status?.lease) && <StopAllButton />}
+          {!replay.data && !cur && <Button variant="gradient" onClick={() => nav("/launch")}><Rocket />Launch</Button>}
         </>} />
+      {replay.store && replay.data && <ReplayBar store={replay.store} data={replay.data} />}
+      {replay.data?.note && <div className="mb-4 rounded-xl border border-warn/30 bg-warn/8 px-4 py-2.5 text-[13px]">{replay.data.note}</div>}
+      {replayId && replay.error && <div className="mb-4 rounded-xl border border-fail/30 bg-fail/8 px-4 py-2.5 text-[13px]">Could not load the run's telemetry: {(replay.error as Error).message}</div>}
 
+      {cur && progress === null && (
+        <div className="-mt-3 mb-5" data-testid="preparing">
+          <div className="mb-1.5 flex flex-wrap justify-between gap-2 text-[11.5px] text-subtle num">
+            <span>preparing for {fmtDuration(prepElapsed)}{activeStep ? ` · step ${activeStep.index}/${status!.pipeline!.startup!.steps.length}: ${activeStep.label.toLowerCase()}` : ""}
+              {activeStep?.progress?.eta_s ? ` · ETA ${fmtDuration(activeStep.progress.eta_s)}` : ""}</span>
+            <span>then {fmtDuration(total)} of traffic{cur.warmup_s ? ` (warm-up ${fmtDuration(cur.warmup_s)})` : ""}</span>
+          </div>
+          <div className="relative h-1.5 overflow-hidden rounded-full bg-surface-3">
+            <div className="absolute inset-y-0 left-0 rounded-full bg-info/60 transition-[width] duration-1000"
+              style={{ width: `${activeStep?.progress?.total ? Math.min(100, (100 * (activeStep.progress.done ?? 0)) / activeStep.progress.total) : 0}%` }} />
+          </div>
+        </div>
+      )}
       {cur && progress !== null && (
         <div className="-mt-3 mb-5">
           <div className="mb-1.5 flex justify-between text-[11.5px] text-subtle num">
@@ -254,7 +307,7 @@ export default function Live() {
           </div>
         </div>
       )}
-      <PipelineBanner status={status} />
+      {!replay.data && <PipelineBanner status={status} shown />}
       {cur?.abort_reason && (
         <div className="mb-4 flex items-center gap-2 rounded-xl border border-warn/30 bg-warn/10 px-4 py-2.5 text-[13px] text-warn"><AlertTriangle className="size-4" />Abort requested{cur.abort_kind ? ` (${cur.abort_kind})` : ""}: {cur.abort_reason} · draining in-flight decisions and writing a partial report</div>
       )}
@@ -298,6 +351,7 @@ export default function Live() {
               <CardBody>
                 <TimeChart data={shown} syncId="live" markers={warmupMark} series={[
                   { key: "emitted", label: "emitted" }, { key: "acked", label: "acked" }, { key: "decided", label: "decided" },
+                  ...(ghostPts.size ? [{ key: "g_decided", label: "decided (previous run)", dashed: true, color: "var(--fg-subtle)" }] : []),
                 ]} yFormat={(v) => fmtCompact(v)} />
               </CardBody>
             </Card>
@@ -306,6 +360,7 @@ export default function Live() {
               <CardBody>
                 <TimeChart data={shown} syncId="live" budget={budget} band={{ from: 0, to: budget }} markers={warmupMark} series={[
                   { key: "e2e_p50", label: "p50" }, { key: "e2e_p99", label: "p99" }, { key: "e2e_p999", label: "p99.9", dashed: true },
+                  ...(ghostPts.size ? [{ key: "g_e2e_p99", label: "p99 (previous run)", dashed: true, color: "var(--fg-subtle)" }] : []),
                 ]} yFormat={(v) => fmtMs(v)} />
               </CardBody>
             </Card>
@@ -331,7 +386,7 @@ export default function Live() {
             <Card className="flex flex-col">
               <CardHeader title="Decision feed" subtitle="sampled live decisions · click one to inspect it" />
               <CardBody className="flex min-h-0 flex-1 flex-col">
-                <DecisionFeed decisions={live.decisions} runId={cur?.run_id ?? null} className="h-[380px]" />
+                <DecisionFeed decisions={decisionsAt(store)} runId={cur?.run_id ?? null} className="h-[380px]" />
               </CardBody>
             </Card>
             <Card>

@@ -7,6 +7,7 @@ import io.realy.contracts.payments.v1.TransactionEvent;
 import io.realy.scoring.store.StoreBlob;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Builds the model input vector in canonical schema order from (a) stream features — computed
@@ -82,6 +83,21 @@ public final class FeatureAssembler {
      */
     public Assembled assemble(TransactionEvent e, long filterMask, float[] precomputed, Lookup lk, byte[][] blobs,
                               boolean selfInclusion) {
+        return assemble(e, filterMask, precomputed, lk, blobs, selfInclusion, null);
+    }
+
+    /** {@code view}: the event's CEL view (event.txn included), shared with the rules; null builds one. */
+    public Assembled assemble(TransactionEvent e, long filterMask, float[] precomputed, Lookup lk, byte[][] blobs,
+                              boolean selfInclusion, Map<String, Object> view) {
+        return assemble(e, filterMask, precomputed, lk, blobs, selfInclusion, view, false);
+    }
+
+    /**
+     * @param readOnly a re-scored lifecycle stage of a transaction already counted when it was assembled:
+     *                 stream features read the stored state at its time without including it
+     */
+    public Assembled assemble(TransactionEvent e, long filterMask, float[] precomputed, Lookup lk, byte[][] blobs,
+                              boolean selfInclusion, Map<String, Object> view, boolean readOnly) {
         int n = schema.size();
         float[] v = precomputed != null ? precomputed.clone() : new float[n];
         byte[] missing = new byte[(n + 7) / 8];
@@ -91,6 +107,7 @@ public final class FeatureAssembler {
         int stateReads = 0;
 
         if (precomputed == null) {
+            EventRow row = null;   // decoded once, only when a state blob is re-windowed
             for (EntityAggregator a : aggregators) {
                 StoreBlob blob = null;
                 long id = EventView.entityKey(e, a.entity());
@@ -108,7 +125,15 @@ public final class FeatureAssembler {
                 }
                 // the lookup itself succeeded (an absent key means the store has never seen the entity)
                 boolean lookedUp = blobs != null && bi >= 0;
-                if (fillStream(a, blob, lookedUp, e, filterMask, selfInclusion, t, v, missing)) stateReads++;
+                if ((blob != null && blob.hasState()) || (blob == null && lookedUp && selfInclusion)) {
+                    if (row == null) row = schema.rowPlan().row(e);
+                }
+                // (an entity never seen reads empty windows; a failed lookup falls back to the defaults below)
+                if (readOnly && (blob != null ? blob.hasState() : lookedUp)) {
+                    if (row == null) row = schema.rowPlan().row(e);
+                    a.read(blob == null ? null : blob.state(), row, filterMask, v);
+                    if (blob != null) stateReads++;
+                } else if (fillStream(a, blob, lookedUp, e, row, filterMask, selfInclusion && !readOnly, t, v, missing)) stateReads++;
                 fresh.add(freshness(a.entity(), FeatureSource.STREAM, blob));
             }
         }
@@ -135,7 +160,7 @@ public final class FeatureAssembler {
             }
             if (EventView.entityKey(e, ent) != 0) fresh.add(freshness(ent, FeatureSource.PROFILE, blob));
         }
-        DerivedFeatures.compute(schema, e, attrs, v);
+        DerivedFeatures.compute(schema, e, attrs, v, view);
         return new Assembled(v, missing, fresh, attrs, storeBytes, stateReads);
     }
 
@@ -152,19 +177,19 @@ public final class FeatureAssembler {
      *   <li>values blob (v1): the stored values, approximated with the current event's contribution.</li>
      * </ul>
      */
-    private boolean fillStream(EntityAggregator a, StoreBlob blob, boolean lookedUp, TransactionEvent e, long mask,
-                               boolean selfInclusion, long t, float[] v, byte[] missing) {
+    private boolean fillStream(EntityAggregator a, StoreBlob blob, boolean lookedUp, TransactionEvent e, EventRow row,
+                               long mask, boolean selfInclusion, long t, float[] v, byte[] missing) {
         if (blob != null && blob.hasState()) {
             if (blob.lastEventId() == e.getEventId() && blob.values().length == a.featureIndices().length) {
                 int[] idx = a.featureIndices();
                 for (int i = 0; i < idx.length; i++) v[idx[i]] = blob.values()[i];
             } else {
-                a.evaluate(blob.state(), e, mask, v);
+                a.evaluate(blob.state(), row, mask, v);
             }
             return true;
         }
         if (blob == null && lookedUp && selfInclusion) {
-            a.evaluate(null, e, mask, v);
+            a.evaluate(null, row, mask, v);
             return false;
         }
         int[] idx = a.featureIndices();
@@ -211,17 +236,11 @@ public final class FeatureAssembler {
         return b.build();
     }
 
+    /** The entity's value in realy.features.v1.Entity (contracts/entities.yaml `enum`), or UNSPECIFIED. */
     public static Entity entityEnum(String e) {
-        return switch (e) {
-            case "customer" -> Entity.CUSTOMER;
-            case "card" -> Entity.CARD;
-            case "device" -> Entity.DEVICE;
-            case "ip" -> Entity.IP;
-            case "merchant" -> Entity.MERCHANT;
-            case "terminal" -> Entity.TERMINAL;
-            case "payee" -> Entity.PAYEE;
-            default -> Entity.ENTITY_UNSPECIFIED;
-        };
+        var reg = io.realy.scoring.binding.EntityRegistry.load();
+        String n = reg.contains(e) ? reg.get(e).enumName() : null;
+        return n == null ? Entity.ENTITY_UNSPECIFIED : Entity.valueOf(n);
     }
 
     static void setBit(byte[] bm, int i) {

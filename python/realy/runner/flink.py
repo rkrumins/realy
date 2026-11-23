@@ -2,9 +2,11 @@
 topology needs, switching modes via stop-with-savepoint so keyed feature state (RocksDB) stays warm
 (operator uids `features-<entity>` are identical across modes).
 
-  gateway-* topologies -> `features` job (writes entity blobs to the online store)
-  flink-inline         -> `both` job (inline scoring + online-store writes)
-  echo-kafka           -> no change (gateway echoes)
+Which mode a topology needs is its runtime.flink_mode in contracts/topologies.yaml:
+  features  -> the `features` job (writes entity blobs to the online store)
+  both      -> inline scoring + online-store writes
+  none      -> Flink is not part of the run (echo-kafka, external): a job that would score its events
+               (inline / both) is stopped with a savepoint; a features job is left running
 """
 from __future__ import annotations
 
@@ -21,6 +23,31 @@ from ..scenario import REPO_ROOT, Scenario
 JAR = Path(os.environ.get("FLINK_JOB_JAR", REPO_ROOT / "java" / "flink-job" / "build" / "libs" / "realy-flink-job.jar"))
 ENTRY = "io.realy.flink.FraudJob"
 SAVEPOINT_DIR = os.environ.get("FLINK_SAVEPOINT_DIR", "file:///checkpoints/savepoints")
+# Retained checkpoints (execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION):
+# FLINK_CHECKPOINTS_URI is the directory as Flink sees it, FLINK_CHECKPOINTS_LOCAL the same directory as
+# this process sees it (compose mounts the volume read-only into the console). A job lost with its
+# JobManager (no HA) is restored from its newest retained checkpoint instead of starting empty.
+CHECKPOINTS_URI = os.environ.get("FLINK_CHECKPOINTS_URI", "file:///checkpoints")
+CHECKPOINTS_LOCAL = os.environ.get("FLINK_CHECKPOINTS_LOCAL", "")
+
+
+def latest_retained_checkpoint(jid: str, local: str | None = None, uri: str | None = None) -> str | None:
+    """The newest complete retained checkpoint of job `jid` (a `chk-N` directory holding `_metadata`), as
+    a path Flink can restore from, or None."""
+    root = Path(local if local is not None else CHECKPOINTS_LOCAL)
+    if not str(root) or not jid or not (root / jid).is_dir():
+        return None
+    best = None
+    for d in (root / jid).glob("chk-*"):
+        try:
+            n = int(d.name.split("-", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if (d / "_metadata").exists() and (best is None or n > best[0]):
+            best = (n, d.name)
+    if best is None:
+        return None
+    return f"{(uri or CHECKPOINTS_URI).rstrip('/')}/{jid}/{best[1]}"
 
 
 # Provenance of the running job's keyed state: which world it was built from and which consumer
@@ -37,14 +64,29 @@ def _job_key() -> str:
 LINEAGE_KEEP = 50   # run ids kept on the record (the count is exact beyond that)
 
 
-def record_job(jid: str, group: str, world: str | None, r=None, lineage: dict | None = None) -> None:
+def stateful_uids(mode: str | None = None) -> list[str]:
+    """Operator uids holding keyed state in the job FraudJob builds from the feature schema (one keyed
+    stage per entity with stream features, `features-<entity>`)."""
+    from ..features import load_schema
+    return [f"features-{e}" for e in load_schema().stream_entities()]
+
+
+def record_job(jid: str, group: str, world: str | None, r=None, lineage: dict | None = None,
+               uids: list[str] | None = None) -> None:
     """`lineage` is which runs fed events into this state since it last started fresh:
     {"runs": [run ids, oldest first, at most LINEAGE_KEEP], "count": n}. A fresh job starts it empty;
-    a job restored from a savepoint carries the previous job's on."""
+    a job restored from a savepoint carries the previous job's on. `uids` are its stateful operators:
+    a later job restored from its savepoint must have every one of them, or their state is dropped."""
     from .seed import redis_client
     lin = lineage or {"runs": [], "count": 0}
     (r or redis_client()).set(_job_key(), json.dumps({"jid": jid, "group": group, "world": world, "at": time.time(),
-                                                      "lineage": lin}))
+                                                      "lineage": lin, "uids": uids if uids is not None else stateful_uids()}))
+
+
+def dropped_state(prev: dict | None, uids: list[str]) -> list[str]:
+    """Stateful operators of the recorded job that the new job graph would not have: restoring its
+    savepoint with allowNonRestoredState would silently drop their state."""
+    return sorted(set((prev or {}).get("uids") or []) - set(uids))
 
 
 def note_run(run_id: str, r=None) -> dict | None:
@@ -85,7 +127,17 @@ def state_provenance(rest: str | None, r=None) -> dict:
     with httpx.Client(base_url=rest, timeout=10) as c:
         running = _running(c)
     if not running:
-        out["why"] = "no feature job running"
+        # the job is gone (JobManager restarted or crashed, cancelled by hand): its state is still known
+        # if it left a retained checkpoint and the online store still holds the blobs it wrote
+        rec = job_record(r)
+        ckpt = latest_retained_checkpoint(rec.get("jid")) if rec and rec.get("jid") else None
+        if ckpt and _store_has_stream_blobs(r):
+            out.update(world=rec.get("world"), group=rec.get("group"), recoverable=ckpt,
+                       lineage=rec.get("lineage") or {"runs": [], "count": 0, "unknown": True},
+                       why=f"job {rec['jid'][:8]} is gone; its retained checkpoint is restorable")
+            return out
+        out["why"] = "no feature job running" + (" (its retained checkpoint exists but the online store lost its "
+                                                 "blobs)" if ckpt else "")
         return out
     out["running"] = running[0]["jid"]
     rec = job_record(r)
@@ -99,6 +151,18 @@ def state_provenance(rest: str | None, r=None) -> dict:
         out["lineage"] = rec.get("lineage") or {"runs": [], "count": 0, "unknown": True}
         out["why"] = "recorded"
     return out
+
+
+def _store_has_stream_blobs(r=None) -> bool:
+    """Whether the online store still holds Flink-written stream blobs (a restarted Redis without
+    persistence holds none: restoring Flink state alone would leave the gateway reading nothing)."""
+    try:
+        from .seed import redis_client
+        r = r or redis_client()
+        cursor, keys = r.scan(0, match="fs:*", count=20000)
+        return bool(keys) or bool(cursor and r.scan(cursor, match="fs:*", count=20000)[1])
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def job_progress(rest: str | None, jid: str | None = None) -> dict | None:
@@ -183,12 +247,35 @@ def _stop_with_savepoint(c: httpx.Client, jid: str, log) -> str | None:
     return location
 
 
+SCORING_MODES = ("inline", "both")
+
+
+def stop_scoring_jobs(rest: str | None, log: Callable[[str], None] = print) -> list[str]:
+    """Stop (with a savepoint, so the state is kept) any bundled job that scores events (inline / both):
+    for a topology in which Flink does not decide (echo-kafka, external), such a job would consume the
+    events topic and publish decisions of its own next to the scorer under test. Returns what was stopped;
+    no Flink (unset or unreachable) is nothing to stop."""
+    if not rest:
+        return []
+    stopped = []
+    try:
+        with httpx.Client(base_url=rest, timeout=10) as c:
+            for j in _running(c):
+                mode = j["name"].removeprefix("realy-").split("+")[0]
+                if j["name"].startswith("realy-") and mode in SCORING_MODES:
+                    log(f"flink: stopping {j['name']} with savepoint (it would score this run's events too)")
+                    _stop_with_savepoint(c, j["jid"], log)
+                    stopped.append(j["name"])
+    except httpx.HTTPError as e:
+        log(f"flink: not reachable ({type(e).__name__}); nothing to stop")
+    return stopped
+
+
 def desired_mode(sc: Scenario) -> str | None:
-    if sc.topology == "flink-inline":
-        return "both"
-    if sc.topology in ("gateway-kafka", "gateway-grpc"):
-        return "features"
-    return None
+    """The job mode the topology needs (contracts/topologies.yaml runtime.flink_mode; None: no Flink)."""
+    from ..topologies import runtime
+    mode = runtime(sc.topology).flink_mode
+    return None if mode == "none" else mode
 
 
 def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = print, parallelism: int | None = None,
@@ -205,7 +292,9 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
     scoring = json.dumps(sc.scoring_config(), separators=(",", ":"))
     with httpx.Client(base_url=rest, timeout=30) as c:
         running = _running(c)
-        want = f"realy-{mode}"
+        # multi-message transactions: the job assembles them (and, for the gateway, publishes them)
+        flows = list(sc.traffic.flows)
+        want = f"realy-{mode}" + (f"+{','.join(flows)}" if flows else "")
         jar, new_code = _jar_id(c)
         fresh = sc.flink_state == "fresh"
         if (any(j["name"] == want for j in running) and mode == "features" and not new_code and not force and not fresh
@@ -228,11 +317,42 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
                 continue
             log(f"flink: stopping {j['name']} with savepoint{' (new job jar)' if new_code else ''}")
             savepoint = _stop_with_savepoint(c, j["jid"], log) or savepoint
-        group = f"realy-flink-{run_id}" if fresh and run_id else "realy-flink"
+        recovered = None
+        if not running and not fresh and prev and prev.get("jid"):
+            # the job is gone without a savepoint (JobManager restarted, job cancelled by hand): restore
+            # its newest retained checkpoint, so the keyed state and the runs that built it carry over
+            recovered = latest_retained_checkpoint(prev["jid"])
+            if recovered:
+                savepoint = recovered
+                carried = (prev.get("lineage") or {"runs": [], "count": 0, "unknown": True})
+                log(f"flink: no job running; restoring job {prev['jid'][:8]} from its retained checkpoint {recovered}")
+        lost = dropped_state(prev, stateful_uids()) if savepoint else []
+        if lost:
+            # allowNonRestoredState would drop these operators' state without a word: start fresh instead,
+            # so the lineage and the provenance say what really happened
+            log(f"flink: the new job graph has no {', '.join(lost)}: their state cannot be restored, starting fresh")
+            savepoint, recovered, fresh = None, None, True
+            carried = {"runs": [], "count": 0}
+            from .seed import clear_stream_blobs
+            log(f"flink: cleared {clear_stream_blobs():,} online-store blobs of the old state")
+        group = (f"realy-flink-{run_id}" if fresh and run_id
+                 else (prev.get("group") if recovered and prev.get("group") else "realy-flink"))
         args = ["--mode", mode, "--parallelism", str(par), "--bootstrap", os.environ.get("FLINK_KAFKA_BOOTSTRAP", "kafka:29092"),
                 "--group", group, "--scoring-config", scoring,
                 "--checkpoint-ms", str(int(os.environ.get("FLINK_CHECKPOINT_MS", "10000"))),
                 "--exactly-once", "true" if sc.exactly_once else "false"]
+        if flows:
+            from ..bindings import pipeline
+            from ..bindings.transactions import transaction
+            args += ["--assemble", ",".join(flows)]
+            if any(st.scored for n in flows for st in transaction(n).stages):
+                args += ["--score-stages", "true"]   # a scored lifecycle stage is decided again (read-only)
+            if mode == "features":
+                args += ["--assembled-topic", pipeline().topics["assembled"]]
+        if fresh and not savepoint:
+            # a fresh job reads from its submission time: a restart before its first checkpoint then re-reads
+            # the history replay sent after it started instead of skipping to the latest offset
+            args += ["--start-ms", str(int(time.time() * 1000))]
         # online-store blobs carrying aggregator state (exact gateway features); "none" = values only
         if os.environ.get("FLINK_STORE_STATE"):
             args += ["--store-state", os.environ["FLINK_STORE_STATE"]]
@@ -251,7 +371,8 @@ def ensure_jobs(sc: Scenario, rest: str | None, log: Callable[[str], None] = pri
             if st.get("state") in ("FAILED", "CANCELED"):
                 raise RuntimeError(f"flink job {want} {st.get('state')}")
             time.sleep(0.5)
-        log(f"flink: {want} running (job {jid[:8]}, parallelism {par}{', restored from savepoint' if savepoint else ''})")
+        how = (", restored from its retained checkpoint" if recovered else ", restored from savepoint") if savepoint else ""
+        log(f"flink: {want} running (job {jid[:8]}, parallelism {par}{how})")
         try:
             # fresh: Flink state cancelled and the runner cleared the stream blobs. Otherwise (savepoint
             # restore, or a failed savepoint whose blobs survive in the store) the earlier runs remain.

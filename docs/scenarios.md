@@ -17,7 +17,7 @@ rewrites the YAML; editing the YAML updates the form. It has these tabs:
 * **Traffic:** rate profile (constant, ramp, step, spike, sine) with a live preview of TPS over
   time, duration, warm-up, arrivals (uniform or Poisson), backfill days.
 * **World:** customers, merchants, payees, mule fraction, seed.
-* **Topology:** gateway-kafka, gateway-grpc, flink-inline or echo-kafka, with a diagram of each,
+* **Topology:** gateway-kafka, gateway-grpc, flink-inline, echo-kafka or external (your own scorer), with a diagram of each,
   plus Flink state (warm or fresh) and exactly-once.
 * **Scoring:** deadlines, fallback policy, and latency-distribution editors for feature lookup and
   model delay. Each editor shows the distribution's p50/p99/p99.9 and its CDF as you type.

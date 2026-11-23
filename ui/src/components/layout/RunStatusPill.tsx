@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { cn } from "@/lib/cn";
 import { fmtDuration, fmtMs, fmtNum } from "@/lib/format";
-import { useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
+import { activeRun, useElapsed, useLiveSeries, useStatus } from "@/lib/hooks";
 import { Dot } from "../ui/badge";
 import { Tooltip } from "../ui/tooltip";
 
@@ -13,9 +13,11 @@ function avg(xs: (number | null)[]) {
 /** Top-bar pill: phase · TPS · e2e p99 vs budget for the running job; "idle" otherwise. */
 export function RunStatusPill({ compact }: { compact?: boolean }) {
   const status = useStatus();
-  const cur = status?.current ?? null;
+  const cur = activeRun(status);
   const series = useLiveSeries(30, cur?.run_id ?? null);
-  const elapsed = useElapsed(cur?.started_at);
+  // timed from the start of live traffic; while preparing the pill names the startup step instead
+  const elapsed = useElapsed(cur?.measure_started_at ?? null);
+  const step = status?.pipeline?.startup?.steps?.find((s) => s.status === "running");
   const queued = status?.queue?.length ?? 0;
 
   if (!cur) {
@@ -51,7 +53,9 @@ export function RunStatusPill({ compact }: { compact?: boolean }) {
             <span className={cn("num", over ? "text-fail" : "text-fg")}>
               p99 {fmtMs(p99)}{budget !== null && <span className="text-subtle"> / {fmtNum(budget)}</span>}
             </span>
-            {elapsed !== null && <span className="num text-subtle">{fmtDuration(elapsed)}</span>}
+            {elapsed !== null ? <span className="num text-subtle">{fmtDuration(elapsed)}</span>
+              : step ? <span className="max-w-[160px] truncate text-subtle">{step.index}/{status!.pipeline!.startup!.steps.length} {step.label.toLowerCase()}
+                {step.progress?.total ? ` ${Math.min(100, Math.round((100 * (step.progress.done ?? 0)) / step.progress.total))}%` : ""}</span> : null}
           </>
         )}
       </Link>

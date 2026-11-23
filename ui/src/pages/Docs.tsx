@@ -19,7 +19,10 @@ const SCHEMA = "@reference/scenario-schema";
 const HTTP = "@reference/http-api";
 const REFERENCE = { title: "Generated reference", items: [{ path: SCHEMA, title: "Scenario schema (live)" }, { path: HTTP, title: "HTTP API (live)" }] };
 
-const slug = (s: string) => s.toLowerCase().replace(/<[^>]+>/g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+/** GitHub's heading anchors (one hyphen per space, punctuation dropped), so a `#anchor` link in docs/
+ *  works the same on GitHub and in the console. Repeated headings get -1, -2 on GitHub; the table of
+ *  contents uses the first. */
+export const slug = (s: string) => s.trim().toLowerCase().replace(/<[^>]+>/g, "").replace(/[^\p{L}\p{N}_\- ]/gu, "").replace(/ /g, "-");
 const textOf = (n: React.ReactNode): string => (typeof n === "string" || typeof n === "number" ? String(n)
   : Array.isArray(n) ? n.map(textOf).join("") : React.isValidElement(n) ? textOf((n.props as { children?: React.ReactNode }).children) : "");
 

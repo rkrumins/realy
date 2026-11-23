@@ -1,0 +1,172 @@
+{
+ "scenarios": {
+  "app-scam-mules": {
+   "file_sha256": "a607bd9a7531e9d411b63ae8c3a7ce60455f06f62b443d7274c04f3abe7aa9e2",
+   "fingerprint": "bc84f8985e04cd50"
+  },
+  "atm-cashout-unlimited": {
+   "file_sha256": "aef67595aad45410c025983df2ee519809b63207d920e8ff76f984d0bb12844b",
+   "fingerprint": "86924fae7ea40528"
+  },
+  "ato-campaign": {
+   "file_sha256": "c607b514c86e26d3231ab8ad977dbcecde48cffe3895f9b1fec2b6873bc22d74",
+   "fingerprint": "36c24ba6d0e5528d"
+  },
+  "baseline-10k": {
+   "file_sha256": "93a8572cc40f3d6a067ac98c0d7495fba178d0696ec0796a2dfb1ede329e115a",
+   "fingerprint": "0ea557f2e81d696a"
+  },
+  "black-friday": {
+   "file_sha256": "d0a4c0be6c76c45ee69b40fe0a2f8ed2a247f4317e11668c023e9b6f92789ec5",
+   "fingerprint": "f79d4456f074d12d"
+  },
+  "capacity-saturation": {
+   "file_sha256": "80aa23997c6c06ed2b49e628f619a5a81409a7ad8157f85e48eb196e00dd1623",
+   "fingerprint": "d461cbe66ff04080"
+  },
+  "card-testing-wave": {
+   "file_sha256": "d558d9c9c748fb9cd34bc0367955408aa6f8585d84f639c809450002dc5b8e6d",
+   "fingerprint": "62ea2c25bbbd4b24"
+  },
+  "echo-calibration": {
+   "file_sha256": "32c18f7d975ef95d784b9119173f8c70df578f53dae027ff4cacaac2a860897c",
+   "fingerprint": "31b6c00ea6165728"
+  },
+  "eos-cost": {
+   "file_sha256": "39acd349a80eb86dd75aaf047540304f43c029912912867c36b5e69f194f102b",
+   "fingerprint": "c312bd0347d89608"
+  },
+  "everyday-baseline": {
+   "file_sha256": "2206fea43d7b426b4646b4d6d7aaf05e92a980888fa90d45c6a9bf3f30d8e5e7",
+   "fingerprint": "5abbcb52d682a6d7"
+  },
+  "flink-inline-smoke": {
+   "file_sha256": "066aff2001c51c63bc08c1df45543795cd265f99aad0a42d78ecf63ff0fcd105",
+   "fingerprint": "3f8926b71581f4f4"
+  },
+  "flows-inline": {
+   "file_sha256": "f1054c26c7a3f799823336885dfabc388d32f2fa3755aae69cc37d872e3aa6bc",
+   "fingerprint": "07f037077a2d7157"
+  },
+  "flows-smoke": {
+   "file_sha256": "83d97f5abbe5ea557d5a969788f47f9ec0847cee79a9a53de581b5a747736074",
+   "fingerprint": "1924144ff1b09d7f"
+  },
+  "fraud-eval": {
+   "file_sha256": "9d0ac5891b6aa848e2fba9ef37323ba160d4580ddba4d3db3fcc19e03a8e621f",
+   "fingerprint": "8d47618b8923370f"
+  },
+  "fraud-train": {
+   "file_sha256": "5b59e3c6e9e138a9e1dc17b841d6be507b771f3b9464f8fc752978d7a555b86b",
+   "fingerprint": "375f8851ac9b65e0"
+  },
+  "impossible-travel": {
+   "file_sha256": "8ac1eb3ee9431e672db7cfe5d891af41820c4ea67144628cf180b0b6ff193dad",
+   "fingerprint": "94377d6c5e90f9d2"
+  },
+  "lost-stolen-contactless": {
+   "file_sha256": "c452dc7370e9fbcdab1b0dadf5b50a9fe457ce3b58d041b4acf51850b2b4dc05",
+   "fingerprint": "c92c21cadb4f9ace"
+  },
+  "merchant-breach": {
+   "file_sha256": "f61fc1998a3dcc4ef6dbae8107e2cb6ddf0e67e47b05d0329e761b6ea41370c4",
+   "fingerprint": "93cfcbe97a0df7c8"
+  },
+  "mixed-realistic": {
+   "file_sha256": "217f597539ac94fde021d23cce0c2ee75e26ea3400961a1972c6d132ce9969de",
+   "fingerprint": "818038cb212824c3"
+  },
+  "smoke": {
+   "file_sha256": "d57ab7dfc9e9f70f8695b55ede432e0f9b203d84c86a011cc33af54fa29796c9",
+   "fingerprint": "466c907478b86272"
+  },
+  "soak-60m": {
+   "file_sha256": "6498a56dda8b522eda76c14be2f59f741a5b1a43566460ac6e261d1bc0b91856",
+   "fingerprint": "bacc2e65d73d17d5"
+  },
+  "step-ramp": {
+   "file_sha256": "1f0257ef00e029d7357e0412d08109a7a4a2d5d513e7a005c95f8353736ab2fa",
+   "fingerprint": "a494ef99a8bc3b78"
+  },
+  "sync-smoke": {
+   "file_sha256": "2e8520c9c69a18cba2b485dbe07525cd87803cb05427fe0407fa98f851820a00",
+   "fingerprint": "1a18d2ebe0128879"
+  },
+  "sync-vs-async": {
+   "file_sha256": "90f518477be485a4a09b6901dd8707105d21e7662f60b4ed61a45c8a30a364a4",
+   "fingerprint": "5f02cb113aeb9cdb"
+  },
+  "tail-stress": {
+   "file_sha256": "166e7461c563da269ef4e509d6b1ac8c88b82dccdc9775efa002d1961d994e44",
+   "fingerprint": "fcb71284ce95c353"
+  },
+  "user-example-100ms": {
+   "file_sha256": "d71bcef63180626a16834c545b6029b596e2a8e6706e06c207e5a1bcce486b2a",
+   "fingerprint": "e5206c8e6d528abb"
+  }
+ },
+ "settings": [
+  "budget.e2e_p99_ms",
+  "budget.hot_path_p99_ms",
+  "budget.min_compliance",
+  "description",
+  "exactly_once",
+  "expect",
+  "feature_sample_permille",
+  "flink_state",
+  "fraud.auth.legitimate.cryptogram_valid",
+  "fraud.auth.legitimate.pin_verified",
+  "fraud.auth.legitimate.scheme_score.mean",
+  "fraud.auth.legitimate.scheme_score.sd",
+  "fraud.auth.legitimate.three_ds_authenticated",
+  "fraud.auth.typologies",
+  "fraud.background_per_1k",
+  "fraud.campaigns",
+  "fraud.challenge.legitimate.abandon",
+  "fraud.challenge.legitimate.fail",
+  "fraud.challenge.legitimate.pass",
+  "fraud.challenge.typologies",
+  "fraud.chargeback_delay_days",
+  "fraud.friendly_fraud_per_1k",
+  "fraud.mix",
+  "fraud.unreported_fraction",
+  "guardrails.max_consumer_lag",
+  "guardrails.max_error_rate",
+  "guardrails.max_missing_fraction",
+  "guardrails.max_schedule_lag_ms",
+  "model_server",
+  "name",
+  "rules",
+  "scoring",
+  "seed",
+  "sync.channels",
+  "sync.deadline_ms",
+  "sync.mode",
+  "sync.target",
+  "topology",
+  "traffic.arrivals",
+  "traffic.backfill_days",
+  "traffic.duration_s",
+  "traffic.flows",
+  "traffic.generators",
+  "traffic.profile.end_tps",
+  "traffic.profile.kind",
+  "traffic.profile.sine_amplitude",
+  "traffic.profile.sine_period_s",
+  "traffic.profile.spike_at_s",
+  "traffic.profile.spike_duration_s",
+  "traffic.profile.spike_multiplier",
+  "traffic.profile.start_tps",
+  "traffic.profile.step_duration_s",
+  "traffic.profile.step_tps",
+  "traffic.profile.tps",
+  "traffic.sim_start",
+  "traffic.time_scale",
+  "traffic.warmup_s",
+  "world.customers",
+  "world.dir",
+  "world.merchants",
+  "world.mule_fraction",
+  "world.payees"
+ ]
+}

@@ -36,6 +36,7 @@ spec:
             - { name: CLICKHOUSE_URL, value: http://clickhouse:8123 }
             - { name: FLINK_REST, value: "" }
             - { name: FLINK_KAFKA_BOOTSTRAP, value: realy-kafka-bootstrap:9092 }
+            - { name: PYTHONFAULTHANDLER, value: "1" }
             - name: REALY_OWNER
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
           volumeMounts:

@@ -23,6 +23,33 @@ export function fmtCompact(v: unknown, digits = 1): string {
   return fmtNum(v, a < 10 && a % 1 ? 2 : 0);
 }
 
+/** A model probability: genuine customers' scores are often tiny, so they keep their magnitude
+ *  (3e-5, 0.004) instead of rounding to a flat 0.00. */
+export function fmtScore(v: unknown): string {
+  if (!isNum(v)) return "—";
+  if (v === 0) return "0";
+  if (v < 0.001) return v.toExponential(0);
+  if (v < 0.01) return v.toFixed(3);
+  return v.toFixed(2);
+}
+
+/** A feature or event-field value in a view column's format (contracts/explorer.yaml); null / undefined
+ *  is "n/a": the payment lacks the entity, the feature was defaulted, or the run's schema had no such feature. */
+export function fmtFeature(v: unknown, format?: string | null): string {
+  if (v === null || v === undefined || v === "") return "n/a";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (typeof v === "string") return v.replace(/^(ENTRY_MODE_|ECOM_)/, "").replace(/_/g, " ").toLowerCase();
+  if (!isNum(v)) return String(v);
+  switch (format) {
+    case "usd": return fmtUsd(v);
+    case "usd_minor": return fmtUsd(v / 100);
+    case "flag": return v >= 0.5 ? "yes" : "no";
+    case "int": return fmtNum(v, 0);
+    case "ratio": return `${fmtNum(v, 1)}×`;
+    default: return Number.isInteger(v) ? fmtNum(v) : fmtNum(v, Math.abs(v) < 10 ? 2 : 0);
+  }
+}
+
 export function fmtPct(v: unknown, digits = 1): string {
   if (!isNum(v)) return "—";
   return `${(v * 100).toFixed(digits)}%`;

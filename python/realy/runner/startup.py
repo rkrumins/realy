@@ -22,13 +22,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 STEPS: list[tuple[str, str]] = [
+    ("infra", "Infrastructure checked"),
     ("world", "World loaded"),
     ("topics", "Kafka topics"),
     ("profiles", "Profiles seeded"),
     ("provenance", "State provenance"),
+    ("config", "Configs applied"),
     ("store", "Online store"),
     ("flink", "Flink job"),
-    ("config", "Configs applied"),
     ("history", "History replay"),
     ("catchup", "Feature catch-up"),
     ("prime", "Scoring-path prime"),

@@ -1,0 +1,13 @@
+name: external-smoke
+description: >-
+  500 TPS for 60 s through your own scorer (the external topology): PulseBench drives the load, collects
+  every decision and audits it; your service decides. Start your scorer (or the reference one,
+  `python -m realy.external_scorer`) before the run.
+seed: 42
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 500 }
+  duration_s: 60
+  warmup_s: 10
+topology: external
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }

@@ -1,0 +1,25 @@
+# Entity registry: every kind of thing events refer to and state is kept for. One definition for every
+# event type, the feature schema, the online store (fs:/pf: keys), the Flink job (one keyed stage per
+# entity with stream features, in this order), ClickHouse and the Explorer.
+#
+#   id        u64 | u32 (an ipv4 address) | string (hashed with FNV-1a 64 into the key)
+#   owned_by  the entity belongs to exactly one of that entity (a card to one customer). An entity owned,
+#             directly or through a chain, by the pipeline's partition entity sees its events in
+#             partition order, so its features are exact; others are shared across partitions and
+#             verified as an agreement rate.
+#   enum      the value in realy.features.v1.Entity, for records that name entities by enum; entities
+#             added later carry their name instead (EntityFreshness.entity_name).
+#
+# Order is the keyed-stage order and part of the state layout: append only.
+version: 1
+entities:
+  customer: { id: u64, enum: CUSTOMER }
+  card:     { id: u64, enum: CARD, owned_by: customer }
+  device:   { id: u64, enum: DEVICE }
+  ip:       { id: u32, enum: IP, format: ipv4 }
+  merchant: { id: u64, enum: MERCHANT }
+  terminal: { id: u64, enum: TERMINAL, owned_by: merchant }
+  payee:    { id: u64, enum: PAYEE }
+  account:  { id: u64, owned_by: customer }
+  # a transaction formed by several linked messages (contracts/transactions): its parts share this id
+  txn:      { id: u64, owned_by: customer }

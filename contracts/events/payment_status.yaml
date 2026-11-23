@@ -1,0 +1,8 @@
+# One message of the account-to-account transfer (contracts/transactions/a2a_transfer.yaml).
+name: payment_status
+message: realy.flows.v1.PaymentStatus
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  txn: payment_id

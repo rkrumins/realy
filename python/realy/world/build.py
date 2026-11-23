@@ -88,6 +88,28 @@ class World:
         return (ACCOUNT_BASE + np.asarray(customer_row, dtype=np.int64) * 4 + k).astype(np.uint64)
 
     # ------------------------------------------------------------------ profile export
+    PROFILE_ENTITIES = ("customer", "merchant")
+
+    def profile_arrays(self, entity: str) -> dict[str, np.ndarray] | None:
+        """Profile columns of an entity (with `<entity>_id`), or None when the world has none for it."""
+        if entity == "customer":
+            return self.customer_profile_arrays()
+        if entity == "merchant":
+            return self.merchant_profile_arrays()
+        return None
+
+    def profile_rows(self, entity: str, ids) -> np.ndarray:
+        """Row of each id in `profile_arrays(entity)`; -1 where the world has no such entity."""
+        arrays = self.profile_arrays(entity)
+        if arrays is None:
+            return np.full(np.asarray(ids).shape, -1, np.int64)
+        ref = np.asarray(arrays[f"{entity}_id"], np.uint64)
+        q = np.asarray(ids, np.uint64)
+        pos = np.searchsorted(ref, q)
+        pos = np.clip(pos, 0, max(0, ref.size - 1))
+        hit = (ref.size > 0) & (ref[pos] == q) & (q != 0)
+        return np.where(hit, pos, -1).astype(np.int64)
+
     def customer_profile_arrays(self) -> dict[str, np.ndarray]:
         c = self.customers
         return {

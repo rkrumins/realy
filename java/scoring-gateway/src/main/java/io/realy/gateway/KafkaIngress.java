@@ -67,6 +67,25 @@ public final class KafkaIngress implements AutoCloseable {
         return enabled;
     }
 
+    // what the async rail scores: INGRESS_TOPIC (the assembled topic when Flink assembles multi-message
+    // transactions), default EVENTS_TOPIC; the sync rail's mirror always goes to EVENTS_TOPIC
+    private final String defaultTopic = Env.str("INGRESS_TOPIC", Env.str("EVENTS_TOPIC", "payments.events.raw"));
+    private volatile String topic = defaultTopic;
+
+    /** The topic consumed now. */
+    public String topic() {
+        return topic;
+    }
+
+    /** Consume another topic from the next poll ("" = EVENTS_TOPIC): the assembled transactions in flows runs. */
+    public void setTopic(String t) {
+        String want = t == null || t.isBlank() ? defaultTopic : t;
+        if (!want.equals(topic)) {
+            LOG.info("kafka ingress: {} -> {}", topic, want);
+            topic = want;
+        }
+    }
+
     public KafkaIngress(Pipeline pipeline, StageMetrics metrics) {
         this.pipeline = pipeline;
         this.metrics = metrics;
@@ -74,20 +93,64 @@ public final class KafkaIngress implements AutoCloseable {
 
     public KafkaIngress start() {
         int n = Env.integer("KAFKA_CONSUMERS", 2);
+        lastPollMs = new long[n];
         for (int i = 0; i < n; i++) {
             int id = i;
-            threads.add(Thread.ofPlatform().name("ingress-" + i).start(() -> loop(id)));
+            threads.add(Thread.ofPlatform().name("ingress-" + i).start(() -> supervise(id)));
         }
         return this;
     }
 
-    private void loop(int id) {
-        String topic = Env.str("EVENTS_TOPIC", "payments.events.raw");
+    private volatile long[] lastPollMs = new long[0];
+    private final java.util.concurrent.atomic.AtomicLong restarts = new java.util.concurrent.atomic.AtomicLong();
+    private final int maxInflight = Env.integer("MAX_INFLIGHT", 4096);
+
+    /**
+     * Keep consumer {@code id} running: a loop that dies (a broker error, an unexpected exception) is
+     * restarted with a fresh consumer after a backoff, from the committed offsets, so nothing is skipped.
+     */
+    private void supervise(int id) {
+        long backoffMs = 500;
+        while (running) {
+            try {
+                loop(id);
+                backoffMs = 500;
+            } catch (Throwable e) {   // noqa: everything: a dead ingress thread must never go unnoticed
+                restarts.incrementAndGet();
+                metrics.inc("ingress_restarts");
+                LOG.error("ingress loop {} failed; restarting in {} ms", id, backoffMs, e);
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                backoffMs = Math.min(backoffMs * 2, 30_000);
+            }
+        }
+    }
+
+    /** Every consumer polled within `withinMs` (or the ingress is disabled): the readiness signal. */
+    public boolean healthy(long withinMs) {
+        if (!enabled) return true;
+        long now = System.currentTimeMillis();
+        long[] lp = lastPollMs;
+        for (long t : lp) if (t == 0 || now - t > withinMs) return false;
+        return lp.length > 0;
+    }
+
+    public long restarts() {
+        return restarts.get();
+    }
+
+    private void loop(int id) throws Exception {
+        String subscribed = topic;
+        boolean[] seekEndOnAssign = {false};
         var props = KafkaProps.consumer(Env.str("GATEWAY_GROUP", "realy-gateway"), "gateway-ingress-" + id);
         Map<TopicPartition, ConcurrentSkipListSet<Long>> pending = new ConcurrentHashMap<>();
         Map<TopicPartition, Long> nextOffset = new ConcurrentHashMap<>();
         try (var consumer = new KafkaConsumer<byte[], byte[]>(props)) {
-            consumer.subscribe(List.of(topic), new ConsumerRebalanceListener() {
+            ConsumerRebalanceListener listener = new ConsumerRebalanceListener() {
                 @Override
                 public void onPartitionsRevoked(Collection<TopicPartition> parts) {
                     commit(consumer, pending, nextOffset, true);
@@ -95,12 +158,29 @@ public final class KafkaIngress implements AutoCloseable {
                 }
 
                 @Override
-                public void onPartitionsAssigned(Collection<TopicPartition> parts) { }
-            });
+                public void onPartitionsAssigned(Collection<TopicPartition> parts) {
+                    if (seekEndOnAssign[0]) {
+                        consumer.seekToEnd(parts);   // a switched topic: this run's records only
+                        seekEndOnAssign[0] = false;
+                    }
+                }
+            };
+            consumer.subscribe(List.of(subscribed), listener);
             long lastCommit = System.currentTimeMillis();
             long seenEpoch = enableEpoch.get();
             boolean paused = false;
             while (running) {
+                if (!topic.equals(subscribed)) {
+                    // another topic for this run (flows): commit what was scored, then start at its end
+                    commit(consumer, pending, nextOffset, true);
+                    consumer.unsubscribe();
+                    pending.clear();
+                    nextOffset.clear();
+                    subscribed = topic;
+                    seekEndOnAssign[0] = true;
+                    consumer.subscribe(List.of(subscribed), listener);
+                    paused = false;
+                }
                 if (!enabled) {
                     if (!paused && !consumer.assignment().isEmpty()) {
                         consumer.pause(consumer.assignment());
@@ -113,6 +193,7 @@ public final class KafkaIngress implements AutoCloseable {
                     paused = false;
                 }
                 var records = consumer.poll(Duration.ofMillis(50));
+                if (id < lastPollMs.length) lastPollMs[id] = System.currentTimeMillis();
                 if (!enabled) {
                     // Never drop a polled record: the poll already advanced the position, so a record
                     // ignored here would never be scored and a later commit would skip past it. This
@@ -129,8 +210,19 @@ public final class KafkaIngress implements AutoCloseable {
                 }
                 long pollUs = BenchClock.nowUs();
                 for (ConsumerRecord<byte[], byte[]> r : records) {
-                    if (header(r, "x-mirrored") != null) continue; // sync-path mirror, already decided
-                    if (header(r, "x-backfill") != null) continue; // warm-start history: features only
+                    if (header(r, "x-mirrored") != null) {          // sync-path mirror, already decided
+                        metrics.inc("skipped_mirrored");
+                        continue;
+                    }
+                    if (header(r, "x-backfill") != null) {          // warm-start history: features only
+                        metrics.inc("skipped_backfill");
+                        continue;
+                    }
+                    byte[] type = header(r, "x-event-type");
+                    if (type != null && !DEFAULT_TYPE.equals(new String(type, java.nio.charset.StandardCharsets.UTF_8))) {
+                        metrics.inc("skipped_parts");               // a message of a multi-message transaction: Flink assembles it
+                        continue;
+                    }
                     inflight.acquireUninterruptibly();
                     TopicPartition tp = new TopicPartition(r.topic(), r.partition());
                     pending.computeIfAbsent(tp, k -> new ConcurrentSkipListSet<>()).add(r.offset());
@@ -142,38 +234,77 @@ public final class KafkaIngress implements AutoCloseable {
                     lastCommit = System.currentTimeMillis();
                 }
             }
+            // shutting down: wait (bounded) for the decisions in flight, then commit what is durable
+            long until = System.currentTimeMillis() + Env.lng("DRAIN_TIMEOUT_MS", 20_000);
+            while (inflight.availablePermits() < maxInflight && System.currentTimeMillis() < until) Thread.sleep(20);
             commit(consumer, pending, nextOffset, true);
-        } catch (Exception e) {
-            LOG.error("ingress loop {} died", id, e);
         }
     }
 
     private void submit(ConsumerRecord<byte[], byte[]> r, TopicPartition tp, long pollUs,
                         Map<TopicPartition, ConcurrentSkipListSet<Long>> pending) {
-        long ingest = pollUs;
-        BenchTrace.Builder trace;
-        TransactionEvent ev;
+        boolean handedOff = false;
         try {
-            byte[] th = header(r, "x-bench-trace");
-            trace = th != null ? BenchTrace.parseFrom(th).toBuilder() : BenchTrace.newBuilder();
-            long dStart = BenchClock.nowUs();
-            ev = TransactionEvent.parseFrom(r.value());
-            Spans.point(trace, Stage.INGEST, IngressMode.ASYNC_KAFKA_GATEWAY_VALUE, ingest);
-            Spans.add(trace, Stage.DESERIALIZE, 0, dStart, BenchClock.nowUs() - dStart);
-        } catch (Exception e) {
-            metrics.inc("poison_records");
-            pending.get(tp).remove(r.offset());
-            inflight.release();
-            return;
+            long ingest = pollUs;
+            BenchTrace.Builder trace;
+            TransactionEvent ev;
+            try {
+                byte[] th = header(r, "x-bench-trace");
+                trace = th != null ? BenchTrace.parseFrom(th).toBuilder() : BenchTrace.newBuilder();
+                long dStart = BenchClock.nowUs();
+                if (r.value() == null) throw new IllegalArgumentException("a record without a value (tombstone)");
+                ev = TransactionEvent.parseFrom(r.value());
+                String bad = invalid(ev);
+                if (bad != null) throw new IllegalArgumentException(bad);
+                Spans.point(trace, Stage.INGEST, IngressMode.ASYNC_KAFKA_GATEWAY_VALUE, ingest);
+                Spans.add(trace, Stage.DESERIALIZE, 0, dStart, BenchClock.nowUs() - dStart);
+            } catch (Exception e) {
+                metrics.inc("poison_records");
+                deadLetter.send(r, e);
+                return;
+            }
+            io.realy.contracts.flows.v1.TxnContext txn = null;
+            byte[] tx = header(r, "x-txn");
+            if (tx != null) {
+                try {
+                    txn = io.realy.contracts.flows.v1.TxnContext.parseFrom(tx);
+                } catch (Exception e) {
+                    metrics.inc("poison_txn_context");
+                }
+            }
+            var req = new ScoringOrchestrator.Request(ev, trace, ingest, IngressMode.ASYNC_KAFKA_GATEWAY, null, -1, 0,
+                    pipeline::publishFinal, txn);
+            // process() always completes with a durable decision (an error becomes a fail-safe one)
+            pipeline.process(req).whenComplete((d, err) -> done(pending, tp, r.offset(), err));
+            handedOff = true;
+        } finally {
+            if (!handedOff) done(pending, tp, r.offset(), null);
         }
-        var req = new ScoringOrchestrator.Request(ev, trace, ingest, IngressMode.ASYNC_KAFKA_GATEWAY, null, -1, 0,
-                pipeline::publishFinal);
-        pipeline.process(req).whenComplete((d, err) -> {
-            if (err != null) metrics.inc("pipeline_errors");
-            pending.get(tp).remove(r.offset());
-            inflight.release();
-        });
     }
+
+    /** The record is settled (durably decided, or dead-lettered): its offset may be committed past. */
+    private void done(Map<TopicPartition, ConcurrentSkipListSet<Long>> pending, TopicPartition tp, long offset, Throwable err) {
+        try {
+            if (err != null) {
+                metrics.inc("pipeline_errors");
+                LOG.error("event at {}-{} has no durable decision: {}", tp, offset, err.toString());
+            }
+            var p = pending.get(tp);      // gone after a rebalance or a topic switch: nothing to commit for it here
+            if (p != null) p.remove(offset);
+        } finally {
+            inflight.release();
+        }
+    }
+
+    /** Why an event cannot be scored (null: it can): the ids every decision needs. */
+    static String invalid(TransactionEvent ev) {
+        if (ev.getCustomerId() == 0) return "customer_id is 0 (the partition key)";
+        if (ev.getEventTimeUs() == 0) return "event_time_us is 0";
+        return null;
+    }
+
+    private static final String DEFAULT_TYPE = io.realy.scoring.binding.PipelineBinding.current().defaultType;
+    private final io.realy.common.DeadLetters deadLetter = new io.realy.common.DeadLetters("gateway");
 
     private static byte[] header(ConsumerRecord<byte[], byte[]> r, String name) {
         Header h = r.headers().lastHeader(name);
@@ -196,8 +327,17 @@ public final class KafkaIngress implements AutoCloseable {
         }
     }
 
+    /** Stop polling, let the in-flight decisions finish (DRAIN_TIMEOUT_MS), commit, then return. */
     @Override
     public void close() {
         running = false;
+        for (Thread t : threads) {
+            try {
+                t.join(Env.lng("DRAIN_TIMEOUT_MS", 20_000) + 5_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        deadLetter.close();
     }
 }

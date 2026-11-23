@@ -27,7 +27,9 @@ from ..common.clock import now_us
 from ..common.kafka import CONTROL, METRICS, ensure_topics, make_consumer
 from ..emit.driver import ShardPlan, emitter_main, generator_main
 from ..gen import auto_time_scale, natural_rate_total, sim_start_us
+from ..bindings import pipeline
 from ..scenario import REPO_ROOT, Scenario
+from ..topologies import runtime
 from ..world import load_or_build
 
 RUNS_DIR = Path(os.environ.get("REALY_RUNS", REPO_ROOT / "runs"))
@@ -55,6 +57,7 @@ class RunHandle:
     phase: str = "PREPARE"
     live: dict[str, Any] = field(default_factory=dict)
     service_errors: float = 0.0   # this run's gateway pipeline errors + Flink async timeouts (1 s windows summed)
+    error_base: tuple | None = None   # (emitted, errors) when MEASURE began: the error-rate guardrail's origin
     startup: Any = None           # runner.startup.Startup: the structured startup sequence (console Live panel)
     verifiable: bool = False      # the run will be verified exactly: it must not read state other runs built
     rate_changes: list = field(default_factory=list)   # live rate changes: [{"at_us", "mult"}] (report segments)
@@ -98,17 +101,35 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
                    startup: Any = None) -> None:
     from .startup import Startup
     st = startup or Startup(None, lambda _m: None)
+    if runtime(sc.topology).external:
+        # a black box: nothing on its path is PulseBench's to configure (scoring, model, store). Bundled
+        # scorers that would consume the same events (gateway ingress, an inline Flink job) are switched
+        # off, so the decisions collected are your service's alone.
+        st.skip("config", "your scorer: PulseBench configures nothing on its path")
+        try:
+            control.publish([control.control_message(run_id, "gateway", ingress={"kafka_enabled": False, "topic": ""})])
+        except Exception as e:  # noqa: BLE001 - no control topic: no bundled gateway to switch off
+            log(f"note: bench.control not available ({e}); no bundled gateway switched off")
+        st.skip("store", "your scorer keeps its own state")
+        from .flink import stop_scoring_jobs
+        stopped = stop_scoring_jobs(ep.flink_rest, log)
+        st.skip("flink", "Flink is not part of this topology" + (f" (stopped {', '.join(stopped)})" if stopped else ""))
+        return
     st.start("config")
     scoring = sc.scoring_config()
     model_cfg = sc.model_server_config()
     msgs = [
-        control.control_message(run_id, "gateway", ingress={"kafka_enabled": sc.topology in ("gateway-kafka", "echo-kafka")}),
+        control.control_message(run_id, "gateway", ingress={
+            "kafka_enabled": runtime(sc.topology).gateway_consumes_kafka,
+            # multi-message transactions: the gateway scores what the Flink assembler publishes
+            "topic": _assembled_topic() if sc.traffic.flows and runtime(sc.topology).flows == "assembled_topic" else ""}),
         control.control_message(run_id, "*", scoring=scoring),
     ]
     msgs.append(control.control_message(run_id, "model", model_server=model_cfg))
     control.publish(msgs)
     # Admin HTTP for immediate, verifiable effect (bench.control is the scalable path).
-    with httpx.Client(timeout=5) as c:
+    tok = os.environ.get("REALY_ADMIN_TOKEN")          # the services' ADMIN_TOKEN, when admin writes need one
+    with httpx.Client(timeout=5, headers={"Authorization": f"Bearer {tok}"} if tok else None) as c:
         for url, body, name in ((ep.gateway_admin, scoring, "gateway"), (ep.model_admin, model_cfg, "model")):
             if not url or not body:
                 continue
@@ -131,7 +152,11 @@ def apply_topology(sc: Scenario, run_id: str, ep: Endpoints, log: Callable[[str]
             st.finish("store", f"could not clear stream blobs: {e}", "warn")
     else:
         st.skip("store", "warm state: stream blobs kept")
-    if sc.topology == "flink-inline" or sc.topology.startswith("gateway"):
+    if not runtime(sc.topology).uses_flink:
+        # echo: the gateway decides; an inline Flink job left by an earlier run would decide too
+        from .flink import stop_scoring_jobs
+        stop_scoring_jobs(ep.flink_rest, log)
+    if runtime(sc.topology).uses_flink:
         from .flink import ensure_jobs, job_progress
         before = job_progress(ep.flink_rest)
         st.start("flink", "cancelling the running job, submitting a fresh one" if sc.flink_state == "fresh"
@@ -194,6 +219,11 @@ def _metrics_monitor(handle: RunHandle, sc: Scenario, stop_evt: threading.Event,
         cons.close()
 
 
+def _assembled_topic() -> str:
+    from ..bindings import pipeline
+    return pipeline().topics["assembled"]
+
+
 def normalize_snapshot(s: dict) -> dict:
     """proto3 JSON (Java side) omits empty maps and zero-valued fields and prints int64 as strings."""
     s["counters"] = {k: float(v) for k, v in (s.get("counters") or {}).items()}
@@ -227,8 +257,16 @@ def _guardrails(handle: RunHandle, sc: Scenario, snap: dict, log) -> None:
     emitted = sum(v.get("counters", {}).get("emitted_total", 0) for k, v in handle.live.items() if k.startswith("emitter:"))
     errors = handle.service_errors + sum(v.get("counters", {}).get("errors_total", 0)
                                          for k, v in handle.live.items() if k.startswith("emitter:"))
-    if emitted >= 1000 and errors / emitted > g.max_error_rate:
-        reason = f"error rate {errors / emitted:.2%} > {g.max_error_rate:.0%} ({errors:.0f} errors)"
+    # errors count from the start of MEASURE: warm-up is there to absorb a cold start (a fresh JVM, a cold
+    # connection pool: the sync rail's first seconds) and is excluded from the results, so it must not
+    # abort them either; a pipeline that is broken keeps failing after it and is stopped then
+    if handle.phase == "MEASURE" and getattr(handle, "error_base", None) is None:
+        handle.error_base = (emitted, errors)
+    if handle.phase == "MEASURE":
+        m0, e0 = handle.error_base
+        n, bad = emitted - m0, errors - e0
+        if n >= 1000 and bad / n > g.max_error_rate:
+            reason = f"error rate {bad / n:.2%} > {g.max_error_rate:.0%} ({bad:.0f} errors since measure began)"
     if reason and request_abort_handle(handle, reason, "guardrail"):
         log(f"GUARDRAIL: {reason} -> aborting run")
 
@@ -275,7 +313,8 @@ def _wait_gateway_scored(admin: str | None, target: int, timeout_s: float,
 
 
 def wait_gateway_primed(ep: Endpoints, decisions_before: int | None, primed: int, timeout_s: float,
-                        log: Callable[[str], None], stop: Callable[[], bool] | None = None) -> bool:
+                        log: Callable[[str], None], stop: Callable[[], bool] | None = None,
+                        topic: str = "payments.events.raw") -> bool:
     """Wait until the gateway has scored the priming events. Priming events (unlike regular `x-backfill`
     history, which the gateway skips) are scored, and the gateway's consumer group commits offsets as it
     goes: group lag is correct for any number of replicas. Fallback when the group has no offsets: the
@@ -283,7 +322,7 @@ def wait_gateway_primed(ep: Endpoints, decisions_before: int | None, primed: int
     from ..common.kafka import wait_group_caught_up
     grp = os.environ.get("GATEWAY_GROUP", "realy-gateway")
     max_lag = max(500, primed // 200)
-    lag = wait_group_caught_up(grp, "payments.events.raw", max_lag=max_lag,
+    lag = wait_group_caught_up(grp, topic, max_lag=max_lag,
                                timeout_s=min(timeout_s, 300.0), log=log, no_offsets_grace_s=20.0, stop=stop)
     if lag == -2:
         return False
@@ -302,11 +341,11 @@ def cold_pipeline(sc: Scenario, ep: Endpoints) -> list[str]:
     adds seconds of latency for the first ~15 s, which would land inside a short scenario's measured
     window and fail it for reasons that have nothing to do with the pipeline's steady state."""
     reasons = []
-    if sc.topology in ("gateway-kafka", "echo-kafka"):
+    if runtime(sc.topology).gateway_consumes_kafka:
         n = _gateway_decisions(ep.gateway_admin)
         if n is not None and n < WARM_GATEWAY_DECISIONS:
             reasons.append(f"gateway has scored {n:,} events since it started")
-    if sc.topology in ("gateway-kafka", "gateway-grpc", "flink-inline"):
+    if runtime(sc.topology).uses_flink:
         up = _flink_job_uptime_s(ep.flink_rest)
         if up is not None and up < WARM_FLINK_UPTIME_S:
             reasons.append(f"Flink job started {up:.0f} s ago")
@@ -529,7 +568,9 @@ class _Run:
             return False
         except (EOFError, OSError):
             return False
-        if kind in ("emitter", "collector") and isinstance(val, dict) and "error" in val:
+        # a failed child reports {"error": "<message>"}; the sync emitter's summary also counts error
+        # responses under "error" (an int), which is a result, not a failure
+        if kind in ("emitter", "collector") and isinstance(val, dict) and isinstance(val.get("error"), str):
             last = [x for x in str(val["error"]).strip().splitlines() if x.strip()][-1:] or ["?"]
             self.log(f"{kind} {idx} failed:\n{val['error']}")
             request_abort_handle(self.h, f"instrument failure: {kind} {idx}: {last[0][:200]}", "instrument")
@@ -605,7 +646,53 @@ class _Run:
         return {"mode": self.sc.flink_state, "inherited_runs": int(before.get("count", 0)),
                 "inherited": list(before.get("runs", []))[-10:], "unknown": bool(before.get("unknown"))}
 
+    def _seed_profiles(self, st: Any) -> None:
+        st.start("profiles")
+        try:
+            from .seed import seed_profiles
+            n = seed_profiles(self.world)
+            if n:
+                self.log(f"seeded {n:,} profile blobs into the online store")
+            st.finish("profiles", f"seeded {n:,} customer / merchant profile blobs" if n else "already seeded for this world")
+        except Exception as e:  # noqa: BLE001
+            self.log(f"warn: profile seeding skipped ({e})")
+            st.finish("profiles", f"skipped: {e}", "warn")
+
     # ------------------------------------------------------------------ phases
+    def preflight(self) -> None:
+        """Check every component the topology uses before anything is sent (realy.infra): record what this
+        run ran against (infra.json, manifest `infra`) and what in it is simulated; a failed check aborts
+        with its fix (REALY_PREFLIGHT=warn: record and continue; off: skip)."""
+        st, mode = self.startup, os.environ.get("REALY_PREFLIGHT", "enforce").lower()
+        if mode == "off":
+            st.skip("infra", "REALY_PREFLIGHT=off")
+            return
+        st.start("infra", "probing every component the topology uses")
+        from ..infra import blockers, check
+        try:
+            res = check(self.sc)
+        except Exception as e:  # noqa: BLE001 - the preflight must never be why a run cannot start
+            self.log(f"warn: preflight failed to run ({type(e).__name__}: {e})")
+            st.finish("infra", f"could not run: {e}", "warn")
+            return
+        (self.run_dir / "infra.json").write_text(json.dumps(res, indent=1, default=str))
+        self.manifest["infra"] = {"status": res["status"], "components": res["summary"], "simulated": res["simulated"]}
+        self.write_manifest()
+        line = ", ".join(f"{k} {v['implementation']}" for k, v in res["summary"].items())
+        for c in res["components"]:
+            for k in c["checks"]:
+                if k["status"] in ("warn", "fail"):
+                    self.log(f"preflight {k['status']}: {c['label']} {k['name']}: {k['detail']}"
+                             + (f" -> {k['fix']}" if k.get("fix") else ""))
+        for s_ in res["simulated"]:
+            self.log(f"preflight: simulated in this run: {s_['what']} ({s_['detail']})")
+        bad = blockers(res)
+        if bad and mode == "enforce":
+            st.finish("infra", "; ".join(bad), "failed")
+            raise RuntimeError("preflight failed (REALY_PREFLIGHT=warn to run anyway): " + "; ".join(bad))
+        st.finish("infra", line + (f"; {len(res['simulated'])} simulated part(s)" if res["simulated"] else ""),
+                  "warn" if res["status"] != "pass" else "done")
+
     def prepare(self) -> None:
         sc, ep, log = self.sc, self.ep, self.log
         self.phase("PREPARE")
@@ -616,6 +703,7 @@ class _Run:
                          "owner": self.lease.info.get("owner"), "pipeline": self.lease.info.get("pipeline")}
         self.write_manifest()
         st = self.startup
+        self.preflight()
         st.start("world", f"{sc.world_dir.name}")
         self.world = load_or_build(sc.world, sc.seed, sc.world_dir)
         log(f"world {sc.world_dir.name}: {self.world.n_customers:,} customers, hash {self.world.content_hash[:12]}")
@@ -627,22 +715,20 @@ class _Run:
         # ... and the exact rule set pushed to the pipeline: explanations, verify and what-ifs replay it,
         # not whatever rules/<name>.yaml says later
         (self.run_dir / "rules.yaml").write_text(sc.scoring_config()["rule_set_yaml"])
+        # ... and what its events mean (entity registry, event type bindings, fields): run directories
+        # without one were payments-only
+        from ..bindings import pipeline
+        (self.run_dir / "pipeline.json").write_text(json.dumps(pipeline().snapshot(), indent=1))
         self.check("prepare")
         st.start("topics")
         created = ensure_topics()
         if created:
             log(f"created topics: {', '.join(created)}")
         st.finish("topics", f"created {', '.join(created)}" if created else "all present")
-        st.start("profiles")
-        try:
-            from .seed import seed_profiles
-            n = seed_profiles(self.world)
-            if n:
-                log(f"seeded {n:,} profile blobs into the online store")
-            st.finish("profiles", f"seeded {n:,} customer / merchant profile blobs" if n else "already seeded for this world")
-        except Exception as e:  # noqa: BLE001
-            log(f"warn: profile seeding skipped ({e})")
-            st.finish("profiles", f"skipped: {e}", "warn")
+        if runtime(sc.topology).external:
+            st.skip("profiles", "your scorer reads its own reference data")
+        else:
+            self._seed_profiles(st)
         self.check("prepare")
         st.start("provenance", "which world built the running feature state?")
         dec = world_switch_state(sc, self.state_identity(), log, ep.flink_rest)
@@ -675,9 +761,9 @@ class _Run:
         self.write_manifest()
         from .flink import job_progress
         # Flink's processed-record count before any history is sent: catch-up progress is the delta
-        self.flink_base = job_progress(ep.flink_rest) if sc.topology != "echo-kafka" else None
+        self.flink_base = job_progress(ep.flink_rest) if runtime(sc.topology).uses_flink else None
         self.sleep(float(os.environ.get("REALY_CONFIG_SETTLE_S", "2")), "config settle")
-        self.sync = sc.topology == "gateway-grpc"
+        self.sync = runtime(sc.topology).sync
         # the sync rail replays a compiled dataset (no history path); REALY_AUTO_PRIME=0 disables priming
         auto_prime = os.environ.get("REALY_AUTO_PRIME", "1") != "0" and not self.sync
         cold = cold_pipeline(sc, ep) if auto_prime else []
@@ -712,8 +798,18 @@ class _Run:
         self.mon = threading.Thread(target=_metrics_monitor, args=(self.h, sc, self.stop_mon, self.log), daemon=True)
         self.mon.start()
         from .infra import InfraSampler
-        self.infra = InfraSampler(self.run_dir, self.ep.flink_rest if sc.topology != "echo-kafka" else None, self.log,
-                                  max_s=sc.traffic.duration_s + sc.traffic.warmup_s + 3600).start()
+        from .infra import HealthWatch
+
+        def _abort(reason: str) -> None:
+            if request_abort_handle(self.h, reason, "guardrail"):
+                self.log(f"GUARDRAIL: {reason} -> aborting run")
+
+        def _note(k: str, v: Any) -> None:
+            self.manifest.setdefault("health", {})[k] = v
+        self.health = HealthWatch(self.log, _abort, _note)
+        self.infra = InfraSampler(self.run_dir, self.ep.flink_rest if runtime(sc.topology).uses_flink else None, self.log,
+                                  max_s=sc.traffic.duration_s + sc.traffic.warmup_s + 3600,
+                                  on_sample=self.health.check).start()
         tps = sc.traffic.profile.tps
         n_coll = self.n_coll_req or max(1, int(tps // 15000) + (1 if tps % 15000 else 0))
         self.n_coll = n_coll = min(n_coll, 6)
@@ -797,7 +893,7 @@ class _Run:
         self.phase("BACKFILL" if sc.traffic.backfill_days else "PREPARE")
         timeout = float(os.environ.get("REALY_BACKFILL_TIMEOUT_S", "900"))
         stopped = lambda: bool(h.abort_reason)  # noqa: E731
-        feature_job = sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc")
+        feature_job = runtime(sc.topology).uses_flink
         has_bulk = bool(history_days(self.history, "bulk"))
         if has_bulk:
             st.start("history", describe_history_short(self.history))
@@ -838,9 +934,10 @@ class _Run:
             self.pump(0.5)
         bf = self.bf_events
         if self.bf_primed:
-            if sc.topology in ("gateway-kafka", "echo-kafka"):
+            if runtime(sc.topology).gateway_consumes_kafka:
                 st.start("prime", f"{self.bf_primed:,} prime events sent; waiting for the gateway to score them")
-                primed = wait_gateway_primed(ep, self.gw_before, self.bf_primed, timeout, log, stop=stopped)
+                topic = _assembled_topic() if self.sc.traffic.flows else pipeline().topics["events"]
+                primed = wait_gateway_primed(ep, self.gw_before, self.bf_primed, timeout, log, stop=stopped, topic=topic)
                 self.check("prime catch-up")
                 n = _gateway_decisions(ep.gateway_admin)
                 scored = (f"; gateway has scored {n - (self.gw_before or 0):,} since the run started"
@@ -862,6 +959,8 @@ class _Run:
         from ..common.kafka import group_lag
         st = self.startup
         groups = [("clickhouse-events", "payments.events.raw"), ("clickhouse-decisions", "payments.decisions")]
+        if self.sc.traffic.flows:
+            groups.append(("clickhouse-events-assembled", _assembled_topic()))
         try:
             lags = {g: group_lag(g, t) for g, t in groups}
         except Exception as e:  # noqa: BLE001
@@ -899,7 +998,7 @@ class _Run:
             self._wait_sinks()
         elif self.startup.steps["sinks"]["status"] == "pending":
             self.startup.skip("sinks", "no history to ingest")
-        if sc.topology in ("flink-inline", "gateway-kafka", "gateway-grpc") and ep.flink_rest:
+        if runtime(sc.topology).uses_flink and ep.flink_rest:
             from .flink import job_progress
             jp = job_progress(ep.flink_rest)
             self.gates["flink_running"] = bool(jp and jp.get("state") == "RUNNING"
@@ -1143,6 +1242,65 @@ def feature_group(sc: Scenario, run_id: str, log: Callable[[str], None] = print)
     return guess
 
 
+class RunLog:
+    """The run's log, teed to `runs/<id>/run.log` with wall-clock timestamps. A console shows it for
+    runs it did not start (CLI, a Kubernetes Job, another console), the report page reads it after a
+    console restart, and Live replays it for past runs."""
+
+    def __init__(self, path: Path, sink: Callable[[str], None]) -> None:
+        self.path, self.sink = path, sink
+        self._lock = threading.Lock()
+        try:
+            self._f = open(path, "a", buffering=1, encoding="utf-8")
+        except OSError:
+            self._f = None
+
+    def __call__(self, line: str) -> None:
+        self.sink(line)
+        if self._f is None:
+            return
+        now = time.time()
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{int(now * 1000) % 1000:03d}Z"
+        with self._lock:
+            try:
+                for part in str(line).splitlines() or [""]:
+                    self._f.write(f"{ts} {part}\n")
+            except (OSError, ValueError):
+                pass
+
+    def close(self) -> None:
+        if self._f is not None:
+            with self._lock:
+                self._f.close()
+                self._f = None
+
+
+def _log_ts(t: str) -> float | None:
+    """Epoch seconds of a run.log timestamp (`2026-11-20T17:52:15.123Z`)."""
+    try:
+        return datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def read_run_log(run_dir: Path, offset: int = 0, max_lines: int = 5000) -> tuple[list[dict[str, Any]], int]:
+    """Lines of `run.log` from byte `offset`: ([{"t": "...Z", "ts": epoch s, "line": ...}], next offset)."""
+    p = Path(run_dir) / "run.log"
+    try:
+        with open(p, "rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return [], offset
+    end = data.rfind(b"\n") + 1           # never hand out a half-written last line
+    out = []
+    for raw in data[:end].decode("utf-8", "replace").splitlines()[-max_lines:]:
+        t, _, rest = raw.partition(" ")
+        ts = _log_ts(t) if t.endswith("Z") else None
+        out.append({"t": t, "ts": ts, "line": rest} if ts is not None else {"t": None, "ts": None, "line": raw})
+    return out, offset + end
+
+
 def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None = None,
                  log: Callable[[str], None] = print, handle: RunHandle | None = None,
                  collectors: int | None = None, report: bool = True, wait_lease_s: float = 0.0,
@@ -1162,6 +1320,7 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
     lease = RunLease(run_id, {"scenario": sc.name, "topology": sc.topology})
     lease.acquire(wait_s=wait_lease_s, stop=lambda: bool(handle.abort_reason), log=log)
     run_dir.mkdir(parents=True, exist_ok=True)
+    log = RunLog(run_dir / "run.log", log)      # every line also persists, whoever started the run
     (run_dir / "scenario.json").write_text(json.dumps(sc.model_dump(mode="json"), indent=1))
     r = _Run(sc, ep, run_id, run_dir, handle, lease, log, collectors)
     lease.start(handle, log)
@@ -1186,6 +1345,7 @@ def run_scenario(sc: Scenario, ep: Endpoints | None = None, run_id: str | None =
         summary = r.finish(report)
     finally:
         lease.release()
+        log.close()
     if err is not None and not isinstance(err, Exception):
         raise err          # KeyboardInterrupt / SystemExit propagate after a clean teardown
     if err is not None:

@@ -44,6 +44,15 @@ def base_rate_precision(recall: float | None, fpr: float | None, p: float) -> fl
     return recall * p / den if den > 0 else None
 
 
+def _advice(stage: str, topology: str | None) -> str:
+    """What to try for a dominant tail stage, per topology (contracts/topologies.yaml `advice`)."""
+    try:
+        from ..topologies import advice_for
+        return advice_for(stage, topology)
+    except Exception:  # noqa: BLE001 - a missing or broken contract must not fail a report
+        return ""
+
+
 def build_insights(rep: dict[str, Any], cfg: dict[str, Any], prev: dict[str, Any] | None = None,
                    registry: Any = None) -> list[dict[str, Any]]:
     th = cfg.get("thresholds") or {}
@@ -172,7 +181,7 @@ def build_insights(rep: dict[str, Any], cfg: dict[str, Any], prev: dict[str, Any
             "the rules with the most legitimate hits are listed above", fpr * 1e6)
     p = float(cfg.get("production_base_rate", 0.001))
     prec_p = base_rate_precision(d.get("recall_flagged"), fpr, p)
-    if prec_p is not None:
+    if prec_p is not None and prec_p > 0:      # 0 when nothing fraudulent was flagged (recall 0): no ratio to give
         add("info", "detection", f"at a {_pct(p)} fraud rate, about 1 in {max(1, round(1 / prec_p)):,} flags would be fraud",
             f"measured precision {_pct(d.get('precision_flagged'))} is at this run's fraud share "
             f"({_pct((d.get('model') or {}).get('fraud_base_rate'), 2)}); recall {_pct(d.get('recall_flagged'))} and "
@@ -217,10 +226,7 @@ def build_insights(rep: dict[str, Any], cfg: dict[str, Any], prev: dict[str, Any
             f"{st.replace('_', ' ')} holds {_pct(share[st], 0)} of the slowest 1% of events",
             f"slowest 1% threshold {tail.get('threshold_ms', 0):.0f} ms; mean {tail['mean_ms_by_stage'].get(st, 0):.0f} ms in {st}",
             {"stage": st, "share": share[st]}, {"kind": "latency"},
-            {"egress": "the decision's trip back (Kafka + collector) dominates: check broker load",
-             "ingress": "events wait before the scorer picks them up: check consumer lag and partitions",
-             "model_call": "the model call dominates: batching, hedging or capacity",
-             "feature_lookup": "online-store lookups dominate: Redis latency or blob size"}.get(st, ""))
+            _advice(st, rep.get("topology")))
     if s.get("verdict") == "PASS":
         add("good", "latency", f"within budget: e2e p99 {s.get('e2e_p99_ms', 0):.0f} ms, "
             f"{_pct(s.get('within_budget'), 2)} of events inside {rep.get('budget', {}).get('e2e_p99_ms', 0):.0f} ms",

@@ -17,8 +17,8 @@ import java.util.regex.Pattern;
 
 /** Java mirror of python/realy/features/schema.py (same file, same validation). */
 public final class FeatureSchema {
-    public static final List<String> ENTITY_ORDER =
-            List.of("customer", "card", "device", "ip", "merchant", "terminal", "payee");
+    /** The entity registry's order (contracts/entities.yaml): the keyed-stage order. */
+    public static final List<String> ENTITY_ORDER = io.realy.scoring.binding.EntityRegistry.load().names();
     private static final Pattern DUR = Pattern.compile("^(\\d+)(s|m|h|d)$");
 
     public final int version;
@@ -71,7 +71,13 @@ public final class FeatureSchema {
                     long w = parseDurationUs(f.get("window").asText());
                     long g = parseDurationUs(f.get("granularity").asText());
                     if (w % g != 0) throw new IllegalArgumentException(name + ": window must be a multiple of granularity");
-                    spec = new FeatureSpec(i, name, src, entity, f.get("agg").asText(), text(f, "value"), filter, w, g, def, null, null, null);
+                    String agg = text(f, "agg");
+                    if (agg == null || !Aggregations.has(agg))
+                        throw new IllegalArgumentException(name + ": unknown aggregation " + agg + " (registered: " + Aggregations.names() + ")");
+                    Aggregation.Input in = Aggregations.get(agg).input();
+                    if ((in == Aggregation.Input.NUMERIC || in == Aggregation.Input.KEY) && text(f, "value") == null)
+                        throw new IllegalArgumentException(name + ": aggregation " + agg + " needs `value:` (the event field it reads)");
+                    spec = new FeatureSpec(i, name, src, entity, agg, text(f, "value"), filter, w, g, def, null, null, null);
                 }
                 case "profile" -> spec = new FeatureSpec(i, name, src, f.get("entity").asText(), null, null, null, 0, 0, def,
                         f.get("field").asText(), null, null);
@@ -80,6 +86,8 @@ public final class FeatureSchema {
                     String expr = text(f, "expr");
                     if ((fnName == null) == (expr == null))
                         throw new IllegalArgumentException(name + ": a derived feature needs exactly one of `fn` or `expr`");
+                    if (fnName != null && !DerivedFns.has(fnName))
+                        throw new IllegalArgumentException(name + ": unknown derived fn " + fnName + " (registered: " + DerivedFns.names() + ")");
                     spec = new FeatureSpec(i, name, src, null, null, null, null, 0, 0, def, null, fnName,
                             expr == null ? null : io.realy.scoring.rules.Cel.compileNumeric(expr));
                 }
@@ -90,7 +98,7 @@ public final class FeatureSchema {
             i++;
         }
         features = List.copyOf(fs);
-        for (String e : ENTITY_ORDER) {
+        for (String e : io.realy.scoring.binding.EntityRegistry.load().names()) {
             List<FeatureSpec> s = features.stream().filter(x -> x.isStream() && e.equals(x.entity())).toList();
             if (!s.isEmpty()) streamByEntity.put(e, s);
             List<FeatureSpec> p = features.stream().filter(x -> x.isProfile() && e.equals(x.entity())).toList();
@@ -124,27 +132,39 @@ public final class FeatureSchema {
     }
 
     private static volatile FeatureSchema DEFAULT;
+    private static final java.util.concurrent.ConcurrentHashMap<String, FeatureSchema> PARSED =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * The schema YAML this process resolves (FEATURE_SCHEMA path, else the bundled copy). The Flink job
+     * resolves it once in its main and ships the text to every operator ({@link #of}), so TaskManagers
+     * never resolve their own copy and cannot diverge from the job that planned the graph.
+     */
+    public static String loadText() {
+        try {
+            String path = Env.str("FEATURE_SCHEMA", "");
+            if (!path.isEmpty()) return Files.readString(Path.of(path));
+            try (InputStream in = FeatureSchema.class.getClassLoader()
+                    .getResourceAsStream("realy/contracts/features/feature_schema.yaml")) {
+                if (in == null) throw new IllegalStateException("feature_schema.yaml not on classpath");
+                return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The schema of this YAML text, parsed once per process (null = {@link #load()}). */
+    public static FeatureSchema of(String yaml) {
+        if (yaml == null || yaml.isEmpty()) return load();
+        return PARSED.computeIfAbsent(yaml, FeatureSchema::parse);
+    }
 
     /** FEATURE_SCHEMA env/path override, else the copy bundled from contracts/ on the classpath. */
     public static FeatureSchema load() {
         if (DEFAULT == null) {
             synchronized (FeatureSchema.class) {
-                if (DEFAULT == null) {
-                    try {
-                        String path = Env.str("FEATURE_SCHEMA", "");
-                        if (!path.isEmpty()) {
-                            DEFAULT = parse(Files.readString(Path.of(path)));
-                        } else {
-                            try (InputStream in = FeatureSchema.class.getClassLoader()
-                                    .getResourceAsStream("realy/contracts/features/feature_schema.yaml")) {
-                                if (in == null) throw new IllegalStateException("feature_schema.yaml not on classpath");
-                                DEFAULT = parse(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
-                            }
-                        }
-                    } catch (IOException e) {
-                        throw new IllegalStateException(e);
-                    }
-                }
+                if (DEFAULT == null) DEFAULT = parse(loadText());
             }
         }
         return DEFAULT;
@@ -152,6 +172,20 @@ public final class FeatureSchema {
 
     public int size() {
         return features.size();
+    }
+
+    private volatile RowPlan rowPlan;
+
+    /** How events are decoded once for the keyed stages (entity keys and the fields stream features read). */
+    public RowPlan rowPlan() {
+        RowPlan p = rowPlan;
+        if (p == null) {
+            synchronized (this) {
+                if (rowPlan == null) rowPlan = new RowPlan(this);
+                p = rowPlan;
+            }
+        }
+        return p;
     }
 
     public FeatureSpec get(String name) {

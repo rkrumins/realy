@@ -137,6 +137,7 @@ Enable/disable a service's Kafka ingress (topology switching without restarts). 
 | Field | Type | # | Description |
 |---|---|---|---|
 | `kafka_enabled` | `bool` | 1 |  |
+| `topic` | `string` | 2 | the topic the Kafka ingress consumes ("" = EVENTS_TOPIC, the raw events): a run with multi-message transactions scores the assembled ones (payments.events.assembled) |
 
 ### `RateCommand`
 

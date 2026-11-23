@@ -107,6 +107,10 @@ gateway ↔ Flink-inline).
 
 ## 3. Stage by stage
 
+Each topology's steps, every component's settings (where they are set, their defaults), what each
+topology can and cannot do, and how to build a new one: [reference/topologies.md](reference/topologies.md)
+and [dev/topologies.md](dev/topologies.md). The tables below are the measured walk-through.
+
 ### gateway-kafka (async rail; Flink keeps Redis fresh)
 
 | # | Stage | Input | Processing (code) | Output | Why it exists | Measured (smoke, 500 TPS, p50 / p99) |
@@ -260,6 +264,10 @@ In short:
 ## 7. Architecture options compared
 
 ### Topologies
+
+The complete comparison, generated from `contracts/topologies.yaml` and kept current by a test, is
+[reference/topologies.md](reference/topologies.md); the console's **Topologies** page adds the latest
+measurements and advice from your own runs. The summary:
 
 | | gateway-kafka (async) | gateway-grpc (sync) | flink-inline (async) |
 |---|---|---|---|

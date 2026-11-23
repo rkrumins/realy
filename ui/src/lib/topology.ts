@@ -83,6 +83,19 @@ export const FALLBACK_TOPOLOGIES: Record<string, TopologyResponse> = {
     edges: [e("emitter", "events", EMIT), e("events", "gateway", { source: "gateway", counter: "decisions" }),
       e("gateway", "decisions", { source: "gateway", counter: "decisions" }), e("decisions", "collector", DECIDED)],
   },
+  external: {
+    topology: "external",
+    nodes: [
+      n("emitter", "Emitter", "driver", 0, 0, EMIT, { source: "emitter", stage: "schedule_lag" }),
+      n("events", "events.raw", "kafka", 1, 0, EMIT, { source: "emitter", stage: "produce_ack" }),
+      n("scorer", "Your scorer", "service", 2, 0, DECIDED, { source: "collector", stage: "e2e" }),
+      n("decisions", "decisions", "kafka", 3, 0, DECIDED, { source: "collector", stage: "egress" }),
+      n("collector", "Collector", "driver", 4, 0, DECIDED, { source: "collector", stage: "e2e" }),
+      n("clickhouse", "ClickHouse", "sink", 4, 1, null, null),
+    ],
+    edges: [e("emitter", "events", EMIT), e("events", "scorer", null, "consume"), e("scorer", "decisions", DECIDED, "publish"),
+      e("decisions", "collector", DECIDED), e("collector", "clickhouse", null, "audit")],
+  },
 };
 
 /** events/s for a metric reference: sum of a counter (or of a stage's sample count) over instances. */

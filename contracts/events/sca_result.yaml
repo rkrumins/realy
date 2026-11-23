@@ -1,0 +1,8 @@
+# One message of the account-to-account transfer (contracts/transactions/a2a_transfer.yaml).
+name: sca_result
+message: realy.flows.v1.ScaResult
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  txn: payment_id

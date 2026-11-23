@@ -56,7 +56,7 @@ traffic:
   time_scale: auto                           # sim-s per wall-s (auto = realistic per-customer behaviour)
   generators: 2                              # emitter shards (processes)
   backfill_days: 1                           # warm-start history (features only)
-topology: gateway-kafka                      # gateway-kafka | gateway-grpc | flink-inline | echo-kafka
+topology: gateway-kafka                      # gateway-kafka | gateway-grpc | flink-inline | echo-kafka | external
 sync: { mode: unary, channels: 4 }           # gateway-grpc only (unary | stream)
 rules: baseline                              # rules/<name>.yaml (CEL)
 scoring:                                     # realy.bench.v1.ScoringConfig (proto3 JSON)

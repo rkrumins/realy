@@ -29,13 +29,14 @@ const CW = 244; // column pitch
 const RH = 96; // row pitch
 const PAD = 18;
 
-export function useTopology(topology: string | null | undefined) {
+/** The map of a topology; `flows`: the run has multi-message transactions (Flink assembles them first). */
+export function useTopology(topology: string | null | undefined, flows = false) {
   const t = topology || "gateway-kafka";
   return useQuery<TopologyResponse>({
-    queryKey: ["topology", t],
+    queryKey: ["topology", t, flows],
     queryFn: async () => {
       try {
-        return await api.topology(t);
+        return await api.topology(t, flows);
       } catch {
         return FALLBACK_TOPOLOGIES[t] ?? FALLBACK_TOPOLOGIES["gateway-kafka"];
       }

@@ -40,9 +40,9 @@ gsutil -m cp -r models/triton gs://BUCKET/realy/models/
 ```
 Replace `REGISTRY` and `REPLACE_BUCKET` in `deploy/k8s/overlays/gke-l4` and `components/operators/flink.yaml`. For
 "structurally identical" proxies, train with the production tensor width and capacity
-(`pulsebench train --input-dim 512 --hidden 512,256,128 --trees 800 --depth 8`) and set
-`MODEL_INPUT_DIM` on gateway/Flink to the same width — the GPU then executes real GEMMs and
-host→device transfers of production size.
+(`pulsebench train --input-dim 512 --hidden 512,256,128 --trees 800 --depth 8`): the gateway and Flink
+read the model's input width from Triton's model metadata and zero-pad to it (`MODEL_INPUT_DIM`
+overrides), so the GPU executes real GEMMs and host→device transfers of production size.
 
 ## 4. Deploy and run
 

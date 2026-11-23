@@ -19,6 +19,10 @@ spec:
             path: realy/bench/v1/trace.proto
           - key: realy__features__v1__features.proto
             path: realy/features/v1/features.proto
+          - key: realy__flows__v1__a2a.proto
+            path: realy/flows/v1/a2a.proto
+          - key: realy__flows__v1__txn.proto
+            path: realy/flows/v1/txn.proto
           - key: realy__payments__v1__label.proto
             path: realy/payments/v1/label.proto
           - key: realy__payments__v1__transaction.proto

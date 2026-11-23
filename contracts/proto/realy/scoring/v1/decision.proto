@@ -5,6 +5,7 @@ package realy.scoring.v1;
 import "realy/payments/v1/transaction.proto";
 import "realy/features/v1/features.proto";
 import "realy/bench/v1/trace.proto";
+import "realy/flows/v1/txn.proto";
 
 option java_package = "io.realy.contracts.scoring.v1";
 option java_multiple_files = true;
@@ -72,4 +73,7 @@ message DecisionRecord {
   realy.features.v1.FeatureVector features = 16;
   realy.bench.v1.BenchTrace trace = 17;
   uint32 feature_schema_version = 18;
+  // a transaction formed by several linked messages: which one, at which stage, which parts it was
+  // assembled from (unset for a one-message transaction)
+  realy.flows.v1.TxnContext txn = 19;
 }

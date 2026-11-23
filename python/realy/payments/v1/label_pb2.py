@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1drealy/payments/v1/label.proto\x12\x11realy.payments.v1\"\x95\x02\n\nFraudLabel\x12\x10\n\x08\x65vent_id\x18\x01 \x01(\x06\x12\x15\n\rlabel_time_us\x18\x02 \x01(\x10\x12\x15\n\revent_time_us\x18\x03 \x01(\x10\x12\x10\n\x08is_fraud\x18\x04 \x01(\x08\x12\x30\n\nfraud_type\x18\x05 \x01(\x0e\x32\x1c.realy.payments.v1.FraudType\x12\x13\n\x0b\x63\x61mpaign_id\x18\x06 \x01(\x04\x12.\n\x06source\x18\x07 \x01(\x0e\x32\x1e.realy.payments.v1.LabelSource\x12\x13\n\x0b\x63ustomer_id\x18\x08 \x01(\x04\x12\x0f\n\x07\x63\x61rd_id\x18\t \x01(\x04\x12\x18\n\x10\x61mount_usd_minor\x18\n \x01(\x03*\xd3\x01\n\tFraudType\x12\x13\n\x0f\x46RAUD_TYPE_NONE\x10\x00\x12\x10\n\x0c\x43\x41RD_TESTING\x10\x01\x12\x14\n\x10\x41\x43\x43OUNT_TAKEOVER\x10\x02\x12\x0f\n\x0bLOST_STOLEN\x10\x03\x12\x0f\n\x0b\x43OUNTERFEIT\x10\x04\x12\x13\n\x0fMERCHANT_BREACH\x10\x05\x12\x0f\n\x0b\x41TM_CASHOUT\x10\x06\x12\x11\n\rAPP_SCAM_MULE\x10\x07\x12\x0c\n\x08\x42UST_OUT\x10\x08\x12\x0c\n\x08\x42OT_ECOM\x10\t\x12\x12\n\x0e\x46RIENDLY_FRAUD\x10\n*c\n\x0bLabelSource\x12\x1c\n\x18LABEL_SOURCE_UNSPECIFIED\x10\x00\x12\x0e\n\nCHARGEBACK\x10\x01\x12\x13\n\x0f\x43USTOMER_REPORT\x10\x02\x12\x11\n\rINVESTIGATION\x10\x03\x42\"\n\x1eio.realy.contracts.payments.v1P\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1drealy/payments/v1/label.proto\x12\x11realy.payments.v1\"\x95\x02\n\nFraudLabel\x12\x10\n\x08\x65vent_id\x18\x01 \x01(\x06\x12\x15\n\rlabel_time_us\x18\x02 \x01(\x10\x12\x15\n\revent_time_us\x18\x03 \x01(\x10\x12\x10\n\x08is_fraud\x18\x04 \x01(\x08\x12\x30\n\nfraud_type\x18\x05 \x01(\x0e\x32\x1c.realy.payments.v1.FraudType\x12\x13\n\x0b\x63\x61mpaign_id\x18\x06 \x01(\x04\x12.\n\x06source\x18\x07 \x01(\x0e\x32\x1e.realy.payments.v1.LabelSource\x12\x13\n\x0b\x63ustomer_id\x18\x08 \x01(\x04\x12\x0f\n\x07\x63\x61rd_id\x18\t \x01(\x04\x12\x18\n\x10\x61mount_usd_minor\x18\n \x01(\x03*\xe8\x01\n\tFraudType\x12\x13\n\x0f\x46RAUD_TYPE_NONE\x10\x00\x12\x10\n\x0c\x43\x41RD_TESTING\x10\x01\x12\x14\n\x10\x41\x43\x43OUNT_TAKEOVER\x10\x02\x12\x0f\n\x0bLOST_STOLEN\x10\x03\x12\x0f\n\x0b\x43OUNTERFEIT\x10\x04\x12\x13\n\x0fMERCHANT_BREACH\x10\x05\x12\x0f\n\x0b\x41TM_CASHOUT\x10\x06\x12\x11\n\rAPP_SCAM_MULE\x10\x07\x12\x0c\n\x08\x42UST_OUT\x10\x08\x12\x0c\n\x08\x42OT_ECOM\x10\t\x12\x12\n\x0e\x46RIENDLY_FRAUD\x10\n\x12\x13\n\x0fINVESTMENT_SCAM\x10\x0b*c\n\x0bLabelSource\x12\x1c\n\x18LABEL_SOURCE_UNSPECIFIED\x10\x00\x12\x0e\n\nCHARGEBACK\x10\x01\x12\x13\n\x0f\x43USTOMER_REPORT\x10\x02\x12\x11\n\rINVESTIGATION\x10\x03\x42\"\n\x1eio.realy.contracts.payments.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,9 +33,9 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\036io.realy.contracts.payments.v1P\001'
   _globals['_FRAUDTYPE']._serialized_start=333
-  _globals['_FRAUDTYPE']._serialized_end=544
-  _globals['_LABELSOURCE']._serialized_start=546
-  _globals['_LABELSOURCE']._serialized_end=645
+  _globals['_FRAUDTYPE']._serialized_end=565
+  _globals['_LABELSOURCE']._serialized_start=567
+  _globals['_LABELSOURCE']._serialized_end=666
   _globals['_FRAUDLABEL']._serialized_start=53
   _globals['_FRAUDLABEL']._serialized_end=330
 # @@protoc_insertion_point(module_scope)

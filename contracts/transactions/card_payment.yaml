@@ -1,0 +1,162 @@
+# A card payment as the messages an issuer's processor sees (contracts/proto/realy/flows/v1/card.proto):
+# for an online payment, the 3-D Secure result first, then the authorisation request, which is the
+# decision; afterwards the capture (or a reversal of an authorisation never captured), perhaps a refund,
+# perhaps a chargeback. The authorisation is assembled with the 3DS result that came before it (an
+# optional part: nothing is waited for, the decision is taken when the authorisation arrives) into the
+# unified payment event, so every feature, rule and model works on it; the lifecycle moves its stage and
+# context (`event.txn.*`).
+# The fields are explained in a2a_transfer.yaml.
+name: card_payment
+link: auth_id
+messages:
+  three_ds: card_authentication
+  authorization: card_authorization
+  capture: card_capture
+  reversal: card_reversal
+  refund: card_refund
+  chargeback: chargeback
+assemble:
+  into: payment
+  trigger: authorization
+  require: []
+  optional: [three_ds]
+  wait_ms: 0
+  on_timeout: score_partial
+  fields:
+    event_id: authorization.event_id
+    event_time_us: authorization.event_time_us
+    payment_type: { const: CARD_PURCHASE }
+    customer_id: authorization.customer_id
+    account_id: authorization.account_id
+    card_id: authorization.card_id
+    card_type: authorization.card_type
+    amount_minor: authorization.amount_minor
+    currency: authorization.currency
+    amount_usd_minor: authorization.amount_usd_minor
+    merchant_id: authorization.merchant_id
+    mcc: authorization.mcc
+    merchant_country: authorization.merchant_country
+    terminal_id: authorization.terminal_id
+    channel: authorization.channel
+    entry_mode: authorization.entry_mode
+    card_present: authorization.card_present
+    lat: authorization.lat
+    lon: authorization.lon
+    device_id: authorization.device_id
+    ip_v4: authorization.ip_v4
+    ip_country: authorization.ip_country
+    ip_asn: authorization.ip_asn
+    cvv_match: authorization.cvv_match
+    avs_match: authorization.avs_match
+    recurring: authorization.recurring
+    credit_limit_usd: authorization.credit_limit_usd
+    pin_verified: authorization.pin_verified
+    cryptogram_valid: authorization.cryptogram_valid
+    scheme_score: authorization.scheme_score
+    # the 3DS outcome comes from the authentication message (none sent: THREE_DS_NONE)
+    three_ds: { from: three_ds.status, map: { TDS_AUTHENTICATED: THREE_DS_AUTHENTICATED,
+                                               TDS_ATTEMPTED: THREE_DS_ATTEMPTED,
+                                               TDS_UNAVAILABLE: THREE_DS_ATTEMPTED,
+                                               TDS_NOT_AUTHENTICATED: THREE_DS_NONE,
+                                               TDS_REJECTED: THREE_DS_NONE } }
+stages:
+  captured:     { message: capture }
+  reversed:     { message: reversal, terminal: true }
+  refunded:     { message: refund }
+  charged_back: { message: chargeback, terminal: true }
+context:
+  three_ds_status:     { from: three_ds.status }
+  three_ds_challenged: { from: three_ds.challenged }
+  acs_risk_score:      { from: three_ds.acs_risk_score }
+  three_ds_device_changed: { changed: device_id, between: [three_ds, authorization] }
+  secs_from_3ds:       { elapsed: [three_ds, authorization] }
+  captures:            { count: capture }
+  capture_amount_changed: { changed: amount_usd_minor, between: [authorization, capture] }
+  secs_to_capture:     { elapsed: [authorization, capture] }
+  refunds:             { count: refund }
+  chargeback_reason:   { from: chargeback.reason }
+
+report: { by: [three_ds_status] }
+
+# How the synthetic generator expands its card purchases into these messages (realy/gen/flows.py). The
+# 3DS result is sent only for a purchase the generator drew with a 3DS outcome, so the parts assemble
+# back into exactly that purchase. Fields named like the payment's (card, merchant, amount, device) are
+# filled from it. Typologies shape the lifecycle: card testing is authorised but almost
+# never captured (reversed), friendly fraud is captured and then charged back as "not me".
+generate:
+  expands: { payment_type: [CARD_PURCHASE] }
+  delays_ms:
+    three_ds: [-25000, -1500]        # the cardholder authenticates, then the merchant asks to authorise
+    capture: [30000, 7200000]        # online: at shipping; in person: the end-of-day batch
+    reversal: [60000, 1800000]
+    refund: [3600000, 86400000]
+    chargeback: [3600000, 172800000]
+  steps:
+    - role: three_ds
+      if: { three_ds: { not: [THREE_DS_NONE] } }
+      after: authorization
+      delay_ms: three_ds
+      set: { challenged: { p: challenge }, acs_risk_score: { uniform: acs_risk_score } }
+    - role: authorization
+    - role: capture
+      after: authorization
+      delay_ms: capture
+      p: capture
+      set: { amount_usd_minor: { alter: capture_amount_changed } }   # a tip, a partial shipment
+    - role: reversal
+      unless: [capture]
+      after: authorization
+      delay_ms: reversal
+      p: reversal
+      set: { reason: { pick: reversal_reason } }
+    - role: refund
+      needs: [capture]
+      after: capture
+      delay_ms: refund
+      p: refund
+    - role: chargeback
+      needs: [capture]
+      after: capture
+      delay_ms: chargeback
+      p: chargeback
+      set: { reason: { pick: chargeback_reason } }
+  rates:
+    challenge: 0.08
+    acs_risk_score: [0, 35]
+    capture: 0.985
+    capture_amount_changed: 0.02
+    reversal: 0.9
+    reversal_reason: { REVERSAL_MERCHANT_CANCEL: 0.5, REVERSAL_EXPIRED: 0.45, REVERSAL_TIMEOUT: 0.05 }
+    refund: 0.03
+    chargeback: 0.0008
+    chargeback_reason: { CB_NOT_RECEIVED: 0.4, CB_NOT_AS_DESCRIBED: 0.3, CB_CANCELLED_RECURRING: 0.2, CB_DUPLICATE: 0.1 }
+  fraud:
+    card_testing:
+      capture: 0.05
+      reversal: 0.6
+      acs_risk_score: [40, 99]
+    bot_ecom:
+      challenge: 0.3
+      acs_risk_score: [50, 99]
+      chargeback: 0.7
+      chargeback_reason: { CB_FRAUD_CARD_ABSENT: 1.0 }
+    account_takeover:
+      challenge: 0.25
+      acs_risk_score: [30, 90]
+      chargeback: 0.6
+      chargeback_reason: { CB_FRAUD_CARD_ABSENT: 1.0 }
+    merchant_breach:
+      chargeback: 0.7
+      chargeback_reason: { CB_FRAUD_CARD_ABSENT: 0.8, CB_FRAUD_CARD_PRESENT: 0.2 }
+    counterfeit:
+      chargeback: 0.8
+      chargeback_reason: { CB_FRAUD_CARD_PRESENT: 1.0 }
+    lost_stolen:
+      chargeback: 0.8
+      chargeback_reason: { CB_FRAUD_CARD_PRESENT: 1.0 }
+    friendly_fraud:
+      refund: 0.0
+      chargeback: 0.9
+      chargeback_reason: { CB_FRAUD_CARD_ABSENT: 0.6, CB_NOT_RECEIVED: 0.4 }
+    bust_out:
+      chargeback: 0.1

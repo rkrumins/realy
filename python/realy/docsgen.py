@@ -147,7 +147,22 @@ def _parse_proto(text: str) -> list[dict[str, Any]]:
             else:
                 comments.append(c)
             continue
+        if cur is not None and cur["kind"] == "service":
+            m = re.match(r"^rpc\s+(\w+)\s*\(\s*(stream\s+)?([\w.]+)\s*\)\s*returns\s*\(\s*(stream\s+)?([\w.]+)\s*\)", line)
+            if m:
+                cur["items"].append({"name": m.group(1), "request": ("stream " if m.group(2) else "") + m.group(3),
+                                     "response": ("stream " if m.group(4) else "") + m.group(5), "doc": " ".join(comments)})
+            elif line == "}":
+                blocks.append(cur)
+                cur = None
+            comments = []
+            continue
         if cur is None:
+            ms = re.match(r"^service\s+(\w+)\s*\{", line)
+            if ms:
+                cur = {"kind": "service", "name": ms.group(1), "doc": " ".join(comments), "items": []}
+                comments = []
+                continue
             m = re.match(r"^(message|enum)\s+(\w+)\s*\{(.*)$", line)
             if not m:
                 comments = []          # file header, syntax/package/option lines
@@ -213,6 +228,151 @@ def config() -> str:
                  "  on_deadline: FALLBACK_RULES\n  feature_lookup_delay: { uniform: { min_ms: 2, max_ms: 8 } }\n"
                  "model_server:\n  service_time: { uniform: { min_ms: 30, max_ms: 100 } }\n  workers: 8\n"
                  "  max_batch: 16\n  max_queue_delay_us: 2000\n```\n")
+    return "".join(parts)
+
+
+# ------------------------------------------------------------------------------------------ messages
+# Who writes and who reads each topic (the wiring the services implement; kept next to the generator so
+# a new producer or consumer is one row here).
+TOPIC_FLOWS = {
+    "payments.events.raw": ("emitter (`emit/driver.py`, Java load-emitter), gateway mirror of sync decisions",
+                            "Flink feature job (`FraudJob` source), gateway Kafka ingress (`KafkaIngress`), ClickHouse `events_raw` (Kafka engine)"),
+    "payments.decisions": ("gateway (`DecisionSink`), Flink inline job (`decisions-sink`)",
+                           "collector (`collect/collector.py`), ClickHouse `decisions` (Kafka engine), console live feed"),
+    "payments.labels": ("emitter, at each label's simulated time (needs the `x-run-id` header)",
+                        "ClickHouse `labels` (Kafka engine) for training and reports"),
+    "bench.control": ("runner (`common/control.py`), console control drawer (`/api/live/*`)",
+                      "gateway, model server, Flink jobs, emitters (`<target>:<cmd>` keys; `*` = every service)"),
+    "bench.metrics": ("every service and process (1 s `MetricsSnapshot`: emitter, collector, gateway, model, flink)",
+                      "runner (`metrics.jsonl`, guardrails), console telemetry hub (Live)"),
+}
+
+
+def messages() -> str:
+    """Every message, enum and service of the contracts, field by field, and every topic with its key,
+    value, headers, producers and consumers."""
+    root = REPO_ROOT / "contracts" / "proto"
+    files = sorted(root.rglob("*.proto"))
+    spec = yaml.safe_load((REPO_ROOT / "contracts" / "kafka" / "topics.yaml").read_text())
+    parts = [HEADER.format(src="contracts/proto/**/*.proto, contracts/kafka/topics.yaml"), "# Messages\n\n",
+             "Every message that goes in or out of the pipeline. The protobuf files are the contract: the Java "
+             "stubs (`java/contracts-java`), the Python stubs (`python/realy/*/v1/*_pb2.py`) and this page are "
+             "generated from them. Fields are only ever appended (a number is never reused or renumbered; "
+             "`tests/test_proto_compat.py` fails otherwise), so old readers and old data keep working.\n\n",
+             "## Topics\n\n"]
+    rows = []
+    for name, t in (spec.get("topics") or {}).items():
+        prod, cons = TOPIC_FLOWS.get(name, ("", ""))
+        rows.append([_code(name), _code(t.get("value", "")), t.get("key", ""), ", ".join(_code(h) for h in t.get("headers") or []),
+                     t.get("partitions", ""), prod, cons])
+    parts.append(_table(["Topic", "Value", "Key", "Headers", "Partitions", "Produced by", "Consumed by"], rows))
+    parts.append("\nPartition counts are the production defaults; the compose stack creates 12 per topic. "
+                 "Headers on `payments.events.raw`: `x-bench-trace` (a `BenchTrace`: run, intended and sent time, "
+                 "clock domain), `x-run-id` (the owning run; `:backfill` / `:prime` suffixes for history), "
+                 "`x-backfill` (history: Flink folds it into state, the gateway does not score it), `x-mirrored` "
+                 "(a sync decision already made, mirrored so Flink updates state).\n\n")
+    for f in files:
+        rel = f.relative_to(REPO_ROOT)
+        blocks = [b for b in _parse_proto(f.read_text()) if b["kind"] != "section"]
+        if not blocks:
+            continue
+        pkg = re.search(r"^package\s+([\w.]+);", f.read_text(), re.M)
+        parts.append(f"## `{pkg.group(1) if pkg else f.stem}` ({f.name})\n\nSource: `{rel}`\n\n")
+        for b in blocks:
+            kind = {"enum": " (enum)", "service": " (gRPC service)"}.get(b["kind"], "")
+            parts.append(f"### `{b['name']}`{kind}\n\n")
+            if b["doc"]:
+                parts.append(b["doc"] + "\n\n")
+            if not b["items"]:
+                continue
+            if b["kind"] == "service":
+                parts.append(_table(["RPC", "Request", "Response", "Description"],
+                                    [[_code(i["name"]), _code(i["request"]), _code(i["response"]), i["doc"]] for i in b["items"]]))
+            elif b["kind"] == "enum":
+                parts.append(_table(["Value", "Number", "Meaning"], [[_code(i["name"]), i["num"], i["doc"]] for i in b["items"]]))
+            else:
+                parts.append(_table(["#", "Field", "Type", "Description"],
+                                    [[i["num"], _code(i["name"]), _code(i["type"]) + (f" (oneof {i['oneof']})" if i.get("oneof") else ""),
+                                      i["doc"]] for i in b["items"]]))
+            parts.append("\n")
+    return "".join(parts)
+
+
+# ------------------------------------------------------------------------------------------ environment
+_PY_ENV = re.compile(r"""(?:_?os)\.environ(?:\.get\(\s*|\[\s*)["']([A-Z][A-Z0-9_]+)["']\s*(?:,\s*([^)\]]+?))?\s*[)\]]""")
+_JAVA_ENV = re.compile(r"""Env\.(?:str|integer|lng|bool|dbl)\(\s*"([A-Z][A-Z0-9_]+)"\s*,\s*([^)]+?)\)|System\.getenv\(\s*"([A-Z][A-Z0-9_]+)"\s*\)""")
+_COMPONENTS = [("python/realy/control", "console"), ("python/realy/runner", "runner"), ("python/realy/emit", "emitter"),
+               ("python/realy/collect", "collector"), ("python/realy/verify", "verifier"), ("python/realy/report", "report"),
+               ("python/realy/train", "trainer"), ("python/realy", "python (shared)"),
+               ("java/scoring-gateway", "gateway"), ("java/flink-job", "Flink job"), ("java/mock-model-server", "model server"),
+               ("java/load-emitter", "Java load emitter"), ("java/scoring-core", "gateway + Flink (scoring core)"),
+               ("java/common", "every JVM service")]
+
+
+def environment() -> str:
+    """Every environment variable read by the code (Python os.environ, Java Env.* / System.getenv), with its
+    default and where it is read, and the values the compose stack sets."""
+    found: dict[str, dict[str, Any]] = {}
+
+    def note(var: str, default: str | None, path: Path, line: int) -> None:
+        rel = str(path.relative_to(REPO_ROOT))
+        comp = next((c for pre, c in _COMPONENTS if rel.startswith(pre)), rel.split("/")[0])
+        e = found.setdefault(var, {"defaults": set(), "components": set(), "where": []})
+        if default is not None:
+            d = default.strip()
+            if len(d) < 60:
+                e["defaults"].add(d)
+        e["components"].add(comp)
+        if rel not in e["where"] and len(e["where"]) < 3:      # files, not lines: stable across edits
+            e["where"].append(rel)
+
+    for f in sorted((REPO_ROOT / "python" / "realy").rglob("*.py")):
+        if "_pb2" in f.name:
+            continue
+        for n, line in enumerate(f.read_text().splitlines(), 1):
+            for m in _PY_ENV.finditer(line):
+                note(m.group(1), m.group(2), f, n)
+    for f in sorted((REPO_ROOT / "java").rglob("*.java")):
+        if "/test/" in str(f) or "/build/" in str(f):
+            continue
+        for n, line in enumerate(f.read_text().splitlines(), 1):
+            for m in _JAVA_ENV.finditer(line):
+                if m.group(1):
+                    note(m.group(1), m.group(2), f, n)
+                else:
+                    note(m.group(3), None, f, n)
+    # variables read through a table rather than one call each: Kafka security (Python + Java)
+    from .common.kafka import SECURITY_ENV
+    kpy = REPO_ROOT / "python" / "realy" / "common" / "kafka.py"
+    sec_line = next((i for i, ln in enumerate(kpy.read_text().splitlines(), 1) if ln.startswith("SECURITY_ENV")), 1)
+    for var in SECURITY_ENV:
+        note(var, "unset: PLAINTEXT", kpy, sec_line)
+    kj = REPO_ROOT / "java" / "common" / "src" / "main" / "java" / "io" / "realy" / "common" / "KafkaProps.java"
+    if kj.exists():
+        for n, line in enumerate(kj.read_text().splitlines(), 1):
+            for m in re.finditer(r'"(KAFKA_[A-Z_]+)"', line):
+                note(m.group(1), "unset: PLAINTEXT" if "SASL" in m.group(1) or "SSL" in m.group(1) or "SECURITY" in m.group(1) else None, kj, n)
+    compose = yaml.safe_load((REPO_ROOT / "deploy" / "compose" / "docker-compose.yml").read_text())
+    set_by: dict[str, list[str]] = {}
+    for svc, spec in (compose.get("services") or {}).items():
+        env = spec.get("environment") or {}
+        for k in (env if isinstance(env, dict) else {x.split("=")[0]: None for x in env}):
+            set_by.setdefault(k, []).append(svc)
+    parts = [HEADER.format(src="python/realy/**/*.py, java/**/*.java, deploy/compose/docker-compose.yml"),
+             "# Environment variables\n\n",
+             "Every environment variable the code reads, found by scanning it (so this page cannot miss one): "
+             "Python `os.environ`, Java `Env.str / integer / lng` and `System.getenv`. *Default* is the value used "
+             "when the variable is unset (as written in the code); *compose* lists the services of "
+             "`deploy/compose/docker-compose.yml` that set it. Secrets (Kafka SASL passwords, the console token) "
+             "come from the environment only and are never logged.\n\n"]
+    rows = []
+    for var in sorted(found):
+        e = found[var]
+        rows.append([_code(var), " / ".join(sorted(_code(d.strip('"').strip("'")) for d in e["defaults"])) or "",
+                     ", ".join(sorted(e["components"])), ", ".join(sorted(set_by.get(var, []))),
+                     "<br>".join(f"`{w}`" for w in e["where"])])
+    parts.append(_table(["Variable", "Default", "Read by", "Compose sets it in", "Where"], rows))
+    parts.append(f"\n{len(found)} variables.\n")
     return "".join(parts)
 
 
@@ -389,8 +549,169 @@ def scenarios() -> str:
     return "".join(parts)
 
 
+def bindings() -> str:
+    """The entity registry, every bound event type with its fields, and the pipelines."""
+    from .bindings import event_types, registry
+    from .bindings.pipeline import PIPELINES_DIR, pipeline
+    reg = registry()
+    out = [HEADER.format(src="contracts/entities.yaml, contracts/events/*.yaml, contracts/pipelines/*.yaml"),
+           "# Bindings: entities, event types and pipelines\n",
+           "What the pipeline's messages mean, loaded the same way by Java (`io.realy.scoring.binding`) and Python "
+           "(`realy.bindings`). How to add an event type or a field: [dev/schemas.md](../dev/schemas.md).\n",
+           "## Entities\n", "Order is the Flink job's keyed-stage order (append only).\n",
+           "| # | Entity | Id | Owned by | Entity enum |", "|---|---|---|---|---|"]
+    for e in reg.entities.values():
+        out.append(f"| {e.ordinal} | `{e.name}` | {e.id} | {e.owned_by or ''} | {e.enum or ''} |")
+    out.append("\n## Pipelines\n")
+    out.append("| Pipeline | Namespace | Partition key | Event types | Exact entities | Topics |")
+    out.append("|---|---|---|---|---|---|")
+    for f in sorted(PIPELINES_DIR.glob("*.yaml")):
+        p = pipeline(str(f))
+        types = ", ".join(f"`{n}`{' (scored)' if n in p.scored() else ' (fold)'}" for n in p.event_types)
+        topics = ", ".join(f"{k}: `{v}`" for k, v in p.topics.items())
+        out.append(f"| `{p.name}` | {p.namespace or '(default)'} | {p.partition_key} | {types} | "
+                   f"{', '.join(p.exact_entities())} | {topics} |")
+    from .bindings.transactions import transactions
+    for name, tx in transactions().items():
+        out.append(f"\n## Transaction `{name}`\n")
+        out.append(f"Linked by `{tx.link}`; assembled into `{tx.into}` when `{tx.trigger}`"
+                   + (f" and {', '.join(f'`{r}`' for r in tx.require)}" if tx.require else "")
+                   + f" have arrived (wait {tx.wait_ms} ms, then {tx.on_timeout.replace('_', ' ')}); optional: "
+                   + (", ".join(f"`{r}`" for r in tx.optional) or "none") + ". Guide: [transactions](../dev/transactions.md).\n")
+        out.append("| Bit | Role | Event type | Part of |")
+        out.append("|---|---|---|---|")
+        for i, (role, ty) in enumerate(tx.roles.items()):
+            part = ("trigger" if role == tx.trigger else "required" if role in tx.require else "optional"
+                    if role in tx.optional else "stage " + ", ".join(s.name for s in tx.stages if s.role == role))
+            out.append(f"| {1 << i} | `{role}` | `{ty}` | {part} |")
+        out.append("\n| Context (`event.txn.*`) | Kind | Default |")
+        out.append("|---|---|---|")
+        for c in tx.context:
+            what = {"from": f"`{c.role}.{c.field}`", "count": f"count of `{c.role}`",
+                    "changed": f"`{c.field}` changed `{c.between[0]}` -> `{c.between[1]}`" if c.between else "",
+                    "elapsed": f"seconds `{c.between[0]}` -> `{c.between[1]}`" if c.between else ""}[c.kind]
+            out.append(f"| `{c.name}` | {what} | `{tx.context_default(c)!r}` |")
+    for name, t in event_types().items():
+        out.append(f"\n## Event type `{name}`\n")
+        out.append(f"Message `{t.message}`; id `{t.id}`{' (hashed)' if t.id_hash else ''}; time `{t.time}` "
+                   f"({t.time_unit}); amount `{t.amount or ''}`.\n")
+        out.append("| # | Field | Kind | ClickHouse | Entity |")
+        out.append("|---|---|---|---|---|")
+        ent_of = {v: k for k, v in t.entities.items()}
+        for f in t.codec.fields:
+            kind = f.kind if f.kind != "enum" else f"enum {f.enum_type.rsplit('.', 1)[-1]}"
+            out.append(f"| {f.number} | `{f.name}` | {kind} | {f.ch_type} | {ent_of.get(f.name, '')} |")
+    return "\n".join(out) + "\n"
+
+
+def topologies() -> str:
+    """How each topology is built from components, what it can and cannot do, the key differences, every
+    component's settings, and what would improve each."""
+    from .topologies import load, runtime, steps
+    doc = load()
+    caps = doc.get("capabilities") or {}
+    tops = doc.get("topologies") or {}
+    comps = doc.get("components") or {}
+    mark = {"yes": "yes", "partial": "partly", "no": "no", "n/a": "n/a"}
+    by_topo: dict[str, list[str]] = {}
+    for f in sorted((REPO_ROOT / "scenarios").glob("*.yaml")):
+        d = yaml.safe_load(f.read_text()) or {}
+        by_topo.setdefault(d.get("topology") or "gateway-kafka", []).append(f.stem)
+    used_by: dict[str, list[str]] = {}
+    for tid in tops:
+        for st in steps(tid) + steps(tid, True):
+            if tid not in used_by.setdefault(st["component"], []):
+                used_by[st["component"]].append(tid)
+
+    def clink(cid: str) -> str:
+        return f"[{comps.get(cid, {}).get('label', cid)}](#component-{cid})"
+
+    out = [HEADER.format(src="contracts/topologies.yaml"), "# Topologies\n",
+           "A scenario's `topology:` decides how events travel and who decides. A topology is a set of steps, each "
+           "one a [component](#components) with its own settings; all of them share the contracts, the features, "
+           "rules and model, the audit log and the verifier. They differ in who scores, where features come from, "
+           "and what that makes possible. The console's **Topologies** page shows the same, with the latest "
+           "measurements and advice from your own runs. To build a new topology, or add a component: "
+           "[dev/topologies.md](../dev/topologies.md).\n",
+           "## Key differences\n",
+           "| | " + " | ".join(f"[{t['title']}](#{tid})" for tid, t in tops.items()) + " |",
+           "|---|" + "---|" * len(tops),
+           "| Who decides | " + " | ".join(_cell(t.get("decides")) for t in tops.values()) + " |",
+           "| Events reach the scorer by | " + " | ".join(runtime(t).ingress for t in tops) + " |",
+           "| Flink job mode | " + " | ".join(runtime(t).flink_mode for t in tops) + " |",
+           "| Multi-message transactions | " + " | ".join(runtime(t).flows.replace("_", " ") for t in tops) + " |",
+           "| Verifier's exact-feature target | " + " | ".join(
+               f"{runtime(t).exact_target:.1%}" if runtime(t).exact_target else "n/a" for t in tops) + " |"]
+    for cid, c in caps.items():
+        out.append(f"| {c['label']} | " + " | ".join(
+            mark.get(((t.get("capabilities") or {}).get(cid) or {}).get("status"), "?") for t in tops.values()) + " |")
+    out.append("| Scales by | " + " | ".join(_cell(t.get("scales_by")) for t in tops.values()) + " |")
+    out.append("| The tail usually comes from | " + " | ".join(_cell(t.get("tail")) for t in tops.values()) + " |")
+    out.append("\n**The hybrid most institutions end up with.** " + (doc.get("hybrid") or "").strip() + "\n")
+    for tid, t in tops.items():
+        r = runtime(tid)
+        out.append(f"## {tid}\n")
+        out.append(f"**{t['title']}.** {t['tagline'].strip()}\n")
+        out.append(f"Runtime: events reach the scorer by **{r.ingress}**, the **{r.scorer}** decides, the Flink job runs "
+                   f"in **{r.flink_mode}** mode, multi-message transactions: **{r.flows.replace('_', ' ')}**"
+                   + (f", exact-feature target **{r.exact_target:.1%}**." if r.exact_target else "."))
+        out.append("\n### How it is built\n")
+        for i, st in enumerate(steps(tid), 1):
+            label = (st.get("label") or comps.get(st["component"], {}).get("label") or st["id"]).replace("{entity}", "<entity>")
+            each = " (one per entity with stream features)" if st.get("for_each") else ""
+            out.append(f"{i}. **{label}**{each} ({clink(st['component'])}): {st['does']}")
+        if t.get("steps_with_flows"):
+            out.append("\nWith multi-message transactions (`traffic.flows`):\n")
+            for i, st in enumerate(steps(tid, True), 1):
+                label = (st.get("label") or comps.get(st["component"], {}).get("label") or st["id"]).replace("{entity}", "<entity>")
+                out.append(f"{i}. **{label}** ({clink(st['component'])}): {st['does']}")
+        out.append("\n### What works and what does not\n")
+        out.append("| Capability | | Why |")
+        out.append("|---|---|---|")
+        for cid, c in caps.items():
+            v = (t.get("capabilities") or {}).get(cid) or {}
+            out.append(f"| {c['label']} | {mark.get(v.get('status'), '?')} | {_cell(v.get('note'))} |")
+        out.append("\n**Choose it when:** " + "; ".join(t.get("choose_when") or []) + ".")
+        if t.get("avoid_when"):
+            out.append("\n**Avoid it when:** " + "; ".join(t["avoid_when"]) + ".")
+        out.append(f"\n**Scales by:** {t.get('scales_by')}. **Tail:** {t.get('tail')}.")
+        if by_topo.get(tid):
+            out.append("\n**Bundled scenarios:** " + ", ".join(f"`{n}`" for n in by_topo[tid]) + ".")
+        if t.get("enhancements"):
+            out.append("\n### Limits and the enhancements that would lift them\n")
+            out.append("| Enhancement | Why | Effect | Status |")
+            out.append("|---|---|---|---|")
+            for e in t["enhancements"]:
+                out.append(f"| {e['title']} | {_cell(e['why'])} | {_cell(e['effect'])} | {e['status']} |")
+        out.append("")
+    out.append("## Components\n")
+    out.append("Every building block a topology's steps use: what it does, where its code is, every setting that "
+               "controls it (where it is set, and its default), and how to swap or extend it.\n")
+    for cid, c in comps.items():
+        out.append(f"### Component `{cid}`\n")
+        out.append(f"**{c['label']}** ({c['kind']}): {c['what']}\n")
+        out.append(f"Code: `{c['code']}`. Used by: " + (", ".join(f"[{u}](#{u})" for u in used_by.get(cid, [])) or "none") + ".\n")
+        if c.get("config"):
+            out.append("| Setting | Set in | Default | Effect |")
+            out.append("|---|---|---|---|")
+            for k in c["config"]:
+                out.append(f"| `{k['key']}` | {_cell(k['in'])} | {_cell(k.get('default', ''))} | {_cell(k['effect'])} |")
+        out.append(f"\n**Swap or extend:** {c['extend']}\n")
+    out.append("## Advice by dominant tail stage\n")
+    out.append("The run report names the stage that holds the largest share of the slowest 1% of events; this is "
+               "what to try for each (topology-specific advice where it differs).\n")
+    out.append("| Stage | Advice |")
+    out.append("|---|---|")
+    for stage, per in (doc.get("advice") or {}).items():
+        txt = _cell(per.get("all", ""))
+        extra = "".join(f"<br>**{k}:** {_cell(v)}" for k, v in per.items() if k != "all")
+        out.append(f"| `{stage}` | {txt}{extra} |")
+    return "\n".join(out) + "\n"
+
 PAGES = {"scenario-schema.md": scenario_schema, "config.md": config, "cli.md": cli, "http-api.md": http_api,
-         "features.md": features, "rules.md": rules, "topics.md": topics, "scenarios.md": scenarios}
+         "features.md": features, "rules.md": rules, "topics.md": topics, "scenarios.md": scenarios,
+         "messages.md": messages, "environment.md": environment, "bindings.md": bindings,
+         "topologies.md": topologies}
 
 
 def write() -> list[Path]:

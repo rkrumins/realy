@@ -29,6 +29,12 @@ public final class ControlSubscriber implements AutoCloseable {
      */
     public ControlSubscriber(String role, BiConsumer<ControlMessage, com.fasterxml.jackson.databind.JsonNode> listener) {
         String topic = Env.str("CONTROL_TOPIC", "bench.control");
+        if (!Profile.controlEnabled()) {
+            // production profile (or CONTROL_ENABLED=false): configuration comes from files and env only
+            LOG.info("control topic {} not subscribed (CONTROL_ENABLED=false)", topic);
+            thread = null;
+            return;
+        }
         var props = KafkaProps.consumer("control-" + role + "-" + UUID.randomUUID(), role + "-control");
         props.put("auto.offset.reset", "earliest");
         props.put("fetch.max.wait.ms", "100");

@@ -1,6 +1,7 @@
 from realy.payments.v1 import transaction_pb2 as _transaction_pb2
 from realy.features.v1 import features_pb2 as _features_pb2
 from realy.bench.v1 import trace_pb2 as _trace_pb2
+from realy.flows.v1 import txn_pb2 as _txn_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -82,7 +83,7 @@ class ModelResult(_message.Message):
     def __init__(self, model_name: _Optional[str] = ..., model_version: _Optional[str] = ..., deployment: _Optional[str] = ..., score: _Optional[float] = ..., raw_outputs: _Optional[_Iterable[float]] = ..., input_hash: _Optional[int] = ..., timed_out: _Optional[bool] = ..., errored: _Optional[bool] = ..., batch_size: _Optional[int] = ...) -> None: ...
 
 class DecisionRecord(_message.Message):
-    __slots__ = ("event_id", "outcome", "score", "reason_codes", "rule_hits", "model", "policy_version", "rule_set_version", "path", "degraded", "ingress_mode", "instance_id", "decided_at_us", "revision", "event", "features", "trace", "feature_schema_version")
+    __slots__ = ("event_id", "outcome", "score", "reason_codes", "rule_hits", "model", "policy_version", "rule_set_version", "path", "degraded", "ingress_mode", "instance_id", "decided_at_us", "revision", "event", "features", "trace", "feature_schema_version", "txn")
     EVENT_ID_FIELD_NUMBER: _ClassVar[int]
     OUTCOME_FIELD_NUMBER: _ClassVar[int]
     SCORE_FIELD_NUMBER: _ClassVar[int]
@@ -101,6 +102,7 @@ class DecisionRecord(_message.Message):
     FEATURES_FIELD_NUMBER: _ClassVar[int]
     TRACE_FIELD_NUMBER: _ClassVar[int]
     FEATURE_SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    TXN_FIELD_NUMBER: _ClassVar[int]
     event_id: int
     outcome: Outcome
     score: float
@@ -119,4 +121,5 @@ class DecisionRecord(_message.Message):
     features: _features_pb2.FeatureVector
     trace: _trace_pb2.BenchTrace
     feature_schema_version: int
-    def __init__(self, event_id: _Optional[int] = ..., outcome: _Optional[_Union[Outcome, str]] = ..., score: _Optional[float] = ..., reason_codes: _Optional[_Iterable[str]] = ..., rule_hits: _Optional[_Iterable[_Union[RuleHit, _Mapping]]] = ..., model: _Optional[_Union[ModelResult, _Mapping]] = ..., policy_version: _Optional[str] = ..., rule_set_version: _Optional[str] = ..., path: _Optional[_Union[DecisionPath, str]] = ..., degraded: _Optional[bool] = ..., ingress_mode: _Optional[_Union[IngressMode, str]] = ..., instance_id: _Optional[str] = ..., decided_at_us: _Optional[int] = ..., revision: _Optional[int] = ..., event: _Optional[_Union[_transaction_pb2.TransactionEvent, _Mapping]] = ..., features: _Optional[_Union[_features_pb2.FeatureVector, _Mapping]] = ..., trace: _Optional[_Union[_trace_pb2.BenchTrace, _Mapping]] = ..., feature_schema_version: _Optional[int] = ...) -> None: ...
+    txn: _txn_pb2.TxnContext
+    def __init__(self, event_id: _Optional[int] = ..., outcome: _Optional[_Union[Outcome, str]] = ..., score: _Optional[float] = ..., reason_codes: _Optional[_Iterable[str]] = ..., rule_hits: _Optional[_Iterable[_Union[RuleHit, _Mapping]]] = ..., model: _Optional[_Union[ModelResult, _Mapping]] = ..., policy_version: _Optional[str] = ..., rule_set_version: _Optional[str] = ..., path: _Optional[_Union[DecisionPath, str]] = ..., degraded: _Optional[bool] = ..., ingress_mode: _Optional[_Union[IngressMode, str]] = ..., instance_id: _Optional[str] = ..., decided_at_us: _Optional[int] = ..., revision: _Optional[int] = ..., event: _Optional[_Union[_transaction_pb2.TransactionEvent, _Mapping]] = ..., features: _Optional[_Union[_features_pb2.FeatureVector, _Mapping]] = ..., trace: _Optional[_Union[_trace_pb2.BenchTrace, _Mapping]] = ..., feature_schema_version: _Optional[int] = ..., txn: _Optional[_Union[_txn_pb2.TxnContext, _Mapping]] = ...) -> None: ...

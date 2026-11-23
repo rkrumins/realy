@@ -1,0 +1,158 @@
+# A transaction formed by several linked messages: an account-to-account transfer as a payment hub sees
+# it (contracts/proto/realy/flows/v1/a2a.proto). Its parts are assembled into the unified payment event,
+# so every feature, rule, model and report works on it, and its own context is CEL `txn.*`.
+#
+#   link       the field every message of the transaction carries (the `txn` entity)
+#   messages   role -> event type (contracts/events)
+#   assemble   the scored transaction: built `into` the unified event when the `trigger` and every
+#              `require`d part have arrived (with the `optional` parts that arrived before them). A
+#              required part still missing `wait_ms` after the trigger: assembled without it
+#              (`on_timeout`: score_partial | rules_only), recorded in parts_present.
+#              fields: unified event field <- role.field | {const} | {from, map} (enum name mapping)
+#   stages     the lifecycle after assembly: which message (and `when`, CEL over that message) moves it.
+#              A `scored` stage is decided again: the assembled event with its `fields` overrides, read
+#              against the features without being counted twice.
+#   context    txn.<name> in CEL (and `source: txn` features): from a part's field, a count of a role's
+#              messages, a field changed between two roles, the time between two roles
+name: a2a_transfer
+link: payment_id
+messages:
+  initiation: payment_initiation
+  device: device_context
+  payee_check: payee_check
+  authentication: sca_result
+  submission: payment_submission
+  status: payment_status
+assemble:
+  into: payment
+  trigger: initiation
+  require: [payee_check]
+  optional: [device]
+  wait_ms: 150
+  on_timeout: score_partial
+  fields:
+    event_id: initiation.event_id
+    event_time_us: initiation.event_time_us
+    payment_type: { const: TRANSFER }
+    customer_id: initiation.customer_id
+    account_id: initiation.account_id
+    payee_id: initiation.payee_id
+    amount_minor: initiation.amount_minor
+    currency: initiation.currency
+    amount_usd_minor: initiation.amount_usd_minor
+    channel: { from: initiation.channel, map: { A2A_MOBILE_APP: IN_APP, A2A_ONLINE_BANKING: ONLINE_BANKING,
+                                                 A2A_API: ONLINE_BANKING, A2A_BRANCH: POS } }
+    entry_mode: { const: BANK_APP }
+    cvv_match: { const: true }       # not applicable to a transfer: the unified event reads them as passed
+    avs_match: { const: true }
+    lat: initiation.lat
+    lon: initiation.lon
+    device_id: device.device_id
+    ip_v4: device.ip_v4
+    ip_country: device.ip_country
+    ip_asn: device.ip_asn
+stages:
+  authenticated: { message: authentication, when: "event.passed" }
+  sca_failed:    { message: authentication, when: "!event.passed" }
+  submitted:
+    message: submission
+    scored: true
+    fields:
+      event_id: submission.event_id
+      event_time_us: submission.event_time_us
+      payee_id: submission.payee_id
+      amount_minor: submission.amount_minor
+      amount_usd_minor: submission.amount_usd_minor
+  settled:  { message: status, when: "event.code == 'PAYMENT_SETTLED'", terminal: true }
+  rejected: { message: status, when: "event.code == 'PAYMENT_REJECTED'", terminal: true }
+  returned: { message: status, when: "event.code == 'PAYMENT_RETURNED' || event.code == 'PAYMENT_RECALLED'", terminal: true }
+context:
+  payee_check:         { from: payee_check.result }
+  payee_type_mismatch: { from: payee_check.account_type_mismatch }
+  new_payee:           { from: initiation.new_payee }
+  remote_access:       { from: device.remote_access }
+  on_call:             { from: device.on_call }
+  session_age_s:       { from: device.session_age_s }
+  sca_attempts:        { count: authentication }
+  sca_passed:          { from: authentication.passed }
+  payee_changed:       { changed: payee_id, between: [initiation, submission] }
+  amount_changed:      { changed: amount_usd_minor, between: [initiation, submission] }
+  secs_to_submit:      { elapsed: [initiation, submission] }
+
+report: { by: [payee_check] }   # the run report breaks the decisions down by these context values
+
+# How the synthetic generator expands its transfers into these messages (realy/gen/flows.py, declarative):
+# the unified transfer it already draws is exactly what the parts assemble back into (every field the
+# assembly maps is filled from it). Steps run in order; delays are uniform [min, max] ms after the step
+# named by `after`; rates are probabilities or distributions; `fraud.<typology>` overrides them by name.
+generate:
+  expands: { payment_type: [TRANSFER] }
+  delays_ms:
+    device: [-60, 40]
+    payee_check: [20, 80]
+    authentication: [3000, 30000]
+    submission: [500, 5000]
+    status: [1000, 10000]
+  steps:
+    - role: initiation
+      set: { new_payee: { p: new_payee } }
+    - role: device
+      after: initiation
+      delay_ms: device
+      p: device                    # the app sends its device / session context at all
+      set: { session_age_s: { uniform: session_age_s }, remote_access: { p: remote_access },
+             emulator: { p: emulator }, on_call: { p: on_call } }
+    - role: payee_check
+      after: initiation
+      delay_ms: payee_check
+      p: payee_check               # the rest never answer: assembled partial at the wait
+      set: { payee_id: { col: payee_id }, result: { pick: payee_result },
+             account_type_mismatch: { p: account_type_mismatch } }
+      stop: { field: result, p: abandon }   # warned of a mismatch, the customer gives up
+    - role: authentication
+      after: payee_check
+      delay_ms: authentication
+      set: { method: { pick: sca_method } }
+      repeat: { p: sca_fail, max: 2, gap_ms: [5000, 40000], counter: attempt,
+                earlier: { passed: false }, last: { passed: true } }   # a failed first attempt, retried
+    - role: submission
+      after: authentication
+      delay_ms: submission
+      set: { scheme: A2A_INSTANT, payee_id: { alter: payee_changed } }   # malware rewriting the payee
+    - role: status
+      after: submission
+      delay_ms: status
+      set: { code: { pick: status } }
+  rates:
+    device: 0.97
+    payee_check: 0.995
+    payee_result: { PAYEE_MATCH: 0.93, PAYEE_CLOSE_MATCH: 0.04, PAYEE_NO_MATCH: 0.015, PAYEE_NOT_CHECKED: 0.015 }
+    account_type_mismatch: 0.02
+    abandon: { PAYEE_NO_MATCH: 0.4, PAYEE_CLOSE_MATCH: 0.15 }
+    new_payee: 0.08
+    remote_access: 0.002
+    on_call: 0.01
+    emulator: 0.0005
+    session_age_s: [20, 900]
+    sca_method: { SCA_APP_PUSH: 0.7, SCA_SMS_OTP: 0.3 }
+    sca_fail: 0.02
+    payee_changed: 0.0
+    status: { PAYMENT_SETTLED: 0.995, PAYMENT_REJECTED: 0.005 }
+  fraud:
+    app_scam_mule:
+      payee_result: { PAYEE_MATCH: 0.45, PAYEE_CLOSE_MATCH: 0.2, PAYEE_NO_MATCH: 0.3, PAYEE_NOT_CHECKED: 0.05 }
+      abandon: {}                  # coached by the scammer: proceeds despite the warning
+      new_payee: 0.9
+      on_call: 0.6
+      remote_access: 0.08
+    investment_scam:
+      payee_result: { PAYEE_MATCH: 0.6, PAYEE_CLOSE_MATCH: 0.15, PAYEE_NO_MATCH: 0.2, PAYEE_NOT_CHECKED: 0.05 }
+      abandon: {}
+      new_payee: 0.7
+      on_call: 0.3
+    account_takeover:
+      new_payee: 0.85
+      remote_access: 0.35
+      sca_fail: 0.3
+      payee_changed: 0.05
+      session_age_s: [2, 60]

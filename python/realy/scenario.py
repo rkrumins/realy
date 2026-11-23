@@ -23,7 +23,10 @@ REPO_ROOT = Path(_os.environ.get("REALY_HOME") or Path(__file__).resolve().paren
 SCENARIO_DIR = Path(_os.environ.get("REALY_SCENARIOS") or REPO_ROOT / "scenarios")
 DATA_DIR = Path(_os.environ.get("REALY_DATA") or REPO_ROOT / "data")
 
-Topology = Literal["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"]
+# the topologies contracts/topologies.yaml defines (a new topology there is accepted here)
+from .topologies import names as _topology_names  # noqa: E402
+from .topologies import runtime as _topology_runtime  # noqa: E402
+Topology = Literal[_topology_names()]  # type: ignore[valid-type]
 # Fraud typologies are data (contracts/usecases, python/realy/usecases.py): a kind is any enabled
 # typology in the registry, validated at load time rather than fixed in a Literal.
 FraudKind = str
@@ -117,6 +120,9 @@ class TrafficSpec(_Model):
     generators: int = 1              # emitter processes (shards of the customer population)
     sim_start: str = "2026-11-02T00:00:00Z"
     backfill_days: float = 0.0       # unpaced history replay before the measured run
+    # transactions formed by several linked messages (contracts/transactions): the generator sends each
+    # matching payment as its messages, which the pipeline assembles back into one transaction
+    flows: list[str] = Field(default_factory=list)
 
 
 class CampaignSpec(_Model):
@@ -204,6 +210,22 @@ class SyncSpec(_Model):
     target: str | None = None      # default: GATEWAY_GRPC env or localhost:8080
 
 
+# Scenario settings added after the fingerprints were pinned (contracts/testdata/golden/scenarios.json):
+# dotted paths left out of `Scenario.fingerprint()` while they equal their default. Every new setting is
+# added here (tests/test_golden_payments.py fails otherwise), so existing runs keep their policy_version.
+FINGERPRINT_OPTIONAL: tuple[str, ...] = ("traffic.flows",)
+
+
+def _drop_if_default(d: dict[str, Any], base: dict[str, Any], path: str) -> None:
+    *parents, leaf = path.split(".")
+    for k in parents:
+        d, base = d.get(k), (base or {}).get(k)
+        if not isinstance(d, dict):
+            return
+    if leaf in d and d[leaf] == (base or {}).get(leaf):
+        del d[leaf]
+
+
 class Scenario(_Model):
     name: str
     description: str = ""
@@ -230,6 +252,11 @@ class Scenario(_Model):
     @model_validator(mode="after")
     def _wire(self) -> "Scenario":
         self.traffic.profile._duration = self.traffic.duration_s
+        if self.traffic.flows and not _topology_runtime(self.topology).supports_flows:
+            ok = [t for t in _topology_names() if _topology_runtime(t).supports_flows]
+            raise ValueError(f"traffic.flows (multi-message transactions) need a topology that carries them "
+                             f"({' or '.join(ok)}), not {self.topology}: the Flink job assembles them, and "
+                             f"{self.topology} cannot wait for parts (contracts/topologies.yaml)")
         return self
 
     # ------------------------------------------------------------------ helpers
@@ -241,7 +268,15 @@ class Scenario(_Model):
         return DATA_DIR / f"world-{self.world.customers}-{self.seed}"
 
     def fingerprint(self) -> str:
-        return hashlib.sha256(json.dumps(self.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:16]
+        """Identity of everything this scenario configures. It is the ScoringConfig version, so it becomes
+        every decision's `policy_version`: settings added later are left out while they hold their
+        default (FINGERPRINT_OPTIONAL), so adding a setting never changes existing scenarios' decisions."""
+        d = self.model_dump(mode="json")
+        if FINGERPRINT_OPTIONAL:
+            base = type(self)(name=self.name).model_dump(mode="json")
+            for path in FINGERPRINT_OPTIONAL:
+                _drop_if_default(d, base, path)
+        return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
     def scoring_config(self) -> dict[str, Any]:
         """COMPLETE ScoringConfig JSON (service defaults + this scenario), rule set inlined.
@@ -252,10 +287,9 @@ class Scenario(_Model):
         cfg.update({"version": self.fingerprint(), "budget_ms": int(self.budget.hot_path_p99_ms),
                     "feature_sample_permille": self.feature_sample_permille})
         cfg.update(self.scoring)
-        rules_path = REPO_ROOT / "rules" / f"{self.rules}.yaml"
-        text = rules_path.read_text()
+        text = resolve_rule_set(self.rules)
         cfg.setdefault("rule_set_yaml", text)
-        if self.topology.startswith("echo"):
+        if _topology_runtime(self.topology).echo:
             cfg["echo"] = True
         return cfg
 
@@ -264,6 +298,27 @@ class Scenario(_Model):
         cfg = dict(MODEL_SERVER_DEFAULTS)
         cfg.update(self.model_server)
         return cfg
+
+
+def resolve_rule_set(name: str) -> str:
+    """The YAML of rules/<name>.yaml as the services receive it. A rule set may `extends: <base>`: the
+    base's rules first (a rule of the same id replaced), then its own; its thresholds and step-up
+    settings override the base's; its version is its own. Without `extends` the file is sent as written."""
+    text = (REPO_ROOT / "rules" / f"{name}.yaml").read_text()
+    doc = yaml.safe_load(text) or {}
+    base_name = doc.get("extends")
+    if not base_name:
+        return text
+    base = yaml.safe_load(resolve_rule_set(str(base_name))) or {}
+    own_ids = {r.get("id") for r in doc.get("rules") or []}
+    merged = dict(base)
+    for k, v in doc.items():
+        if k in ("rules", "extends"):
+            continue
+        merged[k] = {**(base.get(k) or {}), **v} if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    merged["rules"] = [r for r in base.get("rules") or [] if r.get("id") not in own_ids] + list(doc.get("rules") or [])
+    head = f"# rules/{name}.yaml resolved: extends {base_name} (python -m realy.scenario resolves it)\n"
+    return head + yaml.safe_dump(merged, sort_keys=False, allow_unicode=True)
 
 
 # Explicit values for every ScoringConfig / ModelServerConfig field a scenario may leave out

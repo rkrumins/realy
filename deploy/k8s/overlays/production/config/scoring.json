@@ -1,0 +1,11 @@
+{
+  "version": "prod-1",
+  "budgetMs": 100,
+  "featureDeadlineMs": 30,
+  "modelDeadlineMs": 80,
+  "onDeadline": "FALLBACK_RULES",
+  "featureSource": "redis",
+  "selfInclusion": true,
+  "featureSamplePermille": 100,
+  "auditOnFailure": "SPOOL_LOCAL"
+}

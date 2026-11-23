@@ -11,7 +11,6 @@ import yaml
 from ..scenario import REPO_ROOT
 
 SCHEMA_PATH = REPO_ROOT / "contracts" / "features" / "feature_schema.yaml"
-ENTITY_ENUM = {"customer": 1, "card": 2, "device": 3, "ip": 4, "merchant": 5, "terminal": 6, "payee": 7}
 _DUR = re.compile(r"^(\d+)(s|m|h|d)$")
 _UNIT_US = {"s": 1_000_000, "m": 60_000_000, "h": 3_600_000_000, "d": 86_400_000_000}
 
@@ -105,8 +104,15 @@ class FeatureSchema:
             return -1
 
 
-@lru_cache(maxsize=4)
-def load_schema(path: str | Path = SCHEMA_PATH) -> FeatureSchema:
+def load_schema(path: str | Path | None = None) -> FeatureSchema:
+    """The feature schema: `path`, else $FEATURE_SCHEMA (the same override the Java services honour),
+    else contracts/features/feature_schema.yaml. Cached per path."""
+    import os
+    return _load_schema(str(path or os.environ.get("FEATURE_SCHEMA") or SCHEMA_PATH))
+
+
+@lru_cache(maxsize=8)
+def _load_schema(path: str) -> FeatureSchema:
     raw = yaml.safe_load(Path(path).read_text())
     feats: list[FeatureSpec] = []
     for i, f in enumerate(raw["features"]):
@@ -120,6 +126,12 @@ def load_schema(path: str | Path = SCHEMA_PATH) -> FeatureSchema:
             w, g = parse_duration_us(f["window"]), parse_duration_us(f["granularity"])
             if w % g:
                 raise ValueError(f"{f['name']}: window must be a multiple of granularity")
+            from . import aggregations
+            if f.get("agg") not in aggregations.names():
+                raise ValueError(f"{f['name']}: unknown aggregation {f.get('agg')!r} "
+                                 f"(registered: {', '.join(aggregations.names())})")
+            if aggregations.get(f["agg"]).input in ("numeric", "key") and not f.get("value"):
+                raise ValueError(f"{f['name']}: aggregation {f['agg']} needs `value:` (the event field it reads)")
             kw.update(entity=f["entity"], agg=f["agg"], value=f.get("value"), filter=f.get("filter"),
                       window_us=w, granularity_us=g)
         elif src == "profile":
@@ -130,6 +142,11 @@ def load_schema(path: str | Path = SCHEMA_PATH) -> FeatureSchema:
             if f.get("expr") is not None:
                 import cel
                 cel.compile(f["expr"])          # fail at load, not on the first event
+            else:
+                from . import derived_fns
+                if not derived_fns.has(f["fn"]):
+                    raise ValueError(f"{f['name']}: unknown derived fn {f['fn']!r} "
+                                     f"(registered: {', '.join(derived_fns.names())})")
             kw.update(fn=f.get("fn"), expr=f.get("expr"))
         else:
             raise ValueError(f"{f['name']}: unknown source {src}")

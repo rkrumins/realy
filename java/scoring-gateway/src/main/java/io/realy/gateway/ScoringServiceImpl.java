@@ -54,7 +54,11 @@ public final class ScoringServiceImpl extends ScoringServiceGrpc.ScoringServiceI
     public void score(ScoreRequest req, StreamObserver<ScoreResponse> obs) {
         handle(req, unaryMode()).whenComplete((d, err) -> {
             if (err != null) {
-                obs.onError(Status.INTERNAL.withDescription(err.toString()).asRuntimeException());
+                // the detail stays in the gateway's log; the caller gets a generic status with an id to quote
+                String ref = Long.toHexString(System.nanoTime());
+                org.slf4j.LoggerFactory.getLogger(ScoringServiceImpl.class).error("score failed (ref {}) for event {}",
+                        ref, req.getEvent().getEventId(), err);
+                obs.onError(Status.INTERNAL.withDescription("scoring failed (ref " + ref + ")").asRuntimeException());
             } else if (d.getReasonCodesList().contains("DEADLINE_EXCEEDED")) {
                 obs.onError(Status.DEADLINE_EXCEEDED.withDescription("scoring budget exceeded").asRuntimeException());
             } else {

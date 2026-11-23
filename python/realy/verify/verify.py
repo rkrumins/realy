@@ -30,7 +30,16 @@ from ..features.engine import ReferenceEngine
 from ..scenario import REPO_ROOT, Scenario
 
 from ..policy import NAMES as OUTCOME  # noqa: E402  (APPROVE, REVIEW, DECLINE, CHALLENGE)
-EXACT_ENTITIES = ("customer", "card")
+
+
+def _exact_entities() -> tuple[str, ...]:
+    """Entities verified exactly: the pipeline's partition entity and what it owns (contracts/entities.yaml);
+    the rest are shared across partitions and reported as an agreement rate."""
+    from ..bindings import pipeline
+    return tuple(pipeline().exact_entities())
+
+
+EXACT_ENTITIES = _exact_entities()
 
 
 def _read(run_dir: Path, pattern: str) -> pa.Table | None:
@@ -55,10 +64,18 @@ class ProxyScorer:
                         return cls(p)
                 except ValueError:
                     continue
-            import warnings
-            warnings.warn(f"no weights for served model {version}: score parity uses the default weights "
-                          "and will not match", stacklevel=2)
+            default = cls()
+            if default.version != version:
+                # a model served from elsewhere (Triton, KServe, a version trained on another machine):
+                # its score cannot be recomputed here, so its parity is reported as not checkable
+                default.checkable = False
+                default.not_checkable = (f"no proxy weights for the served model {version} here "
+                                         "(models/proxy, REALY_MODELS): its scores cannot be recomputed")
+            return default
         return cls()
+
+    checkable = True
+    not_checkable: str | None = None
 
     def __init__(self, path: str | Path | None = None) -> None:
         path = path or os.environ.get("MODEL_WEIGHTS") or REPO_ROOT / "models" / "proxy" / "default.weights.json"
@@ -125,6 +142,14 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     n_run_events = int(events.num_rows)
     if "backfill" in events.column_names:
         n_run_events = int(events.num_rows - pa.compute.sum(events["backfill"]).as_py())
+    emitted = _read(run_dir, "emit-*.parquet")
+    if emitted is not None and emitted.num_rows > n_run_events:
+        # every traced record the emitter sent expects a decision: the unified events, and a re-scored
+        # lifecycle stage of a multi-message transaction (a decision of its own, not an event row)
+        n_run_events = int(emitted.num_rows)
+    from ..topologies import runtime as _runtime
+    if _runtime(sc.topology).external:
+        return verify_external(run_dir, sc, dec, n_run_events, clickhouse, schema)
     dec = dec.filter(pa.compute.equal(dec["revision"], 0))
     d_ids = dec["event_id"].to_numpy()
     _, first = np.unique(d_ids, return_index=True)
@@ -133,14 +158,20 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
 
     # ------------------------------------------------------------------ 1. features
     world = World.load(sc.world_dir)
-    cp = world.customer_profile_arrays()
-    mp = world.merchant_profile_arrays()
     cols = {c: events[c].to_numpy(zero_copy_only=False) for c in events.column_names
             if c not in ("t_intended_us", "t_intended_offset_us")}
     order = np.lexsort((cols["event_id"], cols["event_time_us"]))
+    # multi-message transactions: the pipeline saw parts, assembled in its partition order (the twin
+    # replays that, forcing the partial assemblies the decisions recorded); rules see each one's context
+    txn_ctx: dict[int, dict] = {}
+    assembled_rows: dict[int, dict] = {}
+    parts = _read(run_dir, "parts-*.parquet")
+    if parts is not None and parts.num_rows:
+        order, txn_ctx, flow_info, assembled_rows = flow_order(cols, parts, dec)
+        out["transactions"] = flow_info
     n_all = order.size
     mod = max(1, int(math.ceil(n_all / max_events)))
-    entities = schema.stream_entities() if mod == 1 else list(EXACT_ENTITIES)
+    entities = schema.stream_entities() if mod == 1 else [e for e in schema.stream_entities() if e in EXACT_ENTITIES]
     if mod > 1:
         keep = (cols["customer_id"][order] % np.uint64(mod)) == 0
         order = order[keep]
@@ -158,17 +189,20 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
                 missing[int(i)] = np.pad(bits, (0, nf - bits.size)).astype(bool)
     engine = ReferenceEngine(schema, entities)
     filt = [cel.compile(expr) for expr in schema.filters.values()]
-    cust_feats = schema.profile_features("customer")
-    merch_feats = schema.profile_features("merchant")
-    c_rows = world.customer_row(cols["customer_id"])
-    m_ids = cols["merchant_id"]
+    from ..runner.seed import profile_entities
+    # every entity with profile features: (its world columns, its features, the world row of each event)
+    profiles = {e: (world.profile_arrays(e), schema.profile_features(e),
+                    world.profile_rows(e, cols[schema.entities[e]])) for e in profile_entities(schema)}
     names = list(cols)
     lists = {k: cols[k].tolist() for k in names}
     ref: dict[int, np.ndarray] = {}
     buf = [0.0] * nf
     for i in order.tolist():
         ev = {k: lists[k][i] for k in names}
-        view = event_view(ev)
+        # an assembled transaction as the pipeline saw it: a part that came too late is absent from it
+        ev.update(assembled_rows.get(int(ev["event_id"]), {}))
+        tctx = txn_ctx.get(int(ev["event_id"]))
+        view = event_view(ev, tctx)
         ctx = cel.Context()
         ctx.add_variable("event", view)
         ctx.add_variable("f", {})
@@ -176,30 +210,26 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         for b, p in enumerate(filt):
             if p.execute(ctx):
                 mask |= 1 << b
-        engine.process(ev, mask, buf)
+        # a re-scored stage of an assembled transaction reads its features, it is not counted again
+        if tctx is not None and tctx.get("stage") not in ("", "assembled"):
+            engine.read(ev, mask, buf)
+        else:
+            engine.process(ev, mask, buf)
         eid = int(ev["event_id"])
         if eid not in served:
             continue
         v = np.asarray(buf, dtype=np.float64).astype(np.float32)
-        r = int(c_rows[i])
         attrs = None
         mb = missing.get(eid)
-        cust_missing = mb is not None and any(mb[s.index] for s in cust_feats)
-        merch_missing = mb is not None and any(mb[s.index] for s in merch_feats)
-        if cust_missing:
-            r = -1  # the pipeline served defaults (lookup deadline/error): mirror it
-        if r >= 0:
-            for s in cust_feats:
-                v[s.index] = np.float32(cp[s.field][r])
-            attrs = {a: np.float32(cp[a][r]) for a in schema.profile_attributes.get("customer", [])}
-        else:
-            for s in cust_feats:
-                v[s.index] = np.float32(s.default)
-        mid = int(m_ids[i])
-        mr = int(world.merchant_row(np.asarray([mid], np.uint64))[0]) if mid and not merch_missing else -1
-        for s in merch_feats:
-            v[s.index] = np.float32(mp[s.field][mr]) if mr >= 0 else np.float32(s.default)
-        compute_derived(schema, ev, attrs, v)
+        for ent, (arr, specs, rows) in profiles.items():
+            r = int(rows[i]) if arr is not None else -1
+            if mb is not None and any(mb[s.index] for s in specs):
+                r = -1  # the pipeline served defaults (lookup deadline/error): mirror it
+            for s in specs:
+                v[s.index] = np.float32(arr[s.field][r]) if r >= 0 else np.float32(s.default)
+            if ent == "customer" and r >= 0:
+                attrs = {a: np.float32(arr[a][r]) for a in schema.profile_attributes.get("customer", [])}
+        compute_derived(schema, ev, attrs, v, txn_ctx.get(eid))
         ref[eid] = v
     common = sorted(set(ref) & set(served))
     per_feature: dict[str, dict] = {}
@@ -226,7 +256,8 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         "exact_set_agreement": float(np.mean([per_feature[k]["agreement"] for k in exact])) if exact else None,
         "per_feature": per_feature,
         "worst": sorted(((k, v["agreement"]) for k, v in per_feature.items()), key=lambda x: x[1])[:8],
-        "note": ("Flink-inline: customer/card features must match exactly" if sc.topology == "flink-inline" else
+        "note": (f"{sc.topology}: customer/card features are computed in the task that scores, so must match exactly"
+                 if _scorer_in_task(sc.topology) else
                  "gateway topology: customer/card features are re-windowed from online-store state blobs at each "
                  "event's time (target >= 99%); the remainder is store lag - events of the same entity not yet "
                  "written to Redis when the gateway read it"),
@@ -253,8 +284,9 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     for k, eid in enumerate(sample):
         j = d_pos[eid]
         ev = {c: lists[c][ev_idx[eid]] for c in names}
+        ev.update(assembled_rows.get(eid, {}))
         fmap = {f.name: float(served[eid][f.index]) for f in schema.features}
-        view = event_view(ev)
+        view = event_view(ev, txn_ctx.get(eid))
         hits = rules.evaluate(fmap, view)
         got = set(x for x in (dd["rule_hits"][j] or "").split(",") if x)
         if {h for h, _ in hits} == got:
@@ -262,7 +294,8 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
         elif len(rule_mismatch) < 5:
             rule_mismatch.append({"event_id": eid, "python": sorted(h for h, _ in hits), "pipeline": sorted(got)})
         full = int(dd["path"][j]) == 0
-        sc_ = float(py_scores[k]) if full else float("nan")
+        # a model that cannot be recomputed here: the outcome is re-derived from the score it served
+        sc_ = (float(py_scores[k]) if scorer.checkable else float(dd["score"][j])) if full else float("nan")
         if full:
             n_full += 1
             if abs(sc_ - float(dd["score"][j])) <= 1e-5:
@@ -271,7 +304,9 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
             outcome_ok += 1
     m = max(1, len(sample))
     out["rules"] = {"checked": len(sample), "parity": rule_ok / m, "mismatches": rule_mismatch}
-    out["score"] = {"checked": n_full, "parity": score_ok / max(1, n_full), "model_version": scorer.version}
+    out["score"] = ({"checked": n_full, "parity": score_ok / max(1, n_full), "model_version": scorer.version}
+                    if scorer.checkable else
+                    {"checked": 0, "parity": None, "model_version": mv, "not_checkable": scorer.not_checkable})
     out["outcome"] = {"checked": len(sample), "parity": outcome_ok / m}
 
     # ------------------------------------------------------------------ 5. ClickHouse audit
@@ -284,7 +319,11 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     # blobs and differ only by store lag (REALY_VERIFY_MIN_EXACT, default 0.98). Lower means the served
     # features are wrong, e.g. state left over from another world.
     exact = out["features"]["exact_set_agreement"] or 0
-    target = 0.999 if sc.topology == "flink-inline" else float(os.environ.get("REALY_VERIFY_MIN_EXACT", "0.98"))
+    from ..topologies import runtime
+    rt = runtime(sc.topology)
+    # in-task features must be exact; a store-backed scorer re-windows state (store lag allowed, env override)
+    target = (rt.exact_target or 0.98) if rt.scorer == "flink" else float(
+        os.environ.get("REALY_VERIFY_MIN_EXACT", str(rt.exact_target or 0.98)))
     out["features"]["exact_set_target"] = target
     out["features"]["exact_set_ok"] = exact >= target or out["features"]["compared_events"] == 0
     # The reference replays THIS run's events only. Warm state that earlier runs fed (same world, same
@@ -301,6 +340,148 @@ def verify_run(run_dir: Path | str, clickhouse: str | None = None, max_events: i
     return out
 
 
+EXTERNAL_NOTE = "decided by your scorer: PulseBench does not know how, so it cannot recompute it"
+
+
+def verify_external(run_dir: Path, sc: Scenario, dec: pa.Table, expected: int, clickhouse: str | None,
+                    schema) -> dict[str, Any]:
+    """Verify a black-box scorer's run: what can be proved without knowing how it decides. Every expected
+    event has exactly one decision (missing and duplicates counted), the audit in ClickHouse is complete,
+    and every outcome is a valid one. Features, rules and scores are reported as not checkable."""
+    out: dict[str, Any] = {"run_id": run_dir.name, "topology": sc.topology}
+    first = dec.filter(pa.compute.equal(dec["revision"], 0))
+    ids = first["event_id"].to_numpy()
+    uniq = int(np.unique(ids).size)
+    outcomes = first["outcome"].to_numpy()
+    valid = np.isin(outcomes, [1, 2, 3, 4])          # APPROVE, REVIEW, DECLINE, CHALLENGE
+    names = {1: "APPROVE", 2: "REVIEW", 3: "DECLINE", 4: "CHALLENGE"}
+    u, c = np.unique(outcomes, return_counts=True)
+    out["decisions"] = {"expected": expected, "decided_unique": uniq, "missing": max(0, expected - uniq),
+                        "duplicates": int(ids.size - uniq), "invalid_outcomes": int((~valid).sum()),
+                        "outcomes": {names.get(int(k), str(int(k))): int(n) for k, n in zip(u, c)}}
+    out["features"] = {"compared_events": 0, "exact_set_agreement": None, "exact_set_ok": True, "comparable": True,
+                       "note": f"not checked: {EXTERNAL_NOTE}", "worst": [], "not_checkable": EXTERNAL_NOTE}
+    for k in ("rules", "score", "outcome"):
+        out[k] = {"checked": 0, "parity": None, "not_checkable": EXTERNAL_NOTE}
+    ch = clickhouse or os.environ.get("CLICKHOUSE_URL", "http://localhost:8123")
+    try:
+        out["audit"] = audit_checks(ch, run_dir.name, expected, None, None, schema)
+    except Exception as e:  # noqa: BLE001
+        out["audit"] = {"error": f"ClickHouse unavailable or not ingesting: {e}"}
+    out["passed"], out["reasons"] = judge(out)
+    out["inconclusive"] = False
+    (run_dir / "verify.json").write_text(json.dumps(out, indent=1, default=float))
+    return out
+
+
+def _scorer_in_task(topology: str) -> bool:
+    from ..topologies import runtime
+    return runtime(topology).scorer == "flink"
+
+
+def flow_order(cols: dict[str, np.ndarray], parts: pa.Table, dec: pa.Table
+               ) -> tuple[np.ndarray, dict[int, dict], dict, dict[int, dict]]:
+    """The order the pipeline processed a run's events in when some of them arrived as parts of
+    multi-message transactions (parts-*.parquet): every unified event and part in emission order (one
+    customer's messages stay ordered on its partition), through the reference assembler. Returns the
+    event-log indices in that order (assembled transactions at their assembly), each assembled
+    transaction's context (event.txn) by event id, a summary, and each assembled transaction's fields
+    as assembled (the event log holds the transfer the generator drew; an optional part that arrived
+    after assembly is not in what the pipeline scored)."""
+    from ..bindings import event_type
+    from ..bindings.codec import message_class
+    from ..bindings.transactions import Assembler, transaction, transactions
+    ptypes = parts["type"].to_pylist()
+    txns = sorted({t.name for ty in set(ptypes) for t in transactions().values() if ty in t.roles.values()})
+    a = Assembler([transaction(n) for n in txns])
+    # partial assemblies the pipeline recorded (a wall-clock wait expired): replay them as they were
+    forced = 0
+    if "txn_partial" in dec.column_names:
+        tp = dec["txn_partial"].to_numpy(zero_copy_only=False)
+        tparts = dec["txn_parts"].to_numpy(zero_copy_only=False)
+        tname = dec["txn"].to_pylist() if "txn" in dec.column_names else [""] * dec.num_rows
+        for eid, partial, n, tx in zip(dec["event_id"].to_numpy().tolist(), tp.tolist(), tparts.tolist(), tname):
+            if partial and tx:
+                a.force(tx.split("/", 1)[0], int(eid), int(n))
+                forced += 1
+    idx_of = {int(e): i for i, e in enumerate(cols["event_id"].tolist())}
+    # transfers sent as parts are not unified records on the wire: their initiation stands for them
+    initiations = set()
+    payloads = parts["payload"].to_pylist()
+    ptime = parts["event_time_us"].to_numpy()
+    for ty, pl in zip(ptypes, payloads):
+        for t in txns:
+            tx = transaction(t)
+            if ty == tx.roles[tx.trigger]:
+                c = event_type(ty).codec
+                initiations.add(int(getattr(message_class(c.full_name).FromString(pl), tx.link)))
+    stream = [(int(cols["event_time_us"][i]), 0, i, None) for i in range(cols["event_id"].shape[0])
+              if int(cols["event_id"][i]) not in initiations]
+    stream += [(int(ptime[j]), 1, j, ptypes[j]) for j in range(len(ptypes))]
+    stream.sort(key=lambda x: (x[0], x[1], x[2]))
+    names = list(cols)
+    out_idx: list[int] = []
+    ctx: dict[int, dict] = {}
+    rows: dict[int, dict] = {}
+    stage_rows: list[dict] = []
+    n_asm = n_partial = 0
+
+    def take(outs):
+        nonlocal n_asm, n_partial
+        for o in outs:
+            eid = int(o.row["event_id"])
+            if o.kind == "stage":
+                # a re-scored stage: a decision of its own, not in the event log; read-only
+                stage_rows.append({k: (v.item() if hasattr(v, "item") else v) for k, v in o.row.items()})
+                out_idx.append(-len(stage_rows))
+                ctx[eid] = o.context
+                continue
+            i = idx_of.get(eid)
+            if i is None:
+                continue
+            out_idx.append(i)
+            if o.kind == "assembled":
+                ctx[eid] = o.context
+                rows[eid] = {k: (v.item() if hasattr(v, "item") else v) for k, v in o.row.items()}
+                n_asm += 1
+                n_partial += int(o.partial)
+    for _, kind, i, ty in stream:
+        if kind == 0:
+            take(a.process("payment", {k: cols[k][i] for k in names}))
+        else:
+            c = event_type(ty).codec
+            take(a.process(ty, c.row(message_class(c.full_name).FromString(payloads[i]))))
+    take(a.close())
+    seen = set(out_idx)
+    rest = [i for i in np.lexsort((cols["event_id"], cols["event_time_us"])).tolist() if i not in seen]
+    # re-scored stages become rows after the event log's (their ground truth is their transaction's)
+    n0 = cols["event_id"].shape[0]
+    if stage_rows:
+        by_customer: dict[int, list[int]] = {}
+        for i in range(n0):
+            by_customer.setdefault(int(cols["customer_id"][i]), []).append(i)
+        extra: dict[str, list] = {k: [] for k in cols}
+        for r in stage_rows:
+            # its transaction's unified row (same customer, the closest earlier transfer) for the columns a
+            # stage does not carry (ground truth, labels)
+            cand = [i for i in by_customer.get(int(r["customer_id"]), []) if int(cols["payment_type"][i]) == 3
+                    and int(cols["event_time_us"][i]) <= int(r["event_time_us"])]
+            base = max(cand, key=lambda i: int(cols["event_time_us"][i])) if cand else None
+            for k in cols:
+                if k in r:
+                    extra[k].append(r[k])
+                elif base is not None:
+                    extra[k].append(cols[k][base])
+                else:
+                    extra[k].append(np.zeros(1, cols[k].dtype)[0] if cols[k].dtype.kind != "O" else "")
+        for k in cols:
+            cols[k] = np.concatenate([cols[k], np.asarray(extra[k], dtype=cols[k].dtype)])
+    order = [i if i >= 0 else n0 + (-i - 1) for i in out_idx]
+    info = {"contracts": txns, "parts": len(ptypes), "assembled": n_asm, "partial": n_partial,
+            "stage_decisions": len(stage_rows), "partial_replayed_from_decisions": forced, "not_assembled": len(rest)}
+    return np.asarray(order + rest, np.int64), ctx, info, rows
+
+
 class ClickHouseError(RuntimeError):
     """ClickHouse failed a query, possibly after HTTP 200: it streams results, so an exception raised
     mid-query arrives in the body (`Code: N. DB::Exception: ...`), not as an HTTP error status."""
@@ -313,7 +494,8 @@ def _q(ch: str, sql: str, retries: int = 2) -> list[dict]:
     last: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            r = httpx.post(ch, params={"default_format": "JSONEachRow"}, content=sql, timeout=120)
+            from ..common import clickhouse as chc
+            r = chc.post(sql, params={"default_format": "JSONEachRow"}, timeout=120, base=ch)
             if r.status_code >= 400:
                 raise ClickHouseError(f"HTTP {r.status_code}: {r.text.strip()[:300]}")
             rows = []
@@ -330,7 +512,7 @@ def _q(ch: str, sql: str, retries: int = 2) -> list[dict]:
     raise ClickHouseError(f"{last} (query: {' '.join(sql.split())[:160]})")
 
 
-def audit_checks(ch: str, run_id: str, emitted: int, scorer: ProxyScorer, rules: Rules, schema) -> dict[str, Any]:
+def audit_checks(ch: str, run_id: str, emitted: int, scorer: ProxyScorer | None, rules: Rules | None, schema) -> dict[str, Any]:
     import time
     # wait for asynchronous ingestion to catch up (bounded)
     got = 0
@@ -354,7 +536,7 @@ def audit_checks(ch: str, run_id: str, emitted: int, scorer: ProxyScorer, rules:
         WHERE run_id = '{run_id}' AND revision = 0 AND path = 'FULL' AND length(features_raw) = {len(schema.features)}
         ORDER BY cityHash64(event_id) LIMIT 2000""")
     replay_ok = 0
-    if sample:
+    if sample and scorer is not None and scorer.checkable:
         X = np.asarray([s["features_raw"] for s in sample], np.float32)
         py = scorer.score(X)
         replay_ok = int(sum(abs(float(p) - float(s["score"])) <= 1e-5 for p, s in zip(py, sample)))
@@ -395,6 +577,8 @@ def judge(v: dict[str, Any]) -> tuple[bool, list[str]]:
     """Pass only if every check holds; every failure names itself."""
     reasons: list[str] = []
     for k, label in (("rules", "rules"), ("score", "model score"), ("outcome", "outcome")):
+        if v[k]["parity"] is None and v[k].get("not_checkable"):
+            continue   # declared, shown by render(): not a failure of the pipeline
         if v[k]["parity"] != 1.0:
             reasons.append(f"{label} parity {v[k]['parity']:.4%} (must be 100%)")
     f = v["features"]
@@ -403,6 +587,12 @@ def judge(v: dict[str, Any]) -> tuple[bool, list[str]]:
     elif not f["exact_set_ok"]:
         reasons.append(f"exact-set feature agreement {(f['exact_set_agreement'] or 0):.4%} below "
                        f"{f['exact_set_target']:.1%}")
+    d = v.get("decisions")
+    if d:
+        if d["missing"]:
+            reasons.append(f"{d['missing']:,} of {d['expected']:,} events have no decision")
+        if d["invalid_outcomes"]:
+            reasons.append(f"{d['invalid_outcomes']:,} decisions carry no valid outcome")
     a = v.get("audit", {})
     if "complete" in a and not a["complete"]:
         reasons.append(f"ClickHouse audit incomplete ({a.get('audited_unique', 0):,} of {a.get('emitted', 0):,} decisions)")
@@ -418,12 +608,21 @@ def render(v: dict[str, Any]) -> str:
               if f.get("comparable", True) else f"NOT JUDGED: {f.get('not_comparable_because')}")
     lines = [f"=== verify {v['run_id']}: {head} ===",
              *(f"  - {r}" for r in v.get("reasons") or []),
-             f"features: {f['compared_events']:,} served vectors vs reference; exact-set agreement "
-             f"{(f['exact_set_agreement'] or 0):.4%} ({judged}; {f['note']})",
-             "  lowest agreement: " + ", ".join(f"{k} {a:.1%}" for k, a in f["worst"]),
-             f"rules parity (Java CEL vs Python CEL): {v['rules']['parity']:.4%} of {v['rules']['checked']:,}",
-             f"score parity (proxy model recompute): {v['score']['parity']:.4%} of {v['score']['checked']:,}",
-             f"outcome parity: {v['outcome']['parity']:.4%}"]
+             *([f"features: not checkable ({f['not_checkable']})"] if f.get("not_checkable") else
+               [f"features: {f['compared_events']:,} served vectors vs reference; exact-set agreement "
+                f"{(f['exact_set_agreement'] or 0):.4%} ({judged}; {f['note']})",
+                "  lowest agreement: " + ", ".join(f"{k} {a:.1%}" for k, a in f["worst"])]),
+             (f"rules parity (Java CEL vs Python CEL): {v['rules']['parity']:.4%} of {v['rules']['checked']:,}"
+              if v["rules"].get("parity") is not None else f"rules parity: not checkable ({v['rules'].get('not_checkable')})"),
+             (f"score parity (proxy model recompute): {v['score']['parity']:.4%} of {v['score']['checked']:,}"
+              if v["score"].get("parity") is not None else f"score parity: not checkable ({v['score'].get('not_checkable')})"),
+             (f"outcome parity: {v['outcome']['parity']:.4%}"
+              if v["outcome"].get("parity") is not None else f"outcome parity: not checkable ({v['outcome'].get('not_checkable')})")]
+    d = v.get("decisions")
+    if d:
+        lines.insert(1 + len(v.get("reasons") or []), f"decisions: {d['decided_unique']:,} of {d['expected']:,} events decided, missing {d['missing']:,}, "
+                        f"duplicates {d['duplicates']:,}, invalid outcomes {d['invalid_outcomes']:,} "
+                        f"({', '.join(f'{k} {n:,}' for k, n in d['outcomes'].items())})")
     a = v.get("audit", {})
     if "error" in a:
         lines.append(f"audit: {a['error']}")
@@ -432,5 +631,6 @@ def render(v: dict[str, Any]) -> str:
                      f"rows {a['rows_including_duplicates']:,} -> {a['rows_after_replacing_merge']:,} after merge, "
                      f"visibility p50 {a['visibility_p50_ms']:.0f} ms p99 {a['visibility_p99_ms']:.0f} ms, "
                      f"training rows {a['training_rows']:,} ({a['training_fraud_labels']} fraud labels), "
-                     f"replay parity {a['replay_score_parity']:.2%} of {a['replay_checked']}")
+                     + (f"replay parity {a['replay_score_parity']:.2%} of {a['replay_checked']}" if a.get("replay_checked")
+                        else "score replay not checkable"))
     return "\n".join(lines)

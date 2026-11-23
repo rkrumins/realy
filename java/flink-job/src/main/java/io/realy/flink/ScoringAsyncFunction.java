@@ -35,6 +35,7 @@ import org.apache.flink.streaming.api.functions.async.RichAsyncFunction;
  */
 public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, DecisionBytes> {
     private final String initialConfigJson;
+    private final String schemaYaml;
     private transient ScoringOrchestrator orchestrator;
     private transient KServeModelClient model;
     private transient OnlineStore store;
@@ -43,19 +44,26 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
     private transient String instance;
 
     public ScoringAsyncFunction(String initialConfigJson) {
+        this(initialConfigJson, null);
+    }
+
+    public ScoringAsyncFunction(String initialConfigJson, String schemaYaml) {
+        this.schemaYaml = schemaYaml;
         this.initialConfigJson = initialConfigJson;
     }
 
     @Override
     public void open(OpenContext ctx) {
-        FeatureSchema schema = FeatureSchema.load();
+        FeatureSchema schema = FeatureSchema.of(schemaYaml);
+        // decisions are keyed by the pipeline's partition entity (the customer for payments), as the events
+        partitionOrdinal = schema.rowPlan().entityOrdinal(io.realy.scoring.binding.PipelineBinding.current().partitionKey);
         ScoringConfig cfg = ScoringConfigHolder.defaults();
         if (initialConfigJson != null && !initialConfigJson.isBlank()) cfg = ProtoJson.overlay(cfg, initialConfigJson);
         ScoringConfigHolder holder = new ScoringConfigHolder(cfg);
         store = "mock".equals(holder.get().cfg().getFeatureSource())
                 ? new MockOnlineStore() : RedisOnlineStore.shared(Env.str("REDIS_URI", "redis://localhost:6379"), 4);
-        model = new KServeModelClient(Env.str("MODEL_TARGET", "localhost:8001"), Env.str("MODEL_NAME", "fraud_mlp"),
-                Env.integer("MODEL_INPUT_DIM", schema.size()), 2);
+        model = KServeModelClient.forServedModel(Env.str("MODEL_TARGET", "localhost:8001"), Env.str("MODEL_NAME", "fraud_mlp"),
+                schema.size(), 2);
         model.configure(holder.get().cfg());
         holder.onChange(a -> model.configure(a.cfg()));
         instance = Env.str("HOSTNAME", "flink") + "/" + getRuntimeContext().getTaskInfo().getIndexOfThisSubtask();
@@ -78,8 +86,16 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
         return t;
     }
 
-    static byte[] key(long customerId) {
-        return Long.toUnsignedString(customerId).getBytes(StandardCharsets.UTF_8);
+    private transient int partitionOrdinal = -1;
+
+    static byte[] key(long id) {
+        return Long.toUnsignedString(id).getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** The decision's Kafka key: the event's partition-entity id (from the decoded row). */
+    static byte[] key(Envelope env, int partitionOrdinal, TransactionEvent e) {
+        if (env.row != null && partitionOrdinal >= 0 && partitionOrdinal < env.row.keys.length) return key(env.row.keys[partitionOrdinal]);
+        return key(e.getCustomerId());
     }
 
     @Override
@@ -90,13 +106,14 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
         BenchTrace.Builder t = trace(env);
         long budgetUs = orchestrator.config().get().cfg().getBudgetMs() * 1000L;
         long remaining = Math.max(1000, budgetUs - (start - env.ingestUs));
+        var txn = env.txn == null ? null : io.realy.contracts.flows.v1.TxnContext.parseFrom(env.txn);
         var req = new ScoringOrchestrator.Request(e, t, 0, IngressMode.ASYNC_FLINK_INLINE, env.features, env.filterMask,
-                remaining, null);
+                remaining, null, txn);
         orchestrator.score(req).whenComplete((rec, err) -> {
             DecisionRecord out = err == null ? rec : errorRecord(e, t, "PIPELINE_ERROR");
             metrics.inc("decisions");
             metrics.recordUs("hot_path", BenchClock.nowUs() - env.ingestUs);
-            result.complete(List.of(new DecisionBytes(key(e.getCustomerId()), out.toByteArray())));
+            result.complete(List.of(new DecisionBytes(key(env, partitionOrdinal, e), out.toByteArray())));
         });
     }
 
@@ -104,7 +121,7 @@ public final class ScoringAsyncFunction extends RichAsyncFunction<Envelope, Deci
     public void timeout(Envelope env, ResultFuture<DecisionBytes> result) throws Exception {
         TransactionEvent e = TransactionEvent.parseFrom(env.event);
         metrics.inc("async_timeouts");
-        result.complete(List.of(new DecisionBytes(key(e.getCustomerId()), errorRecord(e, trace(env), "ASYNC_TIMEOUT").toByteArray())));
+        result.complete(List.of(new DecisionBytes(key(env, partitionOrdinal, e), errorRecord(e, trace(env), "ASYNC_TIMEOUT").toByteArray())));
     }
 
     private DecisionRecord errorRecord(TransactionEvent e, BenchTrace.Builder t, String reason) {

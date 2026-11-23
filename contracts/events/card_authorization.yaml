@@ -1,0 +1,17 @@
+# One message of a card payment (contracts/transactions/card_payment.yaml): the authorisation request,
+# the transaction's trigger.
+name: card_authorization
+message: realy.flows.v1.CardAuthorization
+id: event_id
+time: event_time_us
+entities:
+  customer: customer_id
+  card: card_id
+  device: device_id
+  ip: ip_v4
+  merchant: merchant_id
+  terminal: terminal_id
+  account: account_id
+  txn: auth_id
+location: { lat: lat, lon: lon }
+amount: amount_usd_minor

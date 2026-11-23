@@ -9,39 +9,50 @@ import numpy as np
 from .engine import haversine_km
 from .schema import FeatureSchema
 
-PAYMENT_TYPE = ["PAYMENT_TYPE_UNSPECIFIED", "CARD_PURCHASE", "ATM_WITHDRAWAL", "TRANSFER", "CARD_REFUND"]
-CHANNEL = ["CHANNEL_UNSPECIFIED", "POS", "ECOM", "ATM", "MOTO", "IN_APP", "ONLINE_BANKING"]
-ENTRY_MODE = ["ENTRY_MODE_UNSPECIFIED", "CHIP", "CONTACTLESS", "MAGSTRIPE", "MANUAL", "WALLET_TOKEN", "ECOM_3DS",
-              "ECOM_NON_3DS", "CREDENTIAL_ON_FILE", "BANK_APP"]
-CARD_TYPE = ["CARD_TYPE_UNSPECIFIED", "DEBIT", "CREDIT", "PREPAID", "VIRTUAL"]
-THREE_DS = ["THREE_DS_NONE", "THREE_DS_ATTEMPTED", "THREE_DS_AUTHENTICATED"]
+
+def _payment_codec():
+    from ..bindings.codec import codec
+    return codec("realy.payments.v1.TransactionEvent")
+
+
+def _names(field: str) -> list[str]:
+    """An enum of the payment event as a list indexed by number (from the protobuf contract)."""
+    names = dict(_payment_codec().by_name[field].enum_names)
+    return [names.get(i, str(i)) for i in range(max(names) + 1)]
+
+
+PAYMENT_TYPE = _names("payment_type")
+CHANNEL = _names("channel")
+ENTRY_MODE = _names("entry_mode")
+CARD_TYPE = _names("card_type")
+THREE_DS = _names("three_ds")
 ENUMS = {"payment_type": PAYMENT_TYPE, "channel": CHANNEL, "entry_mode": ENTRY_MODE, "card_type": CARD_TYPE,
          "three_ds": THREE_DS}
-INT_FIELDS = ("event_id", "event_time_us", "customer_id", "account_id", "card_id", "amount_minor", "amount_usd_minor",
-              "merchant_id", "mcc", "terminal_id", "device_id", "ip_v4", "ip_asn", "payee_id", "credit_limit_usd",
-              "scheme_score")
-BOOL_FIELDS = ("card_present", "cvv_match", "avs_match", "recurring", "pin_verified", "cryptogram_valid")
-# fields added after the first release: event logs written before them read as the proto default
-LATER_FIELDS = {"three_ds": 0, "pin_verified": False, "cryptogram_valid": False, "scheme_score": 0}
 
 
-def event_view(ev: dict) -> dict[str, Any]:
-    """CEL `event` binding: enums by name, integers as int, bools, doubles, strings."""
-    v: dict[str, Any] = {}
-    if any(k not in ev for k in LATER_FIELDS):
-        ev = {**LATER_FIELDS, **ev}
-    for k in INT_FIELDS:
-        v[k] = int(ev[k])
-    for k in BOOL_FIELDS:
-        v[k] = bool(ev[k])
-    for k, names in ENUMS.items():
-        i = int(ev[k])
-        v[k] = names[i] if 0 <= i < len(names) else str(i)
-    for k in ("currency", "merchant_country", "ip_country"):
-        v[k] = str(ev[k])
-    v["lat"] = float(ev["lat"])
-    v["lon"] = float(ev["lon"])
+def event_view(ev: dict, txn: dict | None = None) -> dict[str, Any]:
+    """CEL `event` binding of a payment: the generic codec of its protobuf message (realy.bindings): enums
+    by name, integers as int (uint64 as signed 64-bit), bools, doubles, strings; a field the row lacks (an
+    event logged before it existed) reads its proto3 default. `event.txn` is the context of the
+    multi-message transaction it was assembled from (realy.bindings.transactions), or the default context
+    of every contract for a one-message payment, so expressions over it never fail. Mirrors EventView.java."""
+    v = _PAYMENT.view(ev)
+    v["txn"] = txn if txn is not None else (ev.get("txn") or _default_txn())
     return v
+
+
+def _default_txn() -> dict[str, Any]:
+    global _DEFAULT_TXN
+    if _DEFAULT_TXN is None:
+        from ..bindings.transactions import default_context
+        _DEFAULT_TXN = default_context()
+    return _DEFAULT_TXN
+
+
+_DEFAULT_TXN: dict[str, Any] | None = None
+
+
+_PAYMENT = _payment_codec()
 
 
 _PROGRAMS: dict[str, Any] = {}
@@ -55,8 +66,10 @@ def _compiled(expr: str) -> Any:
     return p
 
 
-def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.ndarray) -> None:
-    """Fill derived features of float32 vector v in place (other features already filled)."""
+def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.ndarray,
+                    txn: dict | None = None) -> None:
+    """Fill derived features of float32 vector v in place (other features already filled); `txn` is the
+    event's multi-message transaction context (event.txn), None for a one-message payment."""
     def idx(name: str) -> int:
         try:
             return schema.index_of(name)
@@ -72,7 +85,7 @@ def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.n
             import cel
             if ctx is None:
                 ctx = cel.Context()
-                ctx.add_variable("event", event_view(ev))
+                ctx.add_variable("event", event_view(ev, txn))
             ctx.add_variable("f", {o.name: float(v[o.index]) for o in schema.features})
             v[s.index] = np.float32(float(_compiled(s.expr).execute(ctx)))
             continue
@@ -112,5 +125,7 @@ def compute_derived(schema: FeatureSchema, ev: dict, attrs: dict | None, v: np.n
             i = idx("card_amount_sum_24h")
             x = 0.0 if lim <= 0 or i < 0 else (float(v[i]) / 100.0) / lim
         else:
-            raise ValueError(f"unknown derived fn {fn}")
+            # a plugin function (realy.features.derived_fns): the expression features' `event` view and `f`
+            from . import derived_fns
+            x = float(derived_fns.get(fn)(event_view(ev, txn), {o.name: float(v[o.index]) for o in schema.features}))
         v[s.index] = np.float32(x)

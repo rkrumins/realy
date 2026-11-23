@@ -27,6 +27,8 @@ subprojects {
         useJUnitPlatform()
         maxHeapSize = "2g"
         systemProperty("bench", System.getProperty("bench") ?: "false")
+        systemProperty("golden.record", System.getProperty("golden.record") ?: "false")
+        systemProperty("bench.out", System.getProperty("bench.out") ?: "")
         if (System.getProperty("bench") == "true") testLogging.showStandardStreams = true
         testLogging { events("failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL; showStandardStreams = false }
     }

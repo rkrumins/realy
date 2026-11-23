@@ -1,0 +1,25 @@
+name: flows-inline
+description: "The flows-smoke traffic (transfers and card payments as their linked messages, assembled by Flink) with Flink scoring inline (topology A), so there is no extra hop between assembly and decision. 500 TPS, verified exactly."
+seed: 42
+world: { customers: 200000, merchants: 20000, payees: 40000 }
+traffic:
+  profile: { kind: constant, tps: 500 }
+  duration_s: 90
+  warmup_s: 20
+  flows: [a2a_transfer, card_payment]
+topology: flink-inline
+rules: baseline-flows
+fraud: { background_per_1k: 3.0, mix: { app_scam_mule: 2.0, account_takeover: 1.0, investment_scam: 1.0, card_testing: 1.0 } }
+scoring:
+  feature_source: redis
+  budget_ms: 100
+  feature_deadline_ms: 30
+  model_deadline_ms: 80
+  self_inclusion: true
+  feature_lookup_delay: { lognormal: { median_ms: 2, p99_ms: 8 } }
+model_server:
+  service_time: { lognormal: { median_ms: 8, p99_ms: 25 } }
+  workers: 64
+  max_batch: 1
+budget: { e2e_p99_ms: 150, hot_path_p99_ms: 100, min_compliance: 0.99 }
+flink_state: fresh

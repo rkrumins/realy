@@ -111,6 +111,9 @@ class EventBatch:
     event_time_us: np.ndarray
     columns: dict[str, np.ndarray]
     labels: list[tuple[int, bytes]] = field(default_factory=list)
+    # with multi-message transactions (traffic.flows): every message to send, in event-time order
+    # (gen.flows.Record); payloads / keys then still describe the unified events (the event log)
+    records: list | None = None
 
     def __len__(self) -> int:
         return len(self.payloads)

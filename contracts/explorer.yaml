@@ -1,0 +1,198 @@
+# What the console's Explorer shows for each entity and each kind of payment. Read by
+# python/realy/control/explorer.py and served to the UI (GET /api/explorer/views), so a new entity view,
+# context column or lens needs no UI code. Override the file with REALY_EXPLORER.
+#
+# - entities: what can be listed and trailed. `key` is the event column; `shared_by` are the columns
+#   whose distinct count behind one entity is shown (a device used by 40 customers, a payee paid by 30
+#   senders: the shapes of bot farms and mule accounts); `features` are the entity's own state features
+#   shown as trail columns ("auto": every stream feature of that entity in the feature schema).
+# - contexts: per payment, the first context whose `match` fits picks the columns that matter for that
+#   kind of payment (a transfer shows its payee and transfer velocity, an online card payment its device,
+#   IP country, 3DS and CVV). `field` columns are event fields, `feature` columns are features of the
+#   decision's vector; `link` makes the value open that entity's trail. A feature an older run did not
+#   have, or that was defaulted (the entity was absent), shows as n/a.
+# - lenses: one-click presets (search + entity + filter) for each use case.
+version: 1
+
+entities:
+  customer:
+    key: customer_id
+    title: Customer
+    shared_by: [card_id, device_id, payee_id]
+    profile: customer
+    features: [cust_count_1h, cust_count_24h, cust_amount_sum_24h, cust_distinct_countries_24h,
+               cust_device_novel, cust_payee_novel, cust_ip_country_novel, amount_to_avg_ratio]
+  card:
+    key: card_id
+    title: Card
+    shared_by: [customer_id, device_id, merchant_id]
+    profile: card
+    features: [card_count_5m, card_count_1h, card_small_cnp_count_10m, card_distinct_merchants_10m,
+               card_cvv_fail_count_1h, card_geo_speed_kmh, card_secs_since_last, card_atm_count_1h]
+  account:
+    key: account_id
+    title: Account
+    shared_by: [customer_id, card_id, payee_id]
+    profile: account
+    features: [cust_transfer_count_1h, cust_transfer_sum_24h, cust_payee_novel]
+  device:
+    key: device_id
+    title: Device
+    shared_by: [customer_id, card_id, ip_v4]
+    profile: device
+    features: auto
+  ip:
+    key: ip_v4
+    title: IP address
+    format: ipv4
+    shared_by: [customer_id, card_id, device_id]
+    features: auto
+  merchant:
+    key: merchant_id
+    title: Merchant
+    shared_by: [customer_id, card_id]
+    profile: merchant
+    common_point: true          # cards seen here that were later used fraudulently (breach / skimming)
+    features: auto
+  terminal:
+    key: terminal_id
+    title: Terminal
+    shared_by: [card_id, customer_id]
+    profile: terminal
+    common_point: true
+    features: auto
+  payee:
+    key: payee_id
+    title: Payee
+    shared_by: [customer_id, account_id, device_id]
+    profile: payee
+    features: auto
+
+contexts:
+  - name: transfer
+    title: Transfer
+    match: {payment_type: [TRANSFER]}
+    columns:
+      - {field: payee_id, label: payee, link: payee}
+      - {feature: cust_payee_novel, label: new payee, format: flag}
+      - {feature: cust_transfer_count_1h, label: transfers 1h}
+      - {feature: cust_transfer_sum_24h, label: sent 24h, format: usd}
+      - {feature: payee_distinct_senders_24h, label: payee senders 24h}
+      - {feature: payee_inbound_count_1h, label: payee in 1h}
+      - {field: device_id, label: device, link: device}
+      - {feature: cust_device_novel, label: new device, format: flag}
+      - {field: ip_country, label: IP country}
+  - name: atm
+    title: ATM withdrawal
+    match: {payment_type: [ATM_WITHDRAWAL]}
+    columns:
+      - {field: card_id, label: card, link: card}
+      - {field: terminal_id, label: terminal, link: terminal}
+      - {field: entry_mode, label: entry}
+      - {feature: pin_verified, label: PIN ok, format: flag}
+      - {feature: card_atm_count_1h, label: ATM 1h}
+      - {feature: card_atm_sum_24h, label: ATM $24h, format: usd}
+      - {feature: term_atm_sum_1h, label: terminal $1h, format: usd}
+      - {feature: dist_from_home_km, label: km from home, format: int}
+  - name: card_present
+    title: Card present
+    match: {payment_type: [CARD_PURCHASE, CARD_REFUND], card_present: [true]}
+    columns:
+      - {field: card_id, label: card, link: card}
+      - {field: merchant_id, label: merchant, link: merchant}
+      - {field: terminal_id, label: terminal, link: terminal}
+      - {field: entry_mode, label: entry}
+      - {feature: pin_verified, label: PIN ok, format: flag}
+      - {feature: cryptogram_missing, label: no cryptogram, format: flag}
+      - {feature: card_contactless_count_30m, label: tap 30m}
+      - {feature: card_geo_speed_kmh, label: km/h, format: int}
+  - name: online_card
+    title: Online card payment
+    match: {payment_type: [CARD_PURCHASE, CARD_REFUND]}
+    columns:
+      - {field: card_id, label: card, link: card}
+      - {field: merchant_id, label: merchant, link: merchant}
+      - {field: device_id, label: device, link: device}
+      - {field: ip_v4, label: IP, link: ip}
+      - {field: ip_country, label: IP country}
+      - {feature: three_ds_authenticated, label: 3DS, format: flag}
+      - {feature: cvv_mismatch, label: CVV ✗, format: flag}
+      - {feature: avs_mismatch, label: AVS ✗, format: flag}
+      - {feature: scheme_score, label: scheme, format: int}
+      - {feature: card_small_cnp_count_10m, label: small CNP 10m}
+      - {feature: card_cvv_fail_count_1h, label: CVV fails 1h}
+      - {feature: dev_distinct_cards_1h, label: cards on device 1h}
+  - name: other
+    title: Other
+    match: {}
+    columns:
+      - {field: merchant_id, label: merchant, link: merchant}
+
+# Short column labels for features without one above (default: the name without its entity prefix).
+labels:
+  cust_count_1h: cust 1h
+  cust_count_24h: cust 24h
+  cust_amount_sum_24h: cust $24h
+  cust_distinct_countries_24h: countries 24h
+  cust_device_novel: new device
+  cust_payee_novel: new payee
+  cust_ip_country_novel: new IP country
+  amount_to_avg_ratio: × avg
+  card_count_5m: card 5m
+  card_count_1h: card 1h
+  card_small_cnp_count_10m: small CNP 10m
+  card_distinct_merchants_10m: merchants 10m
+  card_cvv_fail_count_1h: CVV fails 1h
+  card_geo_speed_kmh: km/h
+  card_secs_since_last: s since last
+  card_atm_count_1h: ATM 1h
+  cust_transfer_count_1h: transfers 1h
+  cust_transfer_sum_24h: sent 24h
+  dev_count_5m: device 5m
+  dev_distinct_cards_1h: cards 1h
+  dev_distinct_customers_24h: customers 24h
+  ip_count_5m: IP 5m
+  ip_distinct_cards_1h: cards 1h
+  merch_count_1m: merchant 1m
+  merch_small_cnp_count_5m: small CNP 5m
+  merch_amount_sum_1h: merchant $1h
+  merch_cvv_fail_count_5m: CVV fails 5m
+  term_count_5m: terminal 5m
+  term_atm_sum_1h: terminal $1h
+  payee_inbound_count_1h: in 1h
+  payee_inbound_sum_24h: in $24h
+  payee_distinct_senders_24h: senders 24h
+
+formats:   # display format of features without one above
+  cust_amount_sum_24h: usd
+  cust_transfer_sum_24h: usd
+  merch_amount_sum_1h: usd
+  payee_inbound_sum_24h: usd
+  term_atm_sum_1h: usd
+  card_atm_sum_24h: usd
+  amount_to_avg_ratio: ratio
+  card_geo_speed_kmh: int
+  card_secs_since_last: int
+  cust_device_novel: flag
+  cust_payee_novel: flag
+  cust_ip_country_novel: flag
+
+# Use-case presets: a search (terms are ANDed; commas within a term mean OR), the entity to list and
+# its filter. The console adds one lens per typology of the run's use-case registry.
+lenses:
+  - {name: card_present, title: Card present, search: "channel:POS", entity: card, show: fraud,
+     description: "Chip, contactless and magstripe payments at a terminal: lost / stolen, counterfeit (skimmed) cards"}
+  - {name: online, title: Online payments, search: "channel:ECOM,IN_APP", entity: device, show: fraud,
+     description: "Card-not-present and in-app payments: card testing, bots, account takeover; devices shared by many cards"}
+  - {name: transfers, title: Transfers & APP scams, search: "type:TRANSFER", entity: payee, show: shared,
+     description: "Push payments from online banking; payees paid by many senders are the mule shape"}
+  - {name: atm, title: ATM cash-out, search: "type:ATM_WITHDRAWAL", entity: terminal, show: fraud,
+     description: "Withdrawals: cloned cards cashed out at ATMs"}
+  - {name: takeover, title: Account takeover, search: "fraud:account_takeover", entity: customer, show: fraud,
+     description: "New device, foreign IP, new payee, then the money moves"}
+  - {name: devices, title: Shared devices, search: "", entity: device, show: shared,
+     description: "Devices used by several customers or cards"}
+  - {name: merchants, title: Merchants, search: "", entity: merchant, show: fraud,
+     description: "Merchants with fraud, and the common point of purchase behind breached cards"}
+  - {name: stopped, title: Stopped payments, search: "outcome:DECLINE,CHALLENGE,REVIEW", entity: customer, show: flagged,
+     description: "Everything the pipeline declined, stepped up or reviewed"}

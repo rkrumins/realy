@@ -26,6 +26,24 @@ spec:
     metrics.reporter.prom.port: "9249"
     metrics.fetcher.update-interval: "2000"
     kubernetes.operator.savepoint.history.max.count: "5"
+    # fault tolerance (docs/dev/flink-job.md): tolerate a slow checkpoint, keep the newest two on
+    # cancellation, restart with backoff forever, exit a TaskManager whose heap runs out, keep about 1 s
+    # of data in flight under backpressure, and recover the JobManager from Kubernetes HA
+    execution.checkpointing.num-retained: "2"
+    execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+    execution.checkpointing.tolerable-failed-checkpoints: "3"
+    restart-strategy.type: exponential-delay
+    restart-strategy.exponential-delay.initial-backoff: 1 s
+    restart-strategy.exponential-delay.max-backoff: 60 s
+    restart-strategy.exponential-delay.backoff-multiplier: "2.0"
+    restart-strategy.exponential-delay.reset-backoff-threshold: 10 min
+    restart-strategy.exponential-delay.jitter-factor: "0.1"
+    taskmanager.jvm-exit-on-oom: "true"
+    taskmanager.network.memory.buffer-debloat.enabled: "true"
+    state.backend.rocksdb.predefined-options: FLASH_SSD_OPTIMIZED
+    state.backend.rocksdb.use-bloom-filter: "true"
+    high-availability.type: kubernetes
+    high-availability.storageDir: gs://REPLACE_BUCKET/realy/ha
   jobManager:
     resource: { cpu: 2, memory: 4g }
   taskManager:
@@ -46,7 +64,8 @@ spec:
     jarURI: local:///opt/flink/lib/realy/realy-flink-job.jar
     entryClass: io.realy.flink.FraudJob
     args: ["--mode", "features", "--parallelism", "24", "--bootstrap", "realy-kafka-bootstrap:9092",
-           "--group", "realy-flink", "--checkpoint-ms", "10000", "--buffer-timeout-ms", "1"]
+           "--group", "realy-flink", "--checkpoint-ms", "10000", "--buffer-timeout-ms", "1",
+           "--max-parallelism", "128"]
     parallelism: 24
     upgradeMode: savepoint
     state: running
@@ -67,6 +86,24 @@ spec:
     execution.checkpointing.dir: gs://REPLACE_BUCKET/realy/checkpoints-inline
     execution.checkpointing.savepoint-dir: gs://REPLACE_BUCKET/realy/savepoints-inline
     state.backend.rocksdb.localdir: /rocksdb
+    # fault tolerance (docs/dev/flink-job.md): tolerate a slow checkpoint, keep the newest two on
+    # cancellation, restart with backoff forever, exit a TaskManager whose heap runs out, keep about 1 s
+    # of data in flight under backpressure, and recover the JobManager from Kubernetes HA
+    execution.checkpointing.num-retained: "2"
+    execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+    execution.checkpointing.tolerable-failed-checkpoints: "3"
+    restart-strategy.type: exponential-delay
+    restart-strategy.exponential-delay.initial-backoff: 1 s
+    restart-strategy.exponential-delay.max-backoff: 60 s
+    restart-strategy.exponential-delay.backoff-multiplier: "2.0"
+    restart-strategy.exponential-delay.reset-backoff-threshold: 10 min
+    restart-strategy.exponential-delay.jitter-factor: "0.1"
+    taskmanager.jvm-exit-on-oom: "true"
+    taskmanager.network.memory.buffer-debloat.enabled: "true"
+    state.backend.rocksdb.predefined-options: FLASH_SSD_OPTIMIZED
+    state.backend.rocksdb.use-bloom-filter: "true"
+    high-availability.type: kubernetes
+    high-availability.storageDir: gs://REPLACE_BUCKET/realy/ha-inline
     metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
     metrics.reporter.prom.port: "9249"
     metrics.fetcher.update-interval: "2000"
@@ -89,7 +126,8 @@ spec:
     jarURI: local:///opt/flink/lib/realy/realy-flink-job.jar
     entryClass: io.realy.flink.FraudJob
     args: ["--mode", "both", "--parallelism", "24", "--bootstrap", "realy-kafka-bootstrap:9092",
-           "--group", "realy-flink-inline", "--async-capacity", "1000", "--checkpoint-ms", "10000"]
+           "--group", "realy-flink-inline", "--async-capacity", "1000", "--checkpoint-ms", "10000",
+           "--max-parallelism", "128"]
     parallelism: 24
     upgradeMode: savepoint
     state: suspended

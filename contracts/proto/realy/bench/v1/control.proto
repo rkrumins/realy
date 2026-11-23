@@ -85,6 +85,9 @@ message ScoringConfig {
 // consumer seeks to the end of the topic, so a new run never processes an old backlog.
 message IngressCommand {
   bool kafka_enabled = 1;
+  // the topic the Kafka ingress consumes ("" = EVENTS_TOPIC, the raw events): a run with multi-message
+  // transactions scores the assembled ones (payments.events.assembled)
+  string topic = 2;
 }
 
 message RateCommand {

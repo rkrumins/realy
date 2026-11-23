@@ -24,6 +24,11 @@ public final class AdminHttp {
         server.createContext("/admin/config", ex -> {
             try {
                 if ("PUT".equals(ex.getRequestMethod()) || "POST".equals(ex.getRequestMethod())) {
+                    String refused = Profile.adminWriteRefusal(ex.getRequestHeaders().getFirst("Authorization"));
+                    if (refused != null) {
+                        respond(ex, 403, "text/plain", refused);
+                        return;
+                    }
                     String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                     respond(ex, 200, "application/json", putConfig.apply(body));
                 } else {

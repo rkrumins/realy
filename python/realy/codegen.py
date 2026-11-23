@@ -24,12 +24,24 @@ STAGES = {11: "queue_wait", 12: "deserialize", 20: "shuffle", 21: "state_feature
           30: "feature_lookup", 31: "feature_assemble", 40: "model_call", 41: "model_batch_wait",
           42: "model_server_queue", 43: "model_server_compute", 50: "rules", 51: "policy",
           81: "async_wait"}
+# FraudLabel columns in field order: (name, Kafka queue type, labels table type). Append a new label field
+# here (after LABEL_COLS_V1, the columns of the original table) and `make migrate` adds it in place.
+LABEL_COLS: list[tuple[str, str, str]] = [
+    ("event_id", "UInt64", "UInt64"), ("label_time_us", "Int64", ""), ("event_time_us", "Int64", ""),
+    ("is_fraud", "UInt8", "UInt8"), ("fraud_type", "Int8", ""), ("campaign_id", "UInt64", "UInt64"),
+    ("source", "Int8", "Int8"), ("customer_id", "UInt64", "UInt64"), ("card_id", "UInt64", "UInt64"),
+    ("amount_usd_minor", "Int64", "Int64"),
+]
+LABEL_COLS_V1 = 10
 DROPPED_COLUMNS = ("lat_feature_store_write_us", "lat_audit_ack_us", "lat_sink_us")   # never populated (see above)
 # columns added to realy.decisions after the first release: re-applying the DDL upgrades in place
 ADDED_COLUMNS = [
     ("appended_at", "DateTime64(3)"), ("lat_audit_append_us", "Int32"),
     ("rule_ids", "Array(LowCardinality(String))"), ("rule_actions", "Array(LowCardinality(String))"),
     ("fresh_entity", "Array(LowCardinality(String))"), ("fresh_age_us", "Array(Int64)"), ("fresh_found", "Array(UInt8)"),
+    # multi-message transactions (DecisionRecord.txn): which contract, stage, parts present, partial
+    ("txn_transaction", "LowCardinality(String)"), ("txn_stage", "LowCardinality(String)"), ("txn_parts", "UInt32"),
+    ("txn_partial", "UInt8"),
 ]
 ENUM = {
     "outcome": ["OUTCOME_UNSPECIFIED", "APPROVE", "REVIEW", "DECLINE", "CHALLENGE"],
@@ -48,15 +60,15 @@ def _fraud_type_enum() -> list[str]:
     from .usecases import registry
     names = registry().fraud_type_names()
     return [("NONE" if i == 0 else names[i].upper()) if i in names else f"TYPE_{i}" for i in range(max(names) + 1)]
-EVENT_COLS = [  # (proto field, ClickHouse type)
-    ("event_id", "UInt64"), ("event_time_us", "Int64"), ("payment_type", "Int8"), ("customer_id", "UInt64"),
-    ("account_id", "UInt64"), ("card_id", "UInt64"), ("card_type", "Int8"), ("amount_minor", "Int64"),
-    ("currency", "String"), ("amount_usd_minor", "Int64"), ("merchant_id", "UInt64"), ("mcc", "UInt32"),
-    ("merchant_country", "String"), ("terminal_id", "UInt64"), ("channel", "Int8"), ("entry_mode", "Int8"),
-    ("card_present", "UInt8"), ("lat", "Float64"), ("lon", "Float64"), ("device_id", "UInt64"), ("ip_v4", "UInt32"),
-    ("ip_country", "String"), ("ip_asn", "UInt32"), ("payee_id", "UInt64"), ("cvv_match", "UInt8"),
-    ("avs_match", "UInt8"), ("recurring", "UInt8"), ("credit_limit_usd", "UInt32"),
-]
+def _event_cols() -> list[tuple[str, str]]:
+    """(proto field, ClickHouse type) of the payment event, from its protobuf descriptor and binding
+    (contracts/events/payment.yaml): a field appended to TransactionEvent becomes a column here."""
+    from .bindings import event_type
+    t = event_type("payment")
+    return t.codec.columns(t.warehouse.get("column_types"))
+
+
+EVENT_COLS = _event_cols()
 KAFKA = "SETTINGS kafka_broker_list = '__KAFKA_BROKERS__', kafka_topic_list = '{topic}', kafka_group_name = '{group}',\n" \
         "         kafka_format = 'ProtobufSingle', kafka_schema = '{schema}', kafka_num_consumers = {consumers},\n" \
         "         kafka_flush_interval_ms = 1000, kafka_max_block_size = 65536, kafka_thread_per_consumer = 1,\n" \
@@ -85,8 +97,15 @@ def generate(consumers: int = 2) -> dict[str, str]:
     ev_sel = ",\n  ".join(
         (_enum(c, c) + f" AS `{c}`") if c in ("payment_type", "channel", "entry_mode") else
         (f"toString(card_type) AS `card_type`" if c == "card_type" else f"`{c}`") for c, _ in EVENT_COLS)
+    # the Kafka queue and its view hold no data: rebuilt on every apply (offsets live in the consumer group),
+    # so an install from an earlier release gains new event columns; events_raw gains them by ALTER
+    ev_alter = "\n".join(f"ALTER TABLE realy.events_raw ADD COLUMN IF NOT EXISTS `{c}` "
+                         f"{'LowCardinality(String)' if c in ('payment_type', 'channel', 'entry_mode', 'card_type') else t};"
+                         for c, t in EVENT_COLS)
     files["02_events.sql"] = HEADER + f"""
-CREATE TABLE IF NOT EXISTS realy.events_queue (
+DROP VIEW IF EXISTS realy.events_mv;
+DROP TABLE IF EXISTS realy.events_queue;
+CREATE TABLE realy.events_queue (
   {ev_q}
 ) ENGINE = Kafka
 {KAFKA.format(topic='payments.events.raw', group='clickhouse-events', schema='realy/payments/v1/transaction.proto:TransactionEvent', consumers=consumers)};
@@ -100,12 +119,29 @@ CREATE TABLE IF NOT EXISTS realy.events_raw (
 PARTITION BY toYYYYMMDD(fromUnixTimestamp64Micro(event_time_us))
 ORDER BY (customer_id, run_id, event_id)
 TTL toDateTime(ingested_at) + INTERVAL 30 DAY;
+{ev_alter}
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS realy.events_mv TO realy.events_raw AS
+-- the raw topic also carries the parts of multi-message transactions (x-event-type): not unified events
+CREATE MATERIALIZED VIEW realy.events_mv TO realy.events_raw AS
 SELECT
   arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
   {ev_sel}
-FROM realy.events_queue WHERE length(_error) = 0;
+FROM realy.events_queue WHERE length(_error) = 0 AND indexOf(_headers.name, 'x-event-type') = 0;
+
+-- multi-message transactions: the Flink assembler publishes them, assembled into the unified event
+-- (x-txn); the events it passes through are in the raw topic already
+DROP VIEW IF EXISTS realy.events_assembled_mv;
+DROP TABLE IF EXISTS realy.events_assembled_queue;
+CREATE TABLE realy.events_assembled_queue (
+  {ev_q}
+) ENGINE = Kafka
+{KAFKA.format(topic='payments.events.assembled', group='clickhouse-events-assembled', schema='realy/payments/v1/transaction.proto:TransactionEvent', consumers=1)};
+
+CREATE MATERIALIZED VIEW realy.events_assembled_mv TO realy.events_raw AS
+SELECT
+  arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
+  {ev_sel}
+FROM realy.events_assembled_queue WHERE length(_error) = 0 AND indexOf(_headers.name, 'x-txn') > 0;
 """
 
     # ------------------------------------------------------------------ decisions
@@ -119,6 +155,8 @@ FROM realy.events_queue WHERE length(_error) = 0;
     # features are only ever appended (schema v2 added eight): every f_* column is (re)declared so an
     # install created under an earlier schema gains the new ones; existing rows read the column default
     migrations = "\n".join([f"ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `{c}` {t};" for c, t in ADDED_COLUMNS]
+                           + [f"ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `event.{c}` {t};"
+                              for c, t in EVENT_COLS if c != "event_id"]
                            + [f"ALTER TABLE realy.decisions ADD COLUMN IF NOT EXISTS `f_{f.name}` Float32;"
                               for f in schema.features]
                            + [f"ALTER TABLE realy.decisions DROP COLUMN IF EXISTS `{c}`;" for c in DROPPED_COLUMNS])
@@ -167,7 +205,11 @@ CREATE TABLE realy.decisions_queue (
   `trace.t_sent_us` Int64,
   `trace.spans.stage` Array(Int32),
   `trace.spans.start_us` Array(Int64),
-  `trace.spans.dur_us` Array(Int32)
+  `trace.spans.dur_us` Array(Int32),
+  `txn.transaction` String,
+  `txn.stage` String,
+  `txn.parts_present` UInt32,
+  `txn.partial` UInt8
 ) ENGINE = Kafka
 {KAFKA.format(topic='payments.decisions', group='clickhouse-decisions', schema='realy/scoring/v1/decision.proto:DecisionRecord', consumers=consumers)};
 
@@ -258,15 +300,26 @@ SELECT
   arrayMap(a -> {_enum('outcome', 'a')}, `rule_hits.action`) AS rule_actions,
   arrayMap(e -> {_enum('entity', 'e')}, `features.freshness.entity`) AS fresh_entity,
   arrayMap(u -> if(u > 0, decided_at_us - u, -1), `features.freshness.updated_at_us`) AS fresh_age_us,
-  `features.freshness.found` AS fresh_found
+  `features.freshness.found` AS fresh_found,
+  `txn.transaction` AS txn_transaction, `txn.stage` AS txn_stage, `txn.parts_present` AS txn_parts,
+  `txn.partial` AS txn_partial
 FROM realy.decisions_queue WHERE length(_error) = 0;
 """
 
     # ------------------------------------------------------------------ labels
+    # The Kafka queue and its view hold no data: rebuilt on every apply like the events and decisions
+    # ones (consumer offsets live in the group), so a FraudLabel field added later reaches ClickHouse;
+    # the table gains it by ALTER. LABEL_COLS: (column, queue type, table type).
+    lab_q = ",\n  ".join(f"`{c}` {q}" for c, q, _ in LABEL_COLS)
+    lab_alter = "\n".join(f"ALTER TABLE realy.labels ADD COLUMN IF NOT EXISTS `{c}` {t};"
+                           for c, _, t in LABEL_COLS[LABEL_COLS_V1:])
+    lab_sel = ", ".join(f"`{c}`" for c, _, _ in LABEL_COLS if c not in ("label_time_us", "event_time_us", "fraud_type",
+                                                                         "event_id"))
     files["04_labels.sql"] = HEADER + f"""
-CREATE TABLE IF NOT EXISTS realy.labels_queue (
-  event_id UInt64, label_time_us Int64, event_time_us Int64, is_fraud UInt8, fraud_type Int8,
-  campaign_id UInt64, source Int8, customer_id UInt64, card_id UInt64, amount_usd_minor Int64
+DROP VIEW IF EXISTS realy.labels_mv;
+DROP TABLE IF EXISTS realy.labels_queue;
+CREATE TABLE realy.labels_queue (
+  {lab_q}
 ) ENGINE = Kafka
 {KAFKA.format(topic='payments.labels', group='clickhouse-labels', schema='realy/payments/v1/label.proto:FraudLabel', consumers=1)};
 
@@ -275,11 +328,12 @@ CREATE TABLE IF NOT EXISTS realy.labels (
   fraud_type LowCardinality(String), campaign_id UInt64, source Int8, customer_id UInt64, card_id UInt64,
   amount_usd_minor Int64, ingested_at DateTime64(6) DEFAULT now64(6)
 ) ENGINE = ReplacingMergeTree(ingested_at) ORDER BY (run_id, event_id);
+{lab_alter}
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS realy.labels_mv TO realy.labels AS
+CREATE MATERIALIZED VIEW realy.labels_mv TO realy.labels AS
 SELECT arrayElement(_headers.value, indexOf(_headers.name, 'x-run-id')) AS run_id,
        event_id, fromUnixTimestamp64Micro(label_time_us) AS label_time, fromUnixTimestamp64Micro(event_time_us) AS event_time,
-       is_fraud, {_enum('fraud_type', 'fraud_type')} AS fraud_type, campaign_id, source, customer_id, card_id, amount_usd_minor
+       {_enum('fraud_type', 'fraud_type')} AS fraud_type, {lab_sel}
 FROM realy.labels_queue WHERE length(_error) = 0;
 """
 

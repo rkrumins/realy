@@ -51,7 +51,8 @@ def _timed(fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------------- probes
 def probe_kafka() -> dict[str, Any]:
     from confluent_kafka.admin import AdminClient
-    a = AdminClient({"bootstrap.servers": endpoints()["kafka"], "socket.timeout.ms": int(TIMEOUT * 1000)})
+    from ..common.kafka import security_config
+    a = AdminClient({"bootstrap.servers": endpoints()["kafka"], "socket.timeout.ms": int(TIMEOUT * 1000), **security_config()})
     md = a.list_topics(timeout=TIMEOUT)
     present = [t for t in RELEVANT_TOPICS if t in md.topics]
     status = "up" if len(present) == len(RELEVANT_TOPICS) else "degraded"
@@ -61,8 +62,8 @@ def probe_kafka() -> dict[str, Any]:
 
 
 def _redis():
-    import redis
-    return redis.Redis.from_url(endpoints()["redis"], socket_timeout=TIMEOUT, socket_connect_timeout=TIMEOUT)
+    from ..common.redis_client import client
+    return client(endpoints()["redis"], socket_timeout=TIMEOUT, socket_connect_timeout=TIMEOUT)
 
 
 def probe_redis() -> dict[str, Any]:
@@ -73,10 +74,10 @@ def probe_redis() -> dict[str, Any]:
 
 
 def probe_clickhouse() -> dict[str, Any]:
-    r = httpx.get(endpoints()["clickhouse"], params={"query": "SELECT version()"}, timeout=TIMEOUT)
+    from ..common import clickhouse as chc
+    r = chc.get({"query": "SELECT version()"}, timeout=TIMEOUT)
     r.raise_for_status()
-    rows = httpx.get(endpoints()["clickhouse"], params={
-        "query": "SELECT count() FROM system.tables WHERE database = 'realy'"}, timeout=TIMEOUT).text.strip()
+    rows = chc.get({"query": "SELECT count() FROM system.tables WHERE database = 'realy'"}, timeout=TIMEOUT).text.strip()
     return {"version": r.text.strip(), "status": "up" if rows not in ("", "0") else "degraded",
             "details": {"realy_tables": int(rows or 0)}}
 
@@ -148,9 +149,10 @@ def kafka_detail() -> dict[str, Any]:
     from confluent_kafka import Consumer, ConsumerGroupTopicPartitions, TopicPartition
     from confluent_kafka.admin import AdminClient
     bs = endpoints()["kafka"]
-    a = AdminClient({"bootstrap.servers": bs})
+    from ..common.kafka import security_config
+    a = AdminClient({"bootstrap.servers": bs, **security_config()})
     md = a.list_topics(timeout=TIMEOUT)
-    c = Consumer({"bootstrap.servers": bs, "group.id": "realy-console-probe", "enable.auto.commit": False})
+    c = Consumer({"bootstrap.servers": bs, "group.id": "realy-console-probe", "enable.auto.commit": False, **security_config()})
     ends: dict[str, dict[int, int]] = {}
     topics = []
     for name in RELEVANT_TOPICS:
@@ -238,11 +240,33 @@ def redis_detail() -> dict[str, Any]:
 
 @router.get("/clickhouse")
 def clickhouse_detail() -> dict[str, Any]:
-    base = endpoints()["clickhouse"]
-    v = httpx.get(base, params={"query": "SELECT version()"}, timeout=TIMEOUT).text.strip()
+    from ..common import clickhouse as chc
+    v = chc.get({"query": "SELECT version()"}, timeout=TIMEOUT).text.strip()
     q = ("SELECT table, sum(rows) AS rows, count() AS parts, sum(bytes_on_disk) AS bytes FROM system.parts "
          "WHERE database = 'realy' AND active GROUP BY table ORDER BY table FORMAT JSONEachRow")
     import json
-    rows = [json.loads(line) for line in httpx.get(base, params={"query": q}, timeout=TIMEOUT).text.splitlines() if line]
+    rows = [json.loads(line) for line in chc.get({"query": q}, timeout=TIMEOUT).text.splitlines() if line]
     return {"version": v, "tables": [{"table": r["table"], "rows": int(r["rows"]), "parts": int(r["parts"]),
                                       "bytes": int(r["bytes"])} for r in rows]}
+
+
+@router.get("/preflight")
+def preflight(scenario: str | None = None, topology: str | None = None) -> dict[str, Any]:
+    """The preflight a run starts with (realy.infra): every component the scenario's (or the topology's)
+    path uses, bundled / mock / external, with pass / warn / fail checks and their fixes, and what the
+    scenario would simulate."""
+    from fastapi import HTTPException
+
+    from ..infra import check
+    from ..scenario import load_scenario
+    sc = None
+    if scenario:
+        try:
+            sc = load_scenario(scenario)
+        except Exception as e:  # noqa: BLE001 - a name the user typed
+            raise HTTPException(404, f"scenario {scenario}: {e}") from e
+    try:
+        return check(sc, topology)
+    except KeyError as e:
+        raise HTTPException(400, str(e)) from e
+

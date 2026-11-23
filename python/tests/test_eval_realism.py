@@ -189,10 +189,54 @@ def test_profile_seed_marker_names_the_current_world():
 
         def merchant_profile_arrays(self):
             return {"merchant_id": np.array([1]), "risk_tier": np.array([1]), "fraud_rate_30d": np.array([0.0])}
+
+        def profile_arrays(self, entity):
+            return {"customer": self.customer_profile_arrays, "merchant": self.merchant_profile_arrays}[entity]()
     r = R()
     assert seed.seed_profiles(W("A"), r=r) > 0 and seed.seed_profiles(W("A"), r=r) == 0
     assert seed.seed_profiles(W("B"), r=r) > 0          # another world overwrote pf:* ...
     assert seed.seed_profiles(W("A"), r=r) > 0          # ... so switching back re-seeds (used to be skipped)
+    assert r.get("pf:_world") == b"A"
+
+
+def test_profiles_reseed_when_their_layout_changes(monkeypatch):
+    """A profile feature added on an unchanged world must reseed that entity (and only that entity):
+    the per-entity marker hashes the blob layout as well as the world."""
+    from realy.runner import seed
+    test_profile_seed_marker_names_the_current_world()   # sanity of the fake store / world below
+    kv: dict = {}
+
+    class R:
+        def get(self, k):
+            return kv.get(k)
+
+        def set(self, k, v):
+            kv[k] = v.encode() if isinstance(v, str) else v
+
+        def pipeline(self, transaction=False):
+            class P:
+                def set(self, k, v):
+                    kv[k] = v
+
+                def execute(self):
+                    return []
+            return P()
+
+    class W:
+        content_hash = "A"
+
+        def profile_arrays(self, entity):
+            if entity == "customer":
+                return {"customer_id": np.array([1, 2]), "tenure_days": np.array([1, 2]), "segment": np.array([0, 1]),
+                        "avg_ticket_usd": np.array([10, 20]), "home_lat": np.zeros(2), "home_lon": np.zeros(2),
+                        "home_country_idx": np.zeros(2), "tz_offset_min": np.zeros(2)}
+            return {"merchant_id": np.array([1]), "risk_tier": np.array([1]), "fraud_rate_30d": np.array([0.0])}
+    r = R()
+    assert seed.seed_profiles(W(), r=r) == 3 and seed.seed_profiles(W(), r=r) == 0
+    real = seed.profile_layout
+    monkeypatch.setattr(seed, "profile_layout", lambda schema, e: real(schema, e) + ("x" if e == "merchant" else ""))
+    assert seed.seed_profiles(W(), r=r) == 1            # the merchant blobs only
+    assert seed.seed_profiles(W(), r=r) == 0
 
 
 def test_state_lineage_records_which_runs_built_the_state(monkeypatch):

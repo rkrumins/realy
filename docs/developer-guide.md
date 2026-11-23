@@ -52,7 +52,8 @@ Edit sources, never outputs. `make codegen` runs every generator; CI fails on dr
 1. Add one line to `contracts/features/feature_schema.yaml`, for example:
    `- { name: card_count_10m, source: stream, entity: card, agg: count, window: 10m, granularity: 10s }`.
    * **Position** is the model-tensor index, so append new features.
-   * **Aggregations:** `count`, `sum`, `max`, `avg`, `distinct`, `novel`, `time_since_last`, `geo_speed_kmh`.
+   * **Aggregations:** `count`, `sum`, `max`, `avg`, `distinct`, `novel`, `time_since_last`, `geo_speed_kmh`,
+     or a plugin ([extending](dev/extending.md)).
    * **`filter`** names a CEL predicate from `filters:`.
 2. `make codegen`. The ClickHouse decision columns and the docs follow automatically.
 3. Nothing else for stream and profile features: the Java `EntityAggregator` and the Python
@@ -86,18 +87,21 @@ Edit `rules/baseline.yaml`, or add `rules/<name>.yaml` and set `rules: <name>` i
 
 ### Add a topology
 
-A topology decides which component consumes `payments.events.raw` and produces decisions:
+A topology is data: `contracts/topologies.yaml` declares its runtime (who ingests, who scores, the Flink
+mode, how multi-message transactions are assembled), its steps from the component catalog, and what
+works and what does not. The runner, the scenario model, the live map and the verifier all read it.
+Step by step, with validation: [building a topology](dev/topologies.md).
 
-1. Add the name to `Topology` in `python/realy/scenario.py`.
-2. **Wiring:** `python/realy/runner/run.py` switches gateway Kafka ingress via `bench.control`, and
-   `python/realy/runner/flink.py` chooses the Flink job mode (`features` for the gateway topologies,
-   `inline` / `both` for flink-inline; `echo-kafka` leaves Flink alone because the *gateway* echoes).
-   The job's own `--mode echo` is an instrument-calibration mode no bundled topology uses.
-3. **Live map:** add nodes and edges to `python/realy/control/topology.py` (each with a metric
-   reference to a `bench.metrics` source and counter or stage), and a diagram to the UI's topology
-   picker (`ui/src/lib/topology.ts`).
-4. Keep the emitter and collector unchanged. Every topology must emit `DecisionRecord`s with spans
-   so reports stay comparable.
+### Benchmark a scorer you built
+
+The `external` topology treats your decision service as a black box: two topics, two messages, and the
+trace header copied into each decision ([benchmark your own scorer](dev/external-scorer.md)).
+
+### Add an aggregation kind
+
+A Java `Aggregation` plugin and its Python twin, proved equal by shared conformance fixtures, deployed as
+a jar in `PLUGINS_DIR`: [extending the platform](dev/extending.md). The repository's example is `min`
+(`java/plugin-example`, `python/realy/plugin_example.py`).
 
 ### Add a console page or endpoint
 
@@ -114,7 +118,7 @@ A topology decides which component consumes `payments.events.raw` and produces d
 
 | Suite | Where | Covers |
 |---|---|---|
-| Java | `java/*/src/test` | feature aggregators, CEL rule sets, orchestrator deadlines and fallbacks, latency models, mock-model capacity model, Flink MiniCluster end to end on RocksDB |
+| Java | `java/*/src/test` | feature aggregators and their conformance with the Python twins, CEL rule sets, orchestrator deadlines and fallbacks, latency models, mock-model capacity model, Flink MiniCluster end to end on RocksDB |
 | Python | `python/tests` | world and generator determinism, fraud typologies tripping their rules, feature engine, budget Monte Carlo, report, console API (auth, env, explorer, docs, topology, SPA fallback) |
 | Parity (runtime) | `pulsebench verify <run>` | Java vs Python features and CEL decisions on every event of a real run, plus ClickHouse audit completeness |
 | UI | `ui/src/**/*.test.ts` | distribution math, YAML-to-form round trips |

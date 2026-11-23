@@ -1,0 +1,23 @@
+# The scoring pipeline alone, for real payments, on infrastructure you run (docs/production-pipeline.md):
+# no bundled Kafka, Redis, ClickHouse, mock model or console. Fill in config/pipeline.env (endpoints),
+# create the Secret from secrets.example.yaml, set the checkpoint bucket in flink.yaml, then
+#   kubectl apply -k deploy/k8s/overlays/production
+# Load-test it in staging by pointing the benchmark at the same infrastructure (docs/real-infrastructure.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: payments-scoring
+resources:
+  - namespace.yaml
+  - ../../components/operators/flink-rbac.yaml
+  - gateway.yaml
+  - flink.yaml
+configMapGenerator:
+  - name: pipeline-env                 # endpoints and settings, as environment variables
+    envs: [config/pipeline.env]
+  - name: scoring-config               # hot-reloaded by the gateway (SCORING_CONFIG_FILE, RULES_FILE)
+    files: [config/scoring.json, config/rules.yaml]
+generatorOptions:
+  disableNameSuffixHash: true          # the gateway watches the mounted files; a new name would restart pods
+labels:
+  - pairs: { app.kubernetes.io/part-of: payments-scoring }
+    includeSelectors: false

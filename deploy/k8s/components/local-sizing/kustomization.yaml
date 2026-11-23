@@ -67,7 +67,7 @@ patches:
   - target: { kind: StatefulSet, name: redis }
     patch: |-
       - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: 250m, memory: 512Mi }, limits: { cpu: "1", memory: 2Gi } } }
-      - { op: replace, path: /spec/template/spec/containers/0/args, value: ["--save", "", "--appendonly", "no", "--maxmemory", "1500mb", "--maxmemory-policy", "allkeys-lru"] }
+      - { op: replace, path: /spec/template/spec/containers/0/args, value: ["--save", "", "--appendonly", "no", "--maxmemory", "1500mb", "--maxmemory-policy", "noeviction"] }
   - target: { kind: StatefulSet, name: clickhouse }
     patch: |-
       - { op: replace, path: /spec/template/spec/containers/0/resources, value: { requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: "2", memory: 4Gi } } }

@@ -23,7 +23,7 @@ from ..common.clock import now_us
 
 # Stage enum values (contracts/proto/realy/bench/v1/trace.proto) -> report column
 STAGE_COLS = {
-    11: "queue_wait", 12: "deserialize", 20: "shuffle", 21: "state_features", 22: "feature_store_write",
+    11: "queue_wait", 12: "deserialize", 20: "shuffle", 21: "state_features", 22: "feature_store_write", 23: "txn_assembly",
     30: "feature_lookup", 31: "feature_assemble", 40: "model_call", 41: "model_batch_wait",
     42: "model_server_queue", 43: "model_server_compute", 50: "rules", 51: "policy", 60: "audit_ack",
     61: "sink", 81: "async_wait",
@@ -40,6 +40,9 @@ class _Cols:
         "t_decision_us": np.int64, "t_collected_us": np.int64, "broker_ts_ms": np.int64, "n_rule_hits": np.uint8,
         "fallback": np.int8, "model_batch": np.int32, "feature_staleness_ms": np.float32, "payload_crc_ok": np.int8,
         "ingest_domain": np.uint32, "decision_domain": np.uint32,
+        # a transaction assembled from several messages (DecisionRecord.txn): parts present (-1: a
+        # one-message payment) and whether it was assembled without a required part
+        "txn_parts": np.int32, "txn_partial": np.bool_,
         **{f"st_{v}": np.int32 for v in STAGE_COLS.values()},
     }
 
@@ -48,6 +51,8 @@ class _Cols:
         self.reasons: list[str] = []
         self.rules: list[str] = []
         self.model_version: list[str] = []
+        self.txn: list[str] = []          # "<transaction>/<stage>" ("" = a one-message payment)
+        self.txn_ctx: list[str] = []      # its context values (JSON: strings and numbers)
         # full span list per decision (parallel lists) -> exact waterfall in the console Explorer
         self.span_stage: list[list[int]] = []
         self.span_attr: list[list[int]] = []
@@ -62,12 +67,41 @@ class _Cols:
         cols["reason_codes"] = np.asarray(self.reasons, dtype=object)
         cols["rule_hits"] = np.asarray(self.rules, dtype=object)
         cols["model_version"] = np.asarray(self.model_version, dtype=object)
+        cols["txn"] = np.asarray(self.txn, dtype=object)
+        cols["txn_context"] = np.asarray(self.txn_ctx, dtype=object)
         t = pa.table(cols)
         for name, typ, vals in (("span_stage", pa.int16(), self.span_stage), ("span_attr", pa.int32(), self.span_attr),
                                 ("span_domain", pa.uint32(), self.span_domain), ("span_start_us", pa.int64(), self.span_start),
                                 ("span_dur_us", pa.int32(), self.span_dur)):
             t = t.append_column(name, pa.array(vals, type=pa.list_(typ)))
         return t
+
+
+class SeenIds:
+    """First-decision dedup over event ids, as dense bitmaps: one per id range, which is the generator
+    (bits 48+) and whether it is a message of a multi-message transaction (bit 47; those are numbered
+    from 0 on their own, and a re-scored lifecycle stage carries one). Memory follows the events sent,
+    not the id's magnitude."""
+
+    def __init__(self) -> None:
+        self._arrays: dict[int, np.ndarray] = {}
+
+    def add(self, eid: int) -> bool:
+        """True the first time an id is seen."""
+        key, s = eid >> 47, eid & 0x7FFFFFFFFFFF
+        arr = self._arrays.get(key)
+        if arr is None or s >= arr.shape[0]:
+            na = np.zeros(max(1 << 16, (s + 1) * 2), np.bool_)
+            if arr is not None:
+                na[: arr.shape[0]] = arr
+            self._arrays[key] = arr = na
+        if arr[s]:
+            return False
+        arr[s] = True
+        return True
+
+    def nbytes(self) -> int:
+        return sum(a.nbytes for a in self._arrays.values())
 
 
 def collector_main(run_id: str, run_dir: str, index: int, ready, drain, expected, results,
@@ -109,7 +143,7 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
     feats_ids: list[int] = []
     feats_vals: list[list[float]] = []
     feats_missing: list[bytes] = []
-    seen: dict[int, np.ndarray] = {}
+    seen = SeenIds()
     dups = 0
     foreign = 0
     received = 0
@@ -186,17 +220,9 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             if d.revision > 0:
                 finals += 1
             else:
-                arr = seen.get(g)
-                if arr is None or s >= arr.shape[0]:
-                    size = max(1 << 16, (s + 1) * 2)
-                    na = np.zeros(size, np.bool_)
-                    if arr is not None:
-                        na[: arr.shape[0]] = arr
-                    seen[g] = arr = na
-                if arr[s]:
+                if not seen.add(eid):
                     dups += 1
                     continue
-                arr[s] = True
                 unique += 1
             t_ingest = -1
             t_dec = -1
@@ -244,6 +270,15 @@ def _collect(run_id, run_dir, index, ready, drain, expected, group, idle_timeout
             cols.reasons.append(",".join(d.reason_codes))
             cols.rules.append(",".join(h.rule_id for h in d.rule_hits))
             cols.model_version.append(d.model.model_version)
+            if d.HasField("txn"):
+                x = d.txn
+                c["txn_parts"].append(x.parts_present); c["txn_partial"].append(x.partial)
+                cols.txn.append(f"{x.transaction}/{x.stage}")
+                cols.txn_ctx.append(json.dumps({**dict(x.strings), **dict(x.numbers)}, sort_keys=True))
+            else:
+                c["txn_parts"].append(-1); c["txn_partial"].append(False)
+                cols.txn.append("")
+                cols.txn_ctx.append("")
             cols.span_stage.append(ss); cols.span_attr.append(sa); cols.span_domain.append(sd)
             cols.span_start.append(s0); cols.span_dur.append(sl)
             cols.n += 1

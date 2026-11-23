@@ -1,0 +1,121 @@
+# Production-shaped infrastructure on one host: every client goes through the same code paths it uses
+# against managed services (docs/real-infrastructure.md, "Prove it on one host").
+#   Kafka       a SASL/PLAIN listener (kafka:29094) used by the gateway, Flink, the console and
+#               ClickHouse's Kafka engine; topics are created by kafka-init as an operator would
+#               (the runner only verifies them: REALY_KAFKA_TOPICS=verify)
+#   Redis       a three-node Redis Cluster with a password (16384 slots over three primaries)
+#   ClickHouse  a named user with a password (the default user removed)
+# Start (passwords are dev defaults; override them with the SECURED_* variables):
+#   docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.secured.yml up -d
+# then `docker compose ... exec console pulsebench infra check smoke` shows each component as it is used.
+x-sasl: &sasl
+  KAFKA_BOOTSTRAP: kafka:29094
+  KAFKA_SECURITY_PROTOCOL: SASL_PLAINTEXT
+  KAFKA_SASL_MECHANISM: PLAIN
+  KAFKA_SASL_USERNAME: pulsebench
+  KAFKA_SASL_PASSWORD: ${SECURED_KAFKA_PASSWORD:-pulsebench-kafka-dev}
+x-redis-cluster: &redis-cluster
+  REDIS_URI: redis://:${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}@redis-c1:6379
+  REDIS_MODE: cluster
+x-redis-node: &redis-node
+  image: redis:8.8-alpine
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+    interval: 5s
+    retries: 30
+
+services:
+  kafka:
+    environment:
+      KAFKA_LISTENERS: HOST://0.0.0.0:9092,DOCKER://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093,SASL://0.0.0.0:29094
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092,DOCKER://kafka:29092,SASL://kafka:29094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: HOST:PLAINTEXT,DOCKER:PLAINTEXT,CONTROLLER:PLAINTEXT,SASL:SASL_PLAINTEXT
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_NAME_SASL_PLAIN_SASL_JAAS_CONFIG: >-
+        org.apache.kafka.common.security.plain.PlainLoginModule required
+        user_pulsebench="${SECURED_KAFKA_PASSWORD:-pulsebench-kafka-dev}";
+
+  redis-c1:
+    <<: *redis-node
+    hostname: redis-c1
+    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}" }
+    command: &redis-cluster-cmd
+      - sh
+      - -c
+      - >-
+        exec redis-server --port 6379 --cluster-enabled yes --cluster-config-file /data/nodes.conf
+        --cluster-node-timeout 5000 --cluster-announce-hostname "$$(hostname)"
+        --cluster-preferred-endpoint-type hostname --save "" --appendonly no
+        --requirepass "$$REDIS_PASSWORD" --masterauth "$$REDIS_PASSWORD"
+        --maxmemory 1gb --maxmemory-policy noeviction
+  redis-c2:
+    <<: *redis-node
+    hostname: redis-c2
+    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}" }
+    command: *redis-cluster-cmd
+  redis-c3:
+    <<: *redis-node
+    hostname: redis-c3
+    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}" }
+    command: *redis-cluster-cmd
+  # Forms the cluster once: three primaries, no replicas (an operator's job on a managed service).
+  redis-cluster-init:
+    image: redis:8.8-alpine
+    restart: "no"
+    environment: { REDIS_PASSWORD: "${SECURED_REDIS_PASSWORD:-pulsebench-redis-dev}" }
+    depends_on:
+      redis-c1: { condition: service_healthy }
+      redis-c2: { condition: service_healthy }
+      redis-c3: { condition: service_healthy }
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        if redis-cli -h redis-c1 -a "$$REDIS_PASSWORD" --no-auth-warning cluster info | grep -q cluster_state:ok; then
+        echo "cluster already formed"; exit 0; fi;
+        ips=""; for h in redis-c1 redis-c2 redis-c3; do ips="$$ips $$(getent hosts $$h | awk '{print $$1}'):6379"; done;
+        redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning --cluster create $$ips --cluster-replicas 0 --cluster-yes &&
+        until redis-cli -h redis-c1 -a "$$REDIS_PASSWORD" --no-auth-warning cluster info | grep -q cluster_state:ok; do sleep 1; done;
+        echo "cluster ready"
+
+  clickhouse:
+    environment:
+      KAFKA_BROKERS: kafka:29094
+      CLICKHOUSE_SKIP_USER_SETUP: "0"
+      CLICKHOUSE_USER: pulsebench
+      CLICKHOUSE_PASSWORD: ${SECURED_CLICKHOUSE_PASSWORD:-pulsebench-ch-dev}
+      KAFKA_SASL_PASSWORD: ${SECURED_KAFKA_PASSWORD:-pulsebench-kafka-dev}
+    volumes:
+      - ./clickhouse/secured.xml:/etc/clickhouse-server/config.d/secured.xml:ro
+      # its own data: the Kafka engine tables are created (with this profile's broker list) only on an empty
+      # data directory, so each profile keeps its own and switching back and forth needs no migration
+      - clickhouse-secured:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user pulsebench --password \"$$CLICKHOUSE_PASSWORD\" -q 'EXISTS realy.v_training_dataset' | grep -q 1"]
+
+  gateway:
+    environment:
+      <<: [*sasl, *redis-cluster]
+    depends_on:
+      redis-cluster-init: { condition: service_completed_successfully }
+  flink-jobmanager:
+    environment:
+      <<: [*sasl, *redis-cluster]
+  flink-taskmanager:
+    environment:
+      <<: [*sasl, *redis-cluster]
+    depends_on:
+      redis-cluster-init: { condition: service_completed_successfully }
+  console:
+    environment:
+      <<: [*sasl, *redis-cluster]
+      FLINK_KAFKA_BOOTSTRAP: kafka:29094
+      REALY_KAFKA_TOPICS: verify
+      CLICKHOUSE_USER: pulsebench
+      CLICKHOUSE_PASSWORD: ${SECURED_CLICKHOUSE_PASSWORD:-pulsebench-ch-dev}
+    depends_on:
+      redis-cluster-init: { condition: service_completed_successfully }
+
+volumes:
+  clickhouse-secured: {}

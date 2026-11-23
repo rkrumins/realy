@@ -23,7 +23,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Real-time scoring gateway (stateless; scale horizontally).
  *   :8080  gRPC ScoringService (+ unframed JSON: POST /realy.scoring.v1.ScoringService/Score),
- *          GET /health, GET /metrics, GET|PUT /admin/config
+ *          GET /health, GET /metrics, GET|PUT /admin/config, GET /admin/info (dependencies as connected)
  *   INGRESS_KAFKA=true additionally consumes payments.events.raw (async rail).
  */
 public final class GatewayMain {
@@ -33,16 +33,16 @@ public final class GatewayMain {
         final long startedUs = io.realy.common.BenchClock.nowUs();
         String instance = Env.str("HOSTNAME", "gateway");
         FeatureSchema schema = FeatureSchema.load();
-        ScoringConfig cfg = ScoringConfigHolder.defaults();
-        String initial = Env.str("SCORING_CONFIG", "");
-        if (!initial.isEmpty()) cfg = ProtoJson.overlay(cfg, initial);
+        // defaults, then SCORING_CONFIG_FILE, then SCORING_CONFIG; RULES_FILE; both files watched for changes
+        ScoringConfig cfg = ScoringConfigHolder.initial();
         ScoringConfigHolder holder = new ScoringConfigHolder(cfg);
+        holder.watchFiles();
 
         OnlineStore store = "mock".equals(holder.get().cfg().getFeatureSource())
                 ? new MockOnlineStore()
                 : new RedisOnlineStore(Env.str("REDIS_URI", "redis://localhost:6379"), Env.integer("REDIS_CONNECTIONS", 4));
-        KServeModelClient model = new KServeModelClient(Env.str("MODEL_TARGET", "localhost:8001"),
-                Env.str("MODEL_NAME", "fraud_mlp"), Env.integer("MODEL_INPUT_DIM", schema.size()), Env.integer("MODEL_CHANNELS", 4));
+        KServeModelClient model = KServeModelClient.forServedModel(Env.str("MODEL_TARGET", "localhost:8001"),
+                Env.str("MODEL_NAME", "fraud_mlp"), schema.size(), Env.integer("MODEL_CHANNELS", 4));
         model.configure(holder.get().cfg());
         holder.onChange(a -> model.configure(a.cfg()));
 
@@ -52,6 +52,7 @@ public final class GatewayMain {
                 .metrics(metrics);
         var sink = new DecisionSink("gateway-" + instance);
         var pipeline = new Pipeline(orchestrator, sink, metrics);
+        KafkaIngress ingress = new KafkaIngress(pipeline, metrics);   // started once the server is up
 
         Server server = Server.builder()
                 .http(Env.integer("PORT", 8080))
@@ -64,31 +65,48 @@ public final class GatewayMain {
                 .service("/health", (ctx, req) -> HttpResponse.of("ok"))
                 .service("/metrics", (ctx, req) -> HttpResponse.of(HttpStatus.OK, MediaType.PLAIN_TEXT_UTF_8,
                         metrics.registry().scrape()))
+                // readiness: ingress loops polling, the broker answering, store and model reachable
+                .service("/ready", (ctx, req) -> {
+                    var r = Readiness.check(ingress, sink, store, model);
+                    return HttpResponse.of(r.ready() ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE,
+                            MediaType.JSON_UTF_8, r.json());
+                })
                 .service("/admin/config", (ctx, req) -> HttpResponse.of(req.aggregate().thenApply(agg -> {
                     try {
                         String body = agg.contentUtf8();
+                        if (!body.isBlank()) {
+                            String refused = io.realy.common.Profile.adminWriteRefusal(req.headers().get("authorization"));
+                            if (refused != null) return HttpResponse.of(HttpStatus.FORBIDDEN, MediaType.PLAIN_TEXT_UTF_8, refused);
+                        }
                         String out = body.isBlank() ? ProtoJson.print(holder.get().cfg()) : holder.update(body);
                         return HttpResponse.of(HttpStatus.OK, MediaType.JSON_UTF_8, out);
                     } catch (IllegalArgumentException e) {
                         return HttpResponse.of(HttpStatus.BAD_REQUEST, MediaType.PLAIN_TEXT_UTF_8, e.getMessage());
                     }
                 })))
+                // what this gateway is connected to, as it sees it (the preflight's view of the pipeline)
+                .service("/admin/info", (ctx, req) -> HttpResponse.of(HttpStatus.OK, MediaType.JSON_UTF_8,
+                        AdminInfo.json(instance, schema, store, model, ingress, holder.get().cfg())))
                 .build();
         server.start().join();
 
-        KafkaIngress ingress = new KafkaIngress(pipeline, metrics).start();
+        ingress.start();
         new ControlSubscriber("gateway", (msg, raw) -> {
             if (msg.hasScoring()) holder.update(raw.get("scoring").toString());
             // messages issued before this process started are its restored state, not a live switch
-            if (msg.hasIngress()) ingress.setEnabled(msg.getIngress().getKafkaEnabled(), msg.getIssuedAtUs() >= startedUs);
+            if (msg.hasIngress()) {
+                ingress.setTopic(msg.getIngress().getTopic());
+                ingress.setEnabled(msg.getIngress().getKafkaEnabled(), msg.getIssuedAtUs() >= startedUs);
+            }
             if (!msg.getRunId().isEmpty()) metrics.setRunId(msg.getRunId());
         });
         LOG.info("gateway {} up on :{} (kafka ingress: {}, store: {}, model: {})", instance, server.activeLocalPort(),
                 ingress.enabled(), holder.get().cfg().getFeatureSource(), Env.str("MODEL_TARGET", "localhost:8001"));
+        // stop taking work, let the decisions in flight become durable, commit, then close the audit producer
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             ingress.close();
             server.stop().join();
             sink.close();
-        }));
+        }, "shutdown"));
     }
 }

@@ -11,10 +11,23 @@ topics:
     # x-bench-trace: realy.bench.v1.BenchTrace (intended/sent time, clock domain); x-run-id: owning run
     # (":backfill" / ":prime" suffix for history); x-backfill: history the gateway must not score
     # (Flink still folds it into state); x-mirrored: a sync decision already made, mirrored for Flink
-    headers: [x-bench-trace, x-run-id, x-backfill, x-mirrored]
+    # x-event-type: the message is a part of a multi-message transaction (contracts/events/<type>.yaml),
+    # not the unified event (absent = the pipeline's default type)
+    headers: [x-bench-trace, x-run-id, x-backfill, x-mirrored, x-event-type]
     timestamp: CreateTime (event time, ms)
     retention_ms: 21600000     # 6h
     config: { compression.type: lz4, message.timestamp.type: CreateTime }
+  payments.events.assembled:
+    partitions: 48
+    key: customer_id (decimal string)
+    value: realy.payments.v1.TransactionEvent
+    # written by the Flink assembler in runs with multi-message transactions (traffic.flows): every
+    # scoreable event, assembled from its parts or passed through; the gateway scores from here then.
+    # x-txn: realy.flows.v1.TxnContext of an assembled transaction; x-read-only: a re-scored stage
+    headers: [x-bench-trace, x-run-id, x-txn, x-read-only]
+    timestamp: CreateTime
+    retention_ms: 21600000
+    config: { compression.type: lz4 }
   payments.decisions:
     partitions: 48
     key: customer_id (decimal string)
@@ -22,6 +35,15 @@ topics:
     timestamp: LogAppendTime   # broker-stamped, an independent clock for egress
     retention_ms: 86400000     # 24h: system of record until ClickHouse has ingested
     config: { compression.type: lz4, message.timestamp.type: LogAppendTime }
+  payments.events.dlq:
+    partitions: 6
+    key: the original record's key
+    value: the original record's bytes, unchanged
+    # dead letters: records the gateway or the Flink job could not score (unparseable, a missing id, an
+    # unknown event type, a filter that failed), with x-dlq-error, x-dlq-service and x-dlq-source
+    # (topic/partition/offset) beside the original headers; nothing is dropped silently
+    headers: [x-dlq-error, x-dlq-service, x-dlq-source]
+    retention_ms: 1209600000
   payments.labels:
     partitions: 12
     key: customer_id (decimal string)

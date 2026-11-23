@@ -151,7 +151,77 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             except (OSError, ValueError):
                 topology = None
         probes.active = phase in ACTIVE_PHASES
-        return pipeline_status(runs_dir, run_id, phase, topology, probes.data, build_topology, hub.silence())
+        flows = bool(cur.get("flows")) if cur.get("run_id") == run_id and "flows" in cur else _run_has_flows(run_id)
+        return pipeline_status(runs_dir, run_id, phase, topology, probes.data,
+                               lambda t: build_topology(t, flows), hub.silence())
+
+    def _run_has_flows(run_id: str | None) -> bool:
+        """The run sends multi-message transactions (its map has the assembly hop)."""
+        if not run_id:
+            return False
+        sc = _json(runs_dir / run_id / "scenario.json") or {}
+        return bool((sc.get("traffic") or {}).get("flows"))
+
+    remote_cache: dict[str, Any] = {}
+    log_tail: dict[str, int] = {}
+
+    def _active(st: dict[str, Any], lease: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The run in progress on this pipeline, whoever started it. The console's own run comes from its
+        worker; a run started elsewhere (CLI, `make live-test`, a Kubernetes Job, another console) is
+        described from the pipeline lease and its run directory (manifest, heartbeat, scenario), so Live
+        shows its progress, startup, charts and log the same way."""
+        cur = st.get("current")
+        if cur:
+            return {**cur, "local": True, "owner": (lease or {}).get("owner"),
+                    "measure_started_at": _measure_start(cur.get("run_id"), cur.get("phase"))}
+        if not lease or not lease.get("run_id"):
+            return None
+        rid = str(lease["run_id"])
+        rd = runs_dir / rid
+        hit = remote_cache.get(rid)
+        if hit is None or time.time() - hit["at"] > 10:
+            man, sc = _json(rd / "manifest.json") or {}, _json(rd / "scenario.json") or {}
+            prof = ((sc.get("traffic") or {}).get("profile") or {})
+            base = prof.get("tps") if prof.get("kind") != "step" else (prof.get("start_tps") or prof.get("tps"))
+            hit = remote_cache[rid] = {"at": time.time(), "man": man, "info": {
+                "topology": man.get("topology") or sc.get("topology"),
+                "duration_s": man.get("duration_s") or (sc.get("traffic") or {}).get("duration_s"),
+                "warmup_s": man.get("warmup_s") if man.get("warmup_s") is not None else (sc.get("traffic") or {}).get("warmup_s"),
+                "base_tps": base, "budget": sc.get("budget"),
+                "flows": list((sc.get("traffic") or {}).get("flows") or [])}}
+        hb = _json(rd / "heartbeat") or {}
+        phase = hb.get("phase") or lease.get("phase") or "PREPARE"
+        return {"job_id": None, "run_id": rid, "scenario": lease.get("scenario") or hit["man"].get("scenario"),
+                "phase": phase, "abort_reason": None, "abort_kind": None,
+                "started_at": lease.get("started_at") or hit["man"].get("created_at"), "rate_multiplier": 1.0,
+                **hit["info"], "local": False, "owner": lease.get("owner"), "measure_started_at": _measure_start(rid, phase)}
+
+    measure_cache: dict[str, tuple[float, float | None]] = {}
+
+    def _measure_start(run_id: str | None, phase: str | None = None) -> float | None:
+        """When live traffic started (t_start_us in the manifest): warm-up and measurement are timed from
+        here, not from the launch (a 2M-customer world spends minutes preparing first). Before warm-up the
+        manifest holds a provisional value (replaced when traffic really starts), so nothing is reported."""
+        if not run_id or (phase or "").upper() in ("PREPARE", "BACKFILL", ""):
+            return None
+        hit = measure_cache.get(run_id)
+        if hit is not None and (hit[1] is not None or time.time() - hit[0] < 2):
+            return hit[1]
+        t = (_json(runs_dir / run_id / "manifest.json") or {}).get("t_start_us")
+        val = t / 1e6 if t else None
+        measure_cache[run_id] = (time.time(), val)
+        return val
+
+    def _tail_remote_log(active: dict[str, Any] | None) -> None:
+        """Stream the run log of a run this console did not start (its runner writes runs/<id>/run.log)."""
+        if not active or active.get("local"):
+            return
+        from ..runner.run import read_run_log
+        rid = active["run_id"]
+        lines, nxt = read_run_log(runs_dir / rid, log_tail.get(rid, 0), max_lines=500)
+        log_tail[rid] = nxt
+        for x in lines:
+            hub.add_log(rid, x["line"])
 
     scheduler = Scheduler(store, worker)
     summary_cache: dict[str, tuple[float, dict]] = {}
@@ -180,7 +250,13 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                         pipe = await asyncio.to_thread(_pipeline, st, lease)
                     except Exception:  # noqa: BLE001 - status must keep ticking
                         pipe = None
-                    hub.publish({"type": "status", **st, "kafka": hub.connected, "lease": lease, "pipeline": pipe})
+                    try:
+                        active = await asyncio.to_thread(_active, st, lease)
+                        await asyncio.to_thread(_tail_remote_log, active)
+                    except Exception:  # noqa: BLE001
+                        active = st.get("current")
+                    hub.publish({"type": "status", **st, "active": active, "kafka": hub.connected, "lease": lease,
+                                 "pipeline": pipe})
             task = asyncio.create_task(status_ticker())
         yield
         probes.stop()
@@ -196,7 +272,10 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
                               "explorer, environment and docs.")
     app.state.store, app.state.hub, app.state.worker, app.state.scheduler = store, hub, worker, scheduler
     app.add_middleware(auth_mod.AuthMiddleware)
-    for r in (auth_mod.router, env_mod.router, topology_mod.router, docs_mod.router, explorer_router(runs_dir)):
+    ex_router = explorer_router(runs_dir)
+    from .replay import make_router as replay_router
+    for r in (auth_mod.router, env_mod.router, topology_mod.router, docs_mod.router, ex_router,
+              replay_router(runs_dir, ex_router.explorer)):
         app.include_router(r)
 
     @app.get("/api/health")
@@ -225,19 +304,38 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         except ValidationError as e:
             raise HTTPException(400, {"errors": json.loads(e.json())}) from e
 
+    from ..scenario import REPO_ROOT as _ROOT
+    from . import scenario_seed
+    bundled_dir = _ROOT / "scenarios"
+    separate = bundled_dir.resolve() != scenario_dir.resolve()   # the console's writable copy (a volume)
+
     @app.get("/api/scenarios")
     def list_scenarios() -> list[dict[str, Any]]:
         out = []
+        flags = scenario_seed.status(bundled_dir, scenario_dir) if separate else {}
         for p in sorted(scenario_dir.glob("*.yaml")):
             text = p.read_text()
             try:
                 d = yaml.safe_load(text) or {}
             except yaml.YAMLError:
                 d = {}
+            f = flags.get(p.stem) or {"bundled": not separate or (bundled_dir / p.name).exists(), "edited": False,
+                                      "update_available": False}
             out.append({"name": p.stem, "topology": d.get("topology"), "description": d.get("description", ""),
                         "tps": ((d.get("traffic") or {}).get("profile") or {}).get("tps"),
-                        "duration_s": (d.get("traffic") or {}).get("duration_s"), "yaml": text})
+                        "duration_s": (d.get("traffic") or {}).get("duration_s"),
+                        "flows": (d.get("traffic") or {}).get("flows") or [], "yaml": text, **f})
         return out
+
+    @app.post("/api/scenarios/{name}/reset")
+    def reset_scenario(name: str) -> dict[str, Any]:
+        """Restore a bundled scenario to the version in this image (the edited copy is kept in .backup/)."""
+        _scenario_path(name)
+        if not separate:
+            raise HTTPException(400, "scenarios are read from the bundled directory itself: nothing to reset")
+        if not scenario_seed.reset(bundled_dir, scenario_dir, name):
+            raise HTTPException(404, f"{name} is not a bundled scenario")
+        return {"ok": True, "name": name}
 
     @app.get("/api/scenarios/{name}")
     def get_scenario(name: str) -> dict[str, Any]:
@@ -256,6 +354,8 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
     def put_scenario(name: str, body: ScenarioText) -> dict[str, Any]:
         sc = _validate(body.yaml, name)
         _scenario_path(name).write_text(body.yaml if body.yaml.endswith("\n") else body.yaml + "\n")
+        if separate:
+            scenario_seed.mark_edited(scenario_dir, name)   # an upgrade never overwrites it
         return {"ok": True, "name": name, "scenario": sc.model_dump(mode="json")}
 
     @app.post("/api/scenarios/{name}/budget")
@@ -329,6 +429,49 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
         return {"queue": store.queued(), "jobs": jobs[:50], "history": history, "current": cur,
                 "blocked_by": st["blocked_by"], "lease": _lease_holder()}
 
+    @app.get("/api/topologies")
+    def topologies(limit: int = 300) -> dict[str, Any]:
+        """Every topology: how it is built, what it can and cannot do, its limits and enhancements
+        (contracts/topologies.yaml), the scenarios that run it, its latest runs on this stack, and advice
+        from the latest finished one (with the evidence behind each item)."""
+        from ..topologies import load as load_topologies
+        from ..topologies import run_advice
+        doc = load_topologies()
+        scen: dict[str, list[dict[str, Any]]] = {}
+        for p in sorted(scenario_dir.glob("*.yaml")):
+            try:
+                d = yaml.safe_load(p.read_text()) or {}
+            except yaml.YAMLError:
+                continue
+            scen.setdefault(d.get("topology") or "gateway-kafka", []).append(
+                {"name": p.stem, "description": d.get("description", ""),
+                 "flows": (d.get("traffic") or {}).get("flows") or [],
+                 "tps": ((d.get("traffic") or {}).get("profile") or {}).get("tps")})
+        dirs = sorted((d for d in runs_dir.iterdir() if d.is_dir() and (d / "manifest.json").exists()),
+                      key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
+        by_topo: dict[str, list[dict[str, Any]]] = {}
+        for d in dirs:
+            sm = _summary(d)
+            if sm.get("verdict") and sm.get("topology"):
+                by_topo.setdefault(sm["topology"], []).append(sm)
+        out = []
+        for tid, t in (doc.get("topologies") or {}).items():
+            runs = by_topo.get(tid, [])
+            latest = runs[0] if runs else None
+            advice = []
+            if latest:
+                rd = runs_dir / latest["run_id"]
+                rep = _json(rd / "report.json") or {}
+                advice = run_advice(rep, latest, _json(rd / "verify.json"), tid)
+            out.append({"id": tid, **t, "scenarios": scen.get(tid, []), "latest": latest,
+                        "runs": [{k: r.get(k) for k in ("run_id", "scenario", "started_at", "verdict", "e2e_p99_ms",
+                                                         "hot_path_p99_ms", "achieved_tps", "verify_passed",
+                                                         "exact_set_agreement", "within_budget")} for r in runs[:8]],
+                        "advice": advice})
+        return {"version": doc.get("version"), "capabilities": doc.get("capabilities") or {},
+                "components": doc.get("components") or {}, "advice_by_stage": doc.get("advice") or {},
+                "hybrid": doc.get("hybrid"), "topologies": out}
+
     @app.get("/api/summary")
     def summary(limit: int = 12) -> dict[str, Any]:
         dirs = sorted((d for d in runs_dir.iterdir() if d.is_dir() and (d / "manifest.json").exists()),
@@ -351,7 +494,17 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             rep.pop("text", None)
         return {"run_id": run_id, "summary": _summary(d), "manifest": _json(d / "manifest.json"), "report": rep,
                 "verify": _json(d / "verify.json"), "run": _json(d / "run.json"), "scenario": _json(d / "scenario.json"),
-                "logs": list(worker.logs.get(run_id, []))[-500:]}
+                "logs": _run_logs(run_id, d)}
+
+    def _run_logs(run_id: str, d: Path) -> list[str]:
+        """The console's own log of the run, else the runner's persisted run.log (a run started elsewhere,
+        or one from before a console restart)."""
+        mine = list(worker.logs.get(run_id, []))
+        if mine:
+            return mine[-500:]
+        from ..runner.run import read_run_log
+        lines, _ = read_run_log(d, 0, max_lines=500)
+        return [x["line"] for x in lines]
 
     @app.get("/api/runs/{run_id}/report.html")
     def get_report_html(run_id: str):
@@ -511,7 +664,12 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             pipe = _pipeline(st, lease)
         except Exception:  # noqa: BLE001
             pipe = None
-        return {**st, "kafka": hub.connected, "kafka_error": hub.last_error, "lease": lease, "pipeline": pipe}
+        try:
+            active = _active(st, lease)
+        except Exception:  # noqa: BLE001
+            active = st.get("current")
+        return {**st, "active": active, "kafka": hub.connected, "kafka_error": hub.last_error, "lease": lease,
+                "pipeline": pipe}
 
     @app.get("/api/live/history")
     def live_history(run_id: str | None = None, seconds: int = 300) -> dict[str, Any]:
@@ -524,7 +682,12 @@ def create_app(runs_dir: Path | None = None, scenario_dir: Path | None = None, r
             return
         q = hub.subscribe()
         try:
-            await ws.send_json({"type": "status", **worker.status(), "kafka": hub.connected})
+            st, lease = worker.status(), await asyncio.to_thread(_lease_holder)
+            try:
+                active = await asyncio.to_thread(_active, st, lease)
+            except Exception:  # noqa: BLE001
+                active = st.get("current")
+            await ws.send_json({"type": "status", **st, "active": active, "lease": lease, "kafka": hub.connected})
             while True:
                 msg = await q.get()
                 await ws.send_json(msg)

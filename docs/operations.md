@@ -17,7 +17,7 @@ the cause, and what the code or config now does about it.
 
 ## Startup: what a run does before it measures
 
-Every run walks the same 13 steps. Each is recorded with a status (`pending`, `running`, `done`,
+Every run walks the same 14 steps. Each is recorded with a status (`pending`, `running`, `done`,
 `skipped`, `failed`, `warn`), timings, a detail line and, where it applies, live progress:
 
 | # | Step | What happens |
@@ -26,9 +26,9 @@ Every run walks the same 13 steps. Each is recorded with a status (`pending`, `r
 | 2 | Kafka topics | topics are created if missing |
 | 3 | Profiles seeded | customer / merchant profile blobs (`pf:*`) written to Redis for this world |
 | 4 | State provenance | does the running Flink job's state belong to this world? Known match: warm. Another world, or unknown: fresh |
-| 5 | Online store | fresh state: the `fs:*` stream blobs are cleared; warm: kept |
-| 6 | Flink job | kept, or cancelled and resubmitted (fresh state), or restored from a savepoint (mode switch) |
-| 7 | Configs applied | scoring and model-server configs published and pushed to the admin endpoints |
+| 5 | Configs applied | scoring and model-server configs published and pushed to the admin endpoints |
+| 6 | Online store | fresh state: the `fs:*` stream blobs are cleared; warm: kept |
+| 7 | Flink job | kept, or cancelled and resubmitted (fresh state), or restored from a savepoint (mode switch) |
 | 8 | History replay | unpaced bulk history (Flink builds state; the gateway skips it), then a paced, **scored** prime segment when the scoring path is cold |
 | 9 | Feature catch-up | until Flink has processed the history (see below) |
 | 10 | Scoring-path prime | released only once the feature job has caught up: paced at the measured rate and scored, so the gateway, model and audit path warm on a quiet pipeline |
@@ -41,7 +41,7 @@ Every run walks the same 13 steps. Each is recorded with a status (`pending`, `r
   collapses to "prepared in N s" once the run measures.
 - **Overview:** the "running now" card shows the active step.
 - **Run log:** one consistent line per transition and every 5 s of progress, for example
-  `[startup 9/13] feature catch-up: 71% (412,330/583,063 events), 9,800/s, ETA 17 s · committed lag 230,511 (offsets commit at each checkpoint)`.
+  `[startup 10/14] feature catch-up: 71% (412,330/583,063 events), 9,800/s, ETA 17 s · committed lag 230,511 (offsets commit at each checkpoint)`.
 - **Run directory:** `startup.json`, rewritten atomically. The console reads it for the active run
   whoever started it (console, CLI, Kubernetes Job).
 - **Report:** a `startup` section with the time spent per step.
@@ -218,6 +218,9 @@ decision were silently never scored; in production, skipped fraud checks):
 | "Feature staleness" seems huge | it measured event-time age, not pipeline lag | the metric is `store_update_lag`: time from Kafka append to the online-store write |
 | `JsonFormat: field already set` applying overrides | proto3 JSON oneof set twice by an override merge | overrides use a presence-preserving overlay before parsing |
 | **FAIL** on `user-example-100ms` | intended: 100 ms feature build + 30-100 ms model cannot meet 150 ms | the budget check predicts it; the report shows fallbacks protecting availability |
+| Large runs: Flink **checkpoints failing** (e.g. "4 ok · 6 failed"), the job RESTARTING, `NoResourceAvailableException`, "Checkpoint Coordinator is suspending" | measured chain: host out of memory → kernel killed Redis (no restart policy) → the Flink Redis client buffered writes without bound → TaskManager heap full → missed heartbeat → job failover → checkpoints failed | Redis restarts and runs `noeviction` (no silent loss of feature state); compact v2 state blobs (3.4× smaller); the Redis client fails fast; store writes are bounded and drained at each checkpoint; the TaskManager exits on OOM and restarts; 3 failed checkpoints tolerated; jobs restore from retained checkpoints; the run's health watch aborts with the reason (store full / restarted) and records Flink restarts ([Flink job](dev/flink-job.md#fault-tolerance)) |
+| `bp high` on the Flink source and first stages | during the history replay: expected (the replay runs as fast as the slowest stage). During the measured window: the job cannot keep up | read the busy stage, not the backpressured ones; scale parallelism or cores ([reading backpressure](dev/flink-job.md#reading-checkpoints-and-backpressure)) |
+| Live shows "Pipeline busy" while a run is in progress | the run was started outside this console (CLI, `make live-test`, a Job, another console) | Live now shows that run's stats, startup progress and log too, and the note says where it came from and which startup step it is at |
 
 ## Throughput and tail latency
 

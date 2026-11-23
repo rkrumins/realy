@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { EmptyState, ErrorState, PageHeader, StatusBadge, TopologyBadge, topologyLabel, VerdictBadge } from "@/components/common";
 import { PipelineBanner, StopAllButton } from "@/components/run-controls";
+import { useStatus } from "@/lib/hooks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -86,6 +87,7 @@ function JobRow({ j, onAbort, selected, onSelect, phase }: {
 }
 
 export default function Runs() {
+  const liveStatus = useStatus();
   const [params, setParams] = useSearchParams();
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -151,7 +153,7 @@ export default function Runs() {
           <StopAllButton />
           <Button variant="gradient" onClick={() => nav("/launch")}><Rocket />New run</Button>
         </>} />
-      <PipelineBanner status={runs.data ? { current: runs.data.current, lease: runs.data.lease, blocked_by: runs.data.blocked_by } : null} />
+      <PipelineBanner status={runs.data ? { current: runs.data.current, lease: runs.data.lease, blocked_by: runs.data.blocked_by, pipeline: liveStatus?.pipeline } : null} />
       <Tabs value={tab} onValueChange={(t) => setParams((p) => { p.set("tab", t); return p; }, { replace: true })}>
         <TabsList>
           <TabsTrigger value="history"><History className="size-3.5" />History <span className="text-subtle">{runs.data?.history.length ?? ""}</span></TabsTrigger>

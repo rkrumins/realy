@@ -18,6 +18,21 @@ spec:
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaTopic
 metadata:
+  name: payments-events-assembled
+  labels:
+    strimzi.io/cluster: realy
+spec:
+  topicName: payments.events.assembled
+  partitions: 48
+  replicas: 3
+  config:
+    compression.type: lz4
+    retention.ms: '21600000'
+    min.insync.replicas: '2'
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
   name: payments-decisions
   labels:
     strimzi.io/cluster: realy

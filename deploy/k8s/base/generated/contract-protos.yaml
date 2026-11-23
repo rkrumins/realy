@@ -211,23 +211,25 @@ data:
     }\n\n// Enable/disable a service's Kafka ingress (topology switching without restarts).\
     \ On enable the\n// consumer seeks to the end of the topic, so a new run never\
     \ processes an old backlog.\nmessage IngressCommand {\n  bool kafka_enabled =\
-    \ 1;\n}\n\nmessage RateCommand {\n  double tps = 1;          // absolute target\
-    \ (0 = keep)\n  double multiplier = 2;   // relative change (0 = keep)\n}\n\n\
-    enum RunPhase {\n  RUN_PHASE_UNSPECIFIED = 0;\n  PREPARE = 1;\n  WARMUP = 2;\n\
-    \  MEASURE = 3;\n  DRAIN = 4;\n  COMPLETE = 5;\n  ABORTED = 6;\n}\n\nmessage ControlMessage\
-    \ {\n  string run_id = 1;\n  sfixed64 issued_at_us = 2;\n  uint64 version = 3;\n\
-    \  string target = 4;       // \"*\" | \"gateway\" | \"flink\" | \"model\" | \"\
-    emitter\"\n  oneof cmd {\n    ScoringConfig scoring = 10;\n    ModelServerConfig\
-    \ model_server = 11;\n    RateCommand rate = 12;\n    RunPhase phase = 13;\n \
-    \   IngressCommand ingress = 14;\n  }\n}\n\n// ---------------- live telemetry\
-    \ (`bench.metrics`, 1 s windows) ----------------\nmessage StageStat {\n  string\
-    \ name = 1;\n  uint64 count = 2;\n  double p50_ms = 3;\n  double p90_ms = 4;\n\
-    \  double p99_ms = 5;\n  double p999_ms = 6;\n  double max_ms = 7;\n}\n\nmessage\
-    \ MetricsSnapshot {\n  string run_id = 1;\n  string source = 2;       // \"emitter\"\
-    \ | \"collector\" | \"gateway\" | \"model\" | \"flink\"\n  string instance = 3;\n\
-    \  sfixed64 ts_us = 4;      // window end\n  uint32 window_ms = 5;\n  map<string,\
-    \ double> counters = 6;\n  repeated StageStat stages = 7;\n  RunPhase phase =\
-    \ 8;\n}\n"
+    \ 1;\n  // the topic the Kafka ingress consumes (\"\" = EVENTS_TOPIC, the raw\
+    \ events): a run with multi-message\n  // transactions scores the assembled ones\
+    \ (payments.events.assembled)\n  string topic = 2;\n}\n\nmessage RateCommand {\n\
+    \  double tps = 1;          // absolute target (0 = keep)\n  double multiplier\
+    \ = 2;   // relative change (0 = keep)\n}\n\nenum RunPhase {\n  RUN_PHASE_UNSPECIFIED\
+    \ = 0;\n  PREPARE = 1;\n  WARMUP = 2;\n  MEASURE = 3;\n  DRAIN = 4;\n  COMPLETE\
+    \ = 5;\n  ABORTED = 6;\n}\n\nmessage ControlMessage {\n  string run_id = 1;\n\
+    \  sfixed64 issued_at_us = 2;\n  uint64 version = 3;\n  string target = 4;   \
+    \    // \"*\" | \"gateway\" | \"flink\" | \"model\" | \"emitter\"\n  oneof cmd\
+    \ {\n    ScoringConfig scoring = 10;\n    ModelServerConfig model_server = 11;\n\
+    \    RateCommand rate = 12;\n    RunPhase phase = 13;\n    IngressCommand ingress\
+    \ = 14;\n  }\n}\n\n// ---------------- live telemetry (`bench.metrics`, 1 s windows)\
+    \ ----------------\nmessage StageStat {\n  string name = 1;\n  uint64 count =\
+    \ 2;\n  double p50_ms = 3;\n  double p90_ms = 4;\n  double p99_ms = 5;\n  double\
+    \ p999_ms = 6;\n  double max_ms = 7;\n}\n\nmessage MetricsSnapshot {\n  string\
+    \ run_id = 1;\n  string source = 2;       // \"emitter\" | \"collector\" | \"\
+    gateway\" | \"model\" | \"flink\"\n  string instance = 3;\n  sfixed64 ts_us =\
+    \ 4;      // window end\n  uint32 window_ms = 5;\n  map<string, double> counters\
+    \ = 6;\n  repeated StageStat stages = 7;\n  RunPhase phase = 8;\n}\n"
   realy__bench__v1__trace.proto: "// In-band per-event benchmark telemetry. Travels\
     \ as the `x-bench-trace` Kafka header\n// (or ScoreRequest.trace on gRPC) and\
     \ is returned inside DecisionRecord.trace.\nsyntax = \"proto3\";\n\npackage realy.bench.v1;\n\
@@ -240,7 +242,8 @@ data:
     \  SHUFFLE = 20;             // previous operator emit -> this keyed operator\
     \ (attr = Entity)\n  STATE_FEATURES = 21;      // keyed state read/update/compute\
     \ (attr = Entity)\n  FEATURE_STORE_WRITE = 22; // features -> online store (Redis)\n\
-    \  // --- scoring orchestrator ---------------------------------------------------\n\
+    \  TXN_ASSEMBLY = 23;        // a multi-message transaction: its trigger's ingest\
+    \ -> assembled (the wait for its parts)\n  // --- scoring orchestrator ---------------------------------------------------\n\
     \  FEATURE_LOOKUP = 30;      // online-store lookup incl. injected delay (attr\
     \ = lookup index)\n  FEATURE_ASSEMBLE = 31;\n  MODEL_CALL = 40;          // client-observed\
     \ model latency\n  MODEL_BATCH_WAIT = 41;    // client-side micro-batch formation\n\
@@ -278,21 +281,107 @@ data:
     \ repeated float values = 2;\n  bytes missing_bitmap = 3;     // bit i set =>\
     \ feature i was missing and defaulted\n  sfixed64 computed_at_us = 4;\n  repeated\
     \ EntityFreshness freshness = 5;\n}\n"
+  realy__flows__v1__a2a.proto: "// An account-to-account payment as the messages a\
+    \ payment hub really exchanges, linked by `payment_id`:\n// the customer's initiation\
+    \ (pain.001-like), the device / session context the app sends beside it, the\n\
+    // confirmation-of-payee check, strong customer authentication, the submission\
+    \ to the scheme\n// (pacs.008-like) and its status from the scheme (pacs.002 /\
+    \ pacs.004-like: settled, rejected, returned).\n// Every message carries the customer\
+    \ (the partition key) and its own event id and time; together they\n// form one\
+    \ transaction (contracts/transactions/a2a_transfer.yaml).\nsyntax = \"proto3\"\
+    ;\n\npackage realy.flows.v1;\n\noption java_package = \"io.realy.contracts.flows.v1\"\
+    ;\noption java_multiple_files = true;\n\nenum A2aChannel {\n  A2A_CHANNEL_UNSPECIFIED\
+    \ = 0;\n  A2A_MOBILE_APP = 1;\n  A2A_ONLINE_BANKING = 2;\n  A2A_BRANCH = 3;\n\
+    \  A2A_API = 4;            // open banking / third-party initiation\n}\n\nmessage\
+    \ PaymentInitiation {\n  fixed64 event_id = 1;\n  sfixed64 event_time_us = 2;\n\
+    \  fixed64 payment_id = 3;          // the transaction: every message of this\
+    \ payment carries it\n  uint64 customer_id = 4;\n  uint64 account_id = 5;\n  uint64\
+    \ payee_id = 6;\n  int64 amount_minor = 7;\n  string currency = 8;\n  int64 amount_usd_minor\
+    \ = 9;\n  A2aChannel channel = 10;\n  bool new_payee = 11;             // the\
+    \ payee was added in this session\n  string reference = 12;           // payment\
+    \ reference the customer typed\n  double lat = 13;\n  double lon = 14;\n}\n\n\
+    message DeviceContext {\n  fixed64 event_id = 1;\n  sfixed64 event_time_us = 2;\n\
+    \  fixed64 payment_id = 3;\n  uint64 customer_id = 4;\n  uint64 device_id = 5;\n\
+    \  uint32 ip_v4 = 6;\n  string ip_country = 7;\n  uint32 ip_asn = 8;\n  uint32\
+    \ session_age_s = 9;        // seconds since the app session started\n  bool remote_access\
+    \ = 10;         // a remote-access tool is running (screen sharing, remote control)\n\
+    \  bool emulator = 11;\n  bool on_call = 12;               // the customer is\
+    \ on a phone call while paying (a scam signal)\n}\n\nenum PayeeCheckResult {\n\
+    \  PAYEE_CHECK_UNSPECIFIED = 0;\n  PAYEE_MATCH = 1;\n  PAYEE_CLOSE_MATCH = 2;\n\
+    \  PAYEE_NO_MATCH = 3;\n  PAYEE_NOT_CHECKED = 4;           // the payee's bank\
+    \ does not take part\n}\n\nmessage PayeeCheck {\n  fixed64 event_id = 1;\n  sfixed64\
+    \ event_time_us = 2;\n  fixed64 payment_id = 3;\n  uint64 customer_id = 4;\n \
+    \ uint64 payee_id = 5;\n  PayeeCheckResult result = 6;\n  bool account_type_mismatch\
+    \ = 7;  // personal vs business account\n}\n\nenum ScaMethod {\n  SCA_METHOD_UNSPECIFIED\
+    \ = 0;\n  SCA_BIOMETRIC = 1;\n  SCA_APP_PUSH = 2;\n  SCA_SMS_OTP = 3;\n  SCA_CARD_READER\
+    \ = 4;\n}\n\nmessage ScaResult {\n  fixed64 event_id = 1;\n  sfixed64 event_time_us\
+    \ = 2;\n  fixed64 payment_id = 3;\n  uint64 customer_id = 4;\n  ScaMethod method\
+    \ = 5;\n  bool passed = 6;\n  uint32 attempt = 7;              // 1 for the first\
+    \ attempt\n}\n\nenum A2aScheme {\n  A2A_SCHEME_UNSPECIFIED = 0;\n  A2A_INSTANT\
+    \ = 1;                 // faster payments / SEPA instant / RTP\n  A2A_BATCH =\
+    \ 2;                   // bacs / SEPA credit transfer\n  A2A_HIGH_VALUE = 3; \
+    \             // CHAPS / RTGS\n}\n\nmessage PaymentSubmission {\n  fixed64 event_id\
+    \ = 1;\n  sfixed64 event_time_us = 2;\n  fixed64 payment_id = 3;\n  uint64 customer_id\
+    \ = 4;\n  uint64 account_id = 5;\n  uint64 payee_id = 6;             // may differ\
+    \ from the initiation's: a payee changed mid-flow\n  int64 amount_minor = 7;\n\
+    \  string currency = 8;\n  int64 amount_usd_minor = 9;\n  A2aScheme scheme = 10;\n\
+    }\n\nenum PaymentStatusCode {\n  PAYMENT_STATUS_UNSPECIFIED = 0;\n  PAYMENT_ACCEPTED\
+    \ = 1;            // the scheme accepted it\n  PAYMENT_SETTLED = 2;\n  PAYMENT_REJECTED\
+    \ = 3;\n  PAYMENT_RETURNED = 4;            // the payee's bank sent it back\n\
+    \  PAYMENT_RECALLED = 5;            // recalled by the sender's bank (scam reported)\n\
+    }\n\nmessage PaymentStatus {\n  fixed64 event_id = 1;\n  sfixed64 event_time_us\
+    \ = 2;\n  fixed64 payment_id = 3;\n  uint64 customer_id = 4;\n  PaymentStatusCode\
+    \ code = 5;\n  string reason = 6;\n}\n"
+  realy__flows__v1__txn.proto: "// The context of a transaction formed by several\
+    \ linked messages (contracts/transactions/*.yaml): which\n// transaction, at which\
+    \ stage, which of its parts were present when it was assembled, and its context\n\
+    // values (CEL `txn.*`). Travels with the assembled unified event (Kafka header\
+    \ `x-txn`, the Flink\n// envelope) and is recorded on its decision.\nsyntax =\
+    \ \"proto3\";\n\npackage realy.flows.v1;\n\noption java_package = \"io.realy.contracts.flows.v1\"\
+    ;\noption java_multiple_files = true;\n\nmessage TxnContext {\n  string transaction\
+    \ = 1;          // contract name, e.g. a2a_transfer (\"\" = a one-message transaction)\n\
+    \  fixed64 txn_id = 2;              // the link field's value (payment_id)\n \
+    \ string stage = 3;                // \"assembled\", or the scored stage it was\
+    \ decided again at\n  uint32 parts_present = 4;        // bit i = the contract's\
+    \ i-th message role had arrived\n  bool partial = 5;                // assembled\
+    \ at the wait deadline without a required part\n  map<string, string> strings\
+    \ = 6; // context values: enums by name, strings\n  map<string, double> numbers\
+    \ = 7; // context values: numbers, bools (1/0), counts, seconds\n  sfixed64 assembled_at_us\
+    \ = 8;    // wall time it was assembled (the assembly wait is measured from the\
+    \ trigger's ingest)\n}\n\n// The assembler's state of one open transaction (Flink\
+    \ keyed state, keyed by the partition entity;\n// internal, versioned by its own\
+    \ fields).\nmessage TxnState {\n  message Part {\n    string role = 1;\n    bytes\
+    \ payload = 2;             // the message as received\n    sfixed64 event_time_us\
+    \ = 3;\n  }\n  string transaction = 1;\n  fixed64 txn_id = 2;\n  repeated Part\
+    \ latest = 3;        // the latest message of each role that arrived\n  repeated\
+    \ Part first = 4;         // the first message of each role (changed / elapsed\
+    \ context)\n  map<string, uint32> counts = 5;\n  uint32 arrived = 6;         \
+    \     // bit per role\n  bool assembled = 7;\n  bool partial = 8;\n  string stage\
+    \ = 9;\n  sfixed64 trigger_time_us = 10;   // event time of the trigger (0 = not\
+    \ arrived)\n  sfixed64 deadline_wall_us = 11;  // wall time the wait for required\
+    \ parts expires\n  bytes trigger_trace = 12;        // the trigger's x-bench-trace:\
+    \ the decision is timed from it\n  sfixed64 trigger_ingest_us = 13;\n  bool backfill\
+    \ = 14;              // history: assembled into state, never scored\n  repeated\
+    \ Part held = 15;         // lifecycle messages that arrived before assembly\n\
+    }\n"
   realy__payments__v1__label.proto: "// Ground-truth labels. Never embedded in TransactionEvent\
     \ (no leakage); published on\n// `payments.labels` with a simulated chargeback\
     \ / report delay.\nsyntax = \"proto3\";\n\npackage realy.payments.v1;\n\noption\
     \ java_package = \"io.realy.contracts.payments.v1\";\noption java_multiple_files\
-    \ = true;\n\nenum FraudType {\n  FRAUD_TYPE_NONE = 0;\n  CARD_TESTING = 1;\n \
-    \ ACCOUNT_TAKEOVER = 2;\n  LOST_STOLEN = 3;\n  COUNTERFEIT = 4;\n  MERCHANT_BREACH\
-    \ = 5;\n  ATM_CASHOUT = 6;\n  APP_SCAM_MULE = 7;\n  BUST_OUT = 8;\n  BOT_ECOM\
-    \ = 9;\n  FRIENDLY_FRAUD = 10;  // label noise: legitimate transaction charged\
-    \ back\n}\n\nenum LabelSource {\n  LABEL_SOURCE_UNSPECIFIED = 0;\n  CHARGEBACK\
-    \ = 1;\n  CUSTOMER_REPORT = 2;\n  INVESTIGATION = 3;\n}\n\nmessage FraudLabel\
-    \ {\n  fixed64 event_id = 1;\n  sfixed64 label_time_us = 2;   // simulation time\
-    \ at which the label becomes known\n  sfixed64 event_time_us = 3;\n  bool is_fraud\
-    \ = 4;\n  FraudType fraud_type = 5;\n  uint64 campaign_id = 6;\n  LabelSource\
-    \ source = 7;\n  uint64 customer_id = 8;\n  uint64 card_id = 9;\n  int64 amount_usd_minor\
-    \ = 10;\n}\n"
+    \ = true;\n\n// Typology ids. The typology registry (contracts/usecases/typologies/*.yaml)\
+    \ is the source of truth and\n// is open: a user typology takes the next free\
+    \ id, and ClickHouse / reports resolve names from the\n// registry, so an id without\
+    \ a name here is valid. The built-in ones are named for convenience.\nenum FraudType\
+    \ {\n  FRAUD_TYPE_NONE = 0;\n  CARD_TESTING = 1;\n  ACCOUNT_TAKEOVER = 2;\n  LOST_STOLEN\
+    \ = 3;\n  COUNTERFEIT = 4;\n  MERCHANT_BREACH = 5;\n  ATM_CASHOUT = 6;\n  APP_SCAM_MULE\
+    \ = 7;\n  BUST_OUT = 8;\n  BOT_ECOM = 9;\n  FRIENDLY_FRAUD = 10;  // label noise:\
+    \ legitimate transaction charged back\n  INVESTMENT_SCAM = 11;\n}\n\nenum LabelSource\
+    \ {\n  LABEL_SOURCE_UNSPECIFIED = 0;\n  CHARGEBACK = 1;\n  CUSTOMER_REPORT = 2;\n\
+    \  INVESTIGATION = 3;\n}\n\nmessage FraudLabel {\n  fixed64 event_id = 1;\n  sfixed64\
+    \ label_time_us = 2;   // simulation time at which the label becomes known\n \
+    \ sfixed64 event_time_us = 3;\n  bool is_fraud = 4;\n  FraudType fraud_type =\
+    \ 5;\n  uint64 campaign_id = 6;\n  LabelSource source = 7;\n  uint64 customer_id\
+    \ = 8;\n  uint64 card_id = 9;\n  int64 amount_usd_minor = 10;\n}\n"
   realy__payments__v1__transaction.proto: "// Canonical payment event. Production-shaped:\
     \ contains no benchmark fields.\n// Benchmark timing travels separately in the\
     \ `x-bench-trace` Kafka header (realy.bench.v1.BenchTrace).\nsyntax = \"proto3\"\
@@ -337,32 +426,35 @@ data:
     \ request (0 = none)\n}\n"
   realy__scoring__v1__decision.proto: "syntax = \"proto3\";\n\npackage realy.scoring.v1;\n\
     \nimport \"realy/payments/v1/transaction.proto\";\nimport \"realy/features/v1/features.proto\"\
-    ;\nimport \"realy/bench/v1/trace.proto\";\n\noption java_package = \"io.realy.contracts.scoring.v1\"\
-    ;\noption java_multiple_files = true;\n\nenum Outcome {\n  OUTCOME_UNSPECIFIED\
-    \ = 0;\n  APPROVE = 1;\n  REVIEW = 2;\n  DECLINE = 3;\n  CHALLENGE = 4;   // step\
-    \ up before approving: 3DS / SCA challenge online, PIN prompt in store, in-app\n\
-    \                   // confirmation of a transfer; the payment continues only\
-    \ if the customer passes\n}\n\nenum IngressMode {\n  INGRESS_MODE_UNSPECIFIED\
-    \ = 0;\n  SYNC_GRPC = 1;\n  SYNC_HTTP = 2;\n  ASYNC_KAFKA_GATEWAY = 3;\n  ASYNC_FLINK_INLINE\
-    \ = 4;\n}\n\nenum DecisionPath {\n  PATH_FULL = 0;                // features\
-    \ + model + rules\n  PATH_RULES_ONLY_FALLBACK = 1; // model/feature deadline or\
-    \ error -> rules only\n  PATH_PROVISIONAL = 2;         // sync answer given before\
-    \ scoring finished\n  PATH_FINAL_AFTER_PROVISIONAL = 3;\n  PATH_ECHO = 4;    \
-    \            // calibration topology, no processing\n}\n\nmessage RuleHit {\n\
-    \  string rule_id = 1;\n  Outcome action = 2;\n  string reason = 3;\n}\n\nmessage\
-    \ ModelResult {\n  string model_name = 1;\n  string model_version = 2;\n  string\
-    \ deployment = 3;\n  float score = 4;\n  repeated float raw_outputs = 5;\n  fixed64\
-    \ input_hash = 6;\n  bool timed_out = 7;\n  bool errored = 8;\n  uint32 batch_size\
-    \ = 9;\n}\n\n// System-of-record for a decision: everything needed to reproduce,\
-    \ audit, or train.\nmessage DecisionRecord {\n  fixed64 event_id = 1;\n  Outcome\
-    \ outcome = 2;\n  float score = 3;\n  repeated string reason_codes = 4;\n  repeated\
-    \ RuleHit rule_hits = 5;\n  ModelResult model = 6;\n  string policy_version =\
-    \ 7;\n  string rule_set_version = 8;\n  DecisionPath path = 9;\n  bool degraded\
-    \ = 10;\n  IngressMode ingress_mode = 11;\n  string instance_id = 12;\n  sfixed64\
-    \ decided_at_us = 13;\n  uint32 revision = 14;          // 0 = first decision,\
-    \ 1 = final after provisional\n  realy.payments.v1.TransactionEvent event = 15;\n\
-    \  realy.features.v1.FeatureVector features = 16;\n  realy.bench.v1.BenchTrace\
-    \ trace = 17;\n  uint32 feature_schema_version = 18;\n}\n"
+    ;\nimport \"realy/bench/v1/trace.proto\";\nimport \"realy/flows/v1/txn.proto\"\
+    ;\n\noption java_package = \"io.realy.contracts.scoring.v1\";\noption java_multiple_files\
+    \ = true;\n\nenum Outcome {\n  OUTCOME_UNSPECIFIED = 0;\n  APPROVE = 1;\n  REVIEW\
+    \ = 2;\n  DECLINE = 3;\n  CHALLENGE = 4;   // step up before approving: 3DS /\
+    \ SCA challenge online, PIN prompt in store, in-app\n                   // confirmation\
+    \ of a transfer; the payment continues only if the customer passes\n}\n\nenum\
+    \ IngressMode {\n  INGRESS_MODE_UNSPECIFIED = 0;\n  SYNC_GRPC = 1;\n  SYNC_HTTP\
+    \ = 2;\n  ASYNC_KAFKA_GATEWAY = 3;\n  ASYNC_FLINK_INLINE = 4;\n}\n\nenum DecisionPath\
+    \ {\n  PATH_FULL = 0;                // features + model + rules\n  PATH_RULES_ONLY_FALLBACK\
+    \ = 1; // model/feature deadline or error -> rules only\n  PATH_PROVISIONAL =\
+    \ 2;         // sync answer given before scoring finished\n  PATH_FINAL_AFTER_PROVISIONAL\
+    \ = 3;\n  PATH_ECHO = 4;                // calibration topology, no processing\n\
+    }\n\nmessage RuleHit {\n  string rule_id = 1;\n  Outcome action = 2;\n  string\
+    \ reason = 3;\n}\n\nmessage ModelResult {\n  string model_name = 1;\n  string\
+    \ model_version = 2;\n  string deployment = 3;\n  float score = 4;\n  repeated\
+    \ float raw_outputs = 5;\n  fixed64 input_hash = 6;\n  bool timed_out = 7;\n \
+    \ bool errored = 8;\n  uint32 batch_size = 9;\n}\n\n// System-of-record for a\
+    \ decision: everything needed to reproduce, audit, or train.\nmessage DecisionRecord\
+    \ {\n  fixed64 event_id = 1;\n  Outcome outcome = 2;\n  float score = 3;\n  repeated\
+    \ string reason_codes = 4;\n  repeated RuleHit rule_hits = 5;\n  ModelResult model\
+    \ = 6;\n  string policy_version = 7;\n  string rule_set_version = 8;\n  DecisionPath\
+    \ path = 9;\n  bool degraded = 10;\n  IngressMode ingress_mode = 11;\n  string\
+    \ instance_id = 12;\n  sfixed64 decided_at_us = 13;\n  uint32 revision = 14; \
+    \         // 0 = first decision, 1 = final after provisional\n  realy.payments.v1.TransactionEvent\
+    \ event = 15;\n  realy.features.v1.FeatureVector features = 16;\n  realy.bench.v1.BenchTrace\
+    \ trace = 17;\n  uint32 feature_schema_version = 18;\n  // a transaction formed\
+    \ by several linked messages: which one, at which stage, which parts it was\n\
+    \  // assembled from (unset for a one-message transaction)\n  realy.flows.v1.TxnContext\
+    \ txn = 19;\n}\n"
   realy__scoring__v1__scoring_service.proto: "syntax = \"proto3\";\n\npackage realy.scoring.v1;\n\
     \nimport \"realy/payments/v1/transaction.proto\";\nimport \"realy/bench/v1/trace.proto\"\
     ;\nimport \"realy/scoring/v1/decision.proto\";\n\noption java_package = \"io.realy.contracts.scoring.v1\"\

@@ -120,13 +120,13 @@ def store(run_dir: Path, clickhouse: str | None = None, log=None) -> bool:
         return False
     url = clickhouse or os.environ.get("CLICKHOUSE_URL", "http://localhost:8123")
     try:
-        import httpx
+        from ..common import clickhouse as chc
         body = json.dumps(row(run_dir), allow_nan=False)
-        r = httpx.post(url, params={"query": "INSERT INTO realy.runs FORMAT JSONEachRow"}, content=body, timeout=10)
+        r = chc.post(body, params={"query": "INSERT INTO realy.runs FORMAT JSONEachRow"}, timeout=10, base=url)
         if r.status_code >= 400 and ("NO_SUCH_COLUMN" in r.text or "Unknown field" in r.text or "UNKNOWN_IDENTIFIER" in r.text):
             for stmt in migrations():   # a table created by an older release: upgrade it in place, once
-                httpx.post(url, params={"query": f"ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS {stmt}"}, timeout=10)
-            r = httpx.post(url, params={"query": "INSERT INTO realy.runs FORMAT JSONEachRow"}, content=body, timeout=10)
+                chc.post("", params={"query": f"ALTER TABLE realy.runs ADD COLUMN IF NOT EXISTS {stmt}"}, timeout=10, base=url)
+            r = chc.post(body, params={"query": "INSERT INTO realy.runs FORMAT JSONEachRow"}, timeout=10, base=url)
         r.raise_for_status()
         return True
     except Exception as e:  # noqa: BLE001 - history must never fail a run

@@ -4,6 +4,17 @@
 
 Rule sets are CEL over `f` (features, doubles) and `event` (transaction fields, enums by name). Evaluated by the Java scoring core and re-evaluated by `pulsebench verify` for parity. Precedence: DECLINE rule > ALLOW rule > score >= decline > REVIEW rule > score >= review > APPROVE.
 
+## `baseline-flows` - version `baseline-v5-flows2`
+
+Model thresholds: review >= `None`, decline >= `None`.
+
+| Rule | Action | When | Reason |
+|---|---|---|---|
+| `APP_SCAM_PAYEE_MISMATCH` | REVIEW | `event.txn.payee_check == 'PAYEE_NO_MATCH' && event.txn.new_payee` | a new payee whose name does not match the account (payee check), and the customer went ahead |
+| `APP_SCAM_COACHED` | REVIEW | `event.txn.on_call && event.txn.new_payee && event.amount_usd_minor >= 50000` | 500+ to a new payee while the customer is on a phone call |
+| `ATO_REMOTE_ACCESS` | DECLINE | `event.txn.remote_access && event.txn.new_payee` | a remote-access tool is running while a new payee is paid |
+| `CNP_3DS_HIGH_RISK_UNAUTHENTICATED` | REVIEW | `event.txn.acs_risk_score >= 60 && event.txn.three_ds_status != 'TDS_AUTHENTICATED'` | the 3-D Secure server scored the cardholder 60+ and the payment was not authenticated |
+
 ## `baseline-v1` - version `baseline-v1`
 
 Model thresholds: review >= `0.55`, decline >= `0.9`.

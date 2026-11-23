@@ -1,0 +1,580 @@
+# The topologies a scenario can run (scenario `topology:`), built from components. One source for:
+#   - the runner's choices (how events reach the scorer, who scores, the Flink job's mode, how
+#     multi-message transactions travel, the verifier's exact-feature target): `runtime`
+#   - the live pipeline map in the console and its metrics per hop: `steps`
+#   - the generated reference (docs/reference/topologies.md) and the console's Topologies page
+#   - the advice the console and the run report give from measured runs: `advice`
+# How to build a new topology from these components, or add a component: docs/dev/topologies.md.
+#
+# components   what each building block is, its code, every setting that controls it (where it is set and
+#              its default), and how to swap or extend it
+# topologies   per topology: runtime (validated against what the runner implements), steps (each one a
+#              component, with its position on the map, the metrics that feed it and the hops out of it),
+#              what it can and cannot do (capabilities), when to choose it, and the enhancements that would
+#              lift its limits
+#
+# Step metrics: `rate` is "counter:<source>.<name>" (events/s summed over instances) or
+# "stage:<source>.<stage>" (stage samples/s); `p99` is "<source>.<stage>" (max p99 across instances).
+# Positions: `at: [col, row]`; col may be "next" (one right of the rightmost so far) or "same" (the last
+# "next" column). A step with `for_each: stream_entities` becomes one node per entity with stream
+# features ({entity} in its fields), chained, wrapping every `wrap` rows.
+#
+# Capability status: "yes" | partial | "no" | n/a. Every note says why, in terms of how the topology is built.
+# Enhancement status: available (a setting or scenario today) | planned (in the plan) | idea (not planned).
+version: 2
+
+capabilities:
+  answers_caller:
+    label: Answers the caller synchronously
+    why: a card authorisation's terminal waits for approve / decline; an event-driven check does not
+  owned_features_exact:
+    label: Customer and card features exact
+    why: the features the verifier can recompute exactly, because one customer's events have one order
+  shared_features_exact:
+    label: Shared-entity features exact
+    why: merchant, terminal, device, IP and payee are shared by many customers, so their events interleave
+  multi_message:
+    label: Transactions formed by several messages
+    why: a payment hub sees a payment as linked messages (initiation, payee check, 3DS result, ...)
+  rescored_stages:
+    label: Lifecycle stages decided again
+    why: a bank scores a transfer at initiation and again before release
+  model_and_rules:
+    label: Model, rules and policy
+    why: the full decision; a calibration topology skips it on purpose
+  deadline_fallback:
+    label: Answers in budget when a dependency is slow
+    why: a feature or model deadline must not become a missing decision
+  survives_flink_restart:
+    label: Keeps deciding while Flink restarts
+    why: Flink restarts on failure or deploy; checkpoints restore its state
+  audit:
+    label: Every decision durable before it counts
+    why: the audit log is the system of record for disputes, training and regulators
+
+# ---------------------------------------------------------------------------------------- components
+components:
+  emitter:
+    kind: driver
+    label: Emitter
+    what: the open-loop load generator; sends each event at its intended time, so a slow pipeline cannot slow the schedule
+    code: python/realy/emit/driver.py (generator python/realy/gen)
+    config:
+      - { key: traffic.profile, in: scenario, default: "constant 500 TPS", effect: "the rate over time: constant, ramp, step, burst" }
+      - { key: traffic.arrivals, in: scenario, default: uniform, effect: "uniform or Poisson inter-arrival times" }
+      - { key: traffic.generators, in: scenario, default: "1", effect: "emitter processes (shards of the customer population); raise when schedule lag grows" }
+      - { key: traffic.flows, in: scenario, default: "[]", effect: "send payments as the messages of these transaction contracts" }
+      - { key: fraud, in: scenario, default: "background mix", effect: "typology mix, campaigns, labels, step-up rates" }
+    extend: "send your own events to the events topic instead (keyed by the partition entity; `x-event-type` for typed messages); replaying a recorded dataset is planned (S8)"
+  grpc_emitter:
+    kind: driver
+    label: gRPC emitter
+    what: the Java open-loop load emitter for the synchronous rail; calls Score() and measures intended time to response
+    code: java/load-emitter, python/realy/runner/sync.py
+    config:
+      - { key: sync.mode, in: scenario, default: unary, effect: "unary calls or one bidirectional stream per channel" }
+      - { key: sync.channels, in: scenario, default: "4", effect: "gRPC channels to the gateway" }
+      - { key: sync.deadline_ms, in: scenario, default: "0 (the gateway's budget)", effect: "the per-request deadline sent with each call" }
+      - { key: GATEWAY_GRPC, in: env (runner), default: "localhost:8080", effect: "the gateway's gRPC address" }
+      - { key: EMITTER_JAVA_OPTS, in: env (runner), default: "-XX:+UseZGC -Xmx3g", effect: "the emitter JVM" }
+    extend: "any gRPC or HTTP/JSON client of realy.scoring.v1.ScoringService (the Score API: docs/dev/integration.md)"
+  events_topic:
+    kind: kafka
+    label: events.raw
+    what: "the inbound topic: every event (and every message of a multi-message transaction), keyed by the pipeline's partition entity so one customer's events are ordered"
+    code: contracts/kafka/topics.yaml, deploy/compose/kafka/create-topics.sh
+    config:
+      - { key: topics.events, in: contracts/pipelines/<pipeline>.yaml, default: payments.events.raw, effect: "the topic name" }
+      - { key: partitions, in: contracts/kafka/topics.yaml, default: "12 (compose)", effect: "the upper bound on gateway consumers and Flink source parallelism" }
+      - { key: "KAFKA_LINGER_MS / KAFKA_BATCH_SIZE / KAFKA_COMPRESSION", in: env (every JVM service), default: "1 / 131072 / lz4", effect: "producer batching: latency against throughput" }
+      - { key: KAFKA_ACKS, in: env (every JVM service), default: all, effect: "durability before the ack" }
+      - { key: "KAFKA_SECURITY_PROTOCOL, KAFKA_SASL_*, KAFKA_SSL_*", in: env, default: PLAINTEXT, effect: "TLS / SASL to your own brokers" }
+    extend: "any Kafka-compatible broker (bring your own: docs/dev/integration.md); another transport needs a new source in the gateway and the Flink job"
+  assembled_topic:
+    kind: kafka
+    label: events.assembled
+    what: "assembled transactions (and passed-through payments) from the Flink assembler, with the trigger's trace and the assembly wait as a span"
+    code: java/flink-job/src/main/java/io/realy/flink/FraudJob.java (assembledSink)
+    config:
+      - { key: topics.assembled, in: contracts/pipelines/<pipeline>.yaml, default: payments.events.assembled, effect: "the topic name; the gateway consumes it instead of the raw topic when a run has flows" }
+    extend: "consumed by anything that wants complete transactions (another scorer, a case-management system)"
+  mirror_topic:
+    kind: kafka
+    label: events.raw (mirror)
+    what: "the synchronous rail's requests, mirrored by the gateway so Flink folds them into state (marked x-mirrored, so the gateway's own consumer skips them)"
+    code: java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java (mirror)
+    config:
+      - { key: MIRROR_TO_KAFKA, in: env (gateway), default: "true", effect: "off: sync requests never reach the feature state" }
+    extend: "the mirror is an ordinary producer: point it at another topic to feed other consumers"
+  decisions_topic:
+    kind: kafka
+    label: decisions
+    what: "the audit write-ahead log: every DecisionRecord, durable before the source offset is committed (async) or the reply is sent (sync)"
+    code: java/scoring-gateway/src/main/java/io/realy/gateway/DecisionSink.java, FraudJob.sink (Flink)
+    config:
+      - { key: topics.decisions, in: contracts/pipelines/<pipeline>.yaml, default: payments.decisions, effect: "the topic name" }
+      - { key: scoring.audit_on_failure, in: scenario, default: SPOOL_LOCAL, effect: "when the broker is down: spool to a local file (AUDIT_SPOOL) and replay, or decline (FAIL_CLOSED)" }
+      - { key: exactly_once, in: scenario, default: "false", effect: "Flink inline: transactional sink (adds the checkpoint interval to visibility)" }
+    extend: "consume it for downstream actions (holds, case management, notifications); the gateway's sink is a class, not yet an interface (DecisionSink: planned with S7)"
+  flink_assembler:
+    kind: flink
+    label: Flink assembler
+    what: "keyed by the partition entity before the feature stages: holds a transaction's parts until its trigger and required parts are in (or the wait expires), then emits the unified event with its context"
+    code: java/flink-job/src/main/java/io/realy/flink/AssembleFunction.java (twin python/realy/bindings/transactions.py)
+    config:
+      - { key: "assemble.wait_ms / require / optional", in: contracts/transactions/<name>.yaml, default: "per contract", effect: "how long a required part is waited for, and which parts are waited for at all" }
+      - { key: transactions, in: contracts/pipelines/<pipeline>.yaml, default: "[a2a_transfer, card_payment]", effect: "the contracts the job assembles" }
+      - { key: "stages.<name>.scored", in: contracts/transactions/<name>.yaml, default: "per contract", effect: "a lifecycle stage decided again (read-only)" }
+      - { key: TXN_TTL_DAYS, in: env (Flink job), default: "2", effect: "how long an open transaction is kept in state" }
+    extend: "a new transaction is a contract, no code (docs/dev/transactions.md)"
+  flink_features:
+    kind: flink
+    label: Flink features
+    what: "one keyBy stage per entity with stream features: a shuffle to the key's owner, then its windows in RocksDB read, updated and written; in `features` mode each updated blob is written to Redis"
+    code: java/flink-job/src/main/java/io/realy/flink/EntityFeatureFunction.java, java/scoring-core/.../features/EntityAggregator.java (twin python/realy/features/engine.py)
+    config:
+      - { key: features, in: contracts/features/feature_schema.yaml, default: "62 features", effect: "entities, filters (CEL), aggregations, windows, granularity: the job's whole computation" }
+      - { key: FLINK_PARALLELISM, in: env (runner), default: "2", effect: "task parallelism (at most the partition count for the source)" }
+      - { key: MAX_PARALLELISM, in: env (Flink job), default: "128", effect: "key groups: the ceiling for rescaling from a savepoint" }
+      - { key: FLINK_CHECKPOINT_MS, in: env (runner), default: "10000", effect: "checkpoint interval (recovery point, exactly-once visibility)" }
+      - { key: STATE_TTL_DAYS, in: env (Flink job), default: "8", effect: "idle entity state expires after this" }
+      - { key: STORE_STATE, in: env (Flink job), default: "customer,card", effect: "entities written as state blobs (re-windowed exactly at the gateway); the rest as values" }
+      - { key: STORE_MAX_IN_FLIGHT, in: env (Flink job), default: "1000", effect: "Redis writes in flight per subtask (backpressure beyond it)" }
+      - { key: flink_state, in: scenario, default: warm, effect: "keep the job's state across runs, or start fresh" }
+    extend: "new features, filters, windows and entities are contract edits (docs/dev/features.md); a new aggregation kind is an Aggregation plugin (a jar in PLUGINS_DIR plus its Python twin, proved by shared fixtures: docs/dev/extending.md)"
+  flink_scoring:
+    kind: flink
+    label: Async scoring
+    what: "Flink inline only: after the keyed stages, the same orchestrator as the gateway (profiles from Redis, the model call, rules, policy, deadlines) in an async operator"
+    code: java/flink-job/src/main/java/io/realy/flink/ScoringAsyncFunction.java
+    config:
+      - { key: "--async-timeout-ms / --async-capacity", in: Flink job args, default: "1000 / 1000", effect: "a call stuck past the timeout becomes REVIEW (ASYNC_TIMEOUT); capacity bounds calls in flight" }
+      - { key: scoring, in: scenario, default: "the gateway's defaults", effect: "budget, deadlines, thresholds: the same ScoringConfig as the gateway" }
+      - { key: MODEL_TARGET, in: env (Flink TaskManager), default: "localhost:8001", effect: "the model server" }
+    extend: "ModelClient (io.realy.scoring.model) for another model protocol"
+  gateway:
+    kind: service
+    label: Scoring gateway
+    what: "the stateless scorer: one pipelined Redis round trip for the event's blobs, the feature vector (customer / card state re-windowed at the event's time), the model call, CEL rules, policy and deadlines"
+    code: java/scoring-gateway, java/scoring-core (ScoringOrchestrator, FeatureAssembler)
+    config:
+      - { key: INGRESS_KAFKA, in: env (gateway), default: "false (compose: true)", effect: "consume the events topic (async rail)" }
+      - { key: KAFKA_CONSUMERS, in: env (gateway), default: "2", effect: "consumer threads; with replicas, at most the partition count in total" }
+      - { key: MAX_INFLIGHT, in: env (gateway), default: "4096", effect: "events being scored at once per gateway" }
+      - { key: "scoring.budget_ms / feature_deadline_ms / model_deadline_ms", in: scenario, default: "100 / 30 / 80", effect: "deadlines from ingest; a miss gives a rules-only decision" }
+      - { key: scoring.on_deadline, in: scenario, default: RULES_ONLY, effect: "or answer now and publish the final decision later (PROVISIONAL_THEN_ASYNC)" }
+      - { key: scoring.self_inclusion, in: scenario, default: "true", effect: "count the current event in the online-store aggregates" }
+      - { key: "scoring.microbatch_window_us / microbatch_max / hedge_after_ms", in: scenario, default: "0 / - / 0", effect: "batch model calls; send a duplicate call after this long" }
+      - { key: "scoring.review_threshold / challenge_threshold / decline_threshold", in: scenario (or live), default: "the rule set's", effect: "live policy tuning" }
+      - { key: rules, in: scenario, default: baseline, effect: "the CEL rule set (rules/<name>.yaml)" }
+      - { key: "REDIS_CONNECTIONS / MODEL_CHANNELS", in: env (gateway), default: "4 / 4", effect: "connections to the store and the model server" }
+    extend: "OnlineStore (io.realy.scoring.store) for another feature store, ModelClient for another model protocol; rules and policy are YAML"
+  redis:
+    kind: store
+    label: Redis
+    what: "the online store: one blob per entity (state blobs for customer and card, value blobs for the rest) and the profiles"
+    code: contracts/storage/redis.md, java/scoring-core/.../store/RedisOnlineStore.java
+    config:
+      - { key: REDIS_URI, in: env, default: "redis://localhost:6379", effect: "the store" }
+      - { key: "REDIS_COMMAND_TIMEOUT_MS / REDIS_REQUEST_QUEUE", in: env, default: "2000 / 100000", effect: "client timeout and bounded queue" }
+      - { key: scoring.feature_lookup_delay, in: scenario, default: none, effect: "inject extra lookup latency (what a remote store would add)" }
+    extend: "OnlineStore: implement get / pipelined batch for another store (Aerospike, DynamoDB, Feast online)"
+  model_server:
+    kind: model
+    label: Model server
+    what: "KServe v2 inference (the mock server here; Triton or KServe in production): the feature vector in, a score out"
+    code: java/mock-model-server, models/
+    config:
+      - { key: "model_server.service_time / per_item_us / workers", in: scenario, default: "mock service time", effect: "the mock server's compute and concurrency" }
+      - { key: "model_server.max_batch / max_queue_delay_us", in: scenario, default: "1 / 0", effect: "server-side dynamic batching" }
+      - { key: "MODEL_NAME / MODEL_INPUT_NAME / MODEL_OUTPUT_NAME", in: env (gateway, Flink), default: "fraud_mlp / input__0 / output__0", effect: "the served model and its tensors" }
+      - { key: MODEL_WEIGHTS, in: env (model server), default: "the proxy model", effect: "the weights the mock server loads (hot redeploy through the admin API)" }
+    extend: "any KServe v2 server (docs/dev/models.md); another protocol through ModelClient"
+  external_scorer:
+    kind: service
+    label: Your scorer
+    what: "the decision service under test, built and run by you (in any language): it consumes the events topic, decides, and publishes one DecisionRecord per event to the decisions topic, with the event's id and the x-bench-trace header it received copied into `trace`"
+    code: "yours; the reference implementation of the contract is python/realy/external_scorer.py"
+    config:
+      - { key: "topics.events, topics.decisions", in: "contracts/pipelines/<pipeline>.yaml", default: "payments.events.raw, payments.decisions", effect: "the two topics your scorer reads and writes" }
+      - { key: x-bench-trace, in: Kafka header on every measured event, default: "a BenchTrace (realy.bench.v1)", effect: "copy it into DecisionRecord.trace: the collector correlates by run id and event id and measures end to end on the driver's clock" }
+      - { key: "DecisionRecord.features (optional)", in: your decisions, default: "absent", effect: "when present (the schema's vector), the Explorer shows it; verify does not recompute a scorer it does not own" }
+    extend: "the contract is two topics and two messages (TransactionEvent in, DecisionRecord out): docs/dev/external-scorer.md"
+  collector:
+    kind: driver
+    label: Collector
+    what: "the instrument's end of the run: consumes the decisions topic, correlates each decision with its event by id, and records end-to-end latency on the driver's clock"
+    code: python/realy/collect/collector.py
+    config:
+      - { key: traffic.generators, in: scenario, default: "1", effect: "one collector per emitter shard" }
+    extend: "not part of the platform being tested: production systems consume the decisions topic themselves"
+  clickhouse:
+    kind: sink
+    label: ClickHouse
+    what: "the asynchronous audit and analytics store: decisions, labels and raw events through Kafka engines; the training view; independent verification"
+    code: contracts/storage/clickhouse (generated by python/realy/codegen.py)
+    config:
+      - { key: CLICKHOUSE_URL, in: env (console, verifier), default: "http://localhost:8123", effect: "the warehouse" }
+    extend: "views (v_training_dataset, v_rule_performance) for BI and training; another warehouse can read the same topics"
+
+# ---------------------------------------------------------------------------------------- topologies
+topologies:
+  gateway-kafka:
+    title: Gateway on Kafka
+    tagline: >-
+      Events arrive on Kafka; a stateless scoring gateway decides each one, reading features that Flink keeps
+      fresh in Redis.
+    decides: the scoring gateway (stateless Java service; any number of replicas up to the partition count)
+    flink: >-
+      `features` job: every entity's windows in RocksDB, each updated entity's blob written to Redis. With
+      multi-message transactions it also assembles them and publishes each one to the assembled topic.
+    runtime: { ingress: kafka, scorer: gateway, flink_mode: features, flows: assembled_topic, exact_target: 0.98 }
+    steps:
+      - { id: emitter, component: emitter, at: [0, 1], rate: "counter:emitter.emitted", p99: emitter.schedule_lag, sub: "open-loop, paced",
+          does: "sends each event at its intended time (open loop), keyed by customer, with a trace header",
+          to: [{ id: events, label: produce, rate: "counter:emitter.emitted" }] }
+      - { id: events, component: events_topic, at: [1, 1], rate: "counter:emitter.emitted", p99: emitter.produce_ack, sub: Kafka topic,
+          does: "one customer's events on one partition, in order (acks=all, idempotent)",
+          to: [{ id: gateway, label: consume, rate: "stage:collector.ingress", p99: collector.ingress }, { id: flink, label: consume }] }
+      - { id: flink, component: flink_features, at: [2, 0], rate: "stage:flink.state_card", p99: flink.store_update_lag, sub: keyed stages,
+          does: "consumes the same topic; per entity a keyBy stage updates its windows in RocksDB and writes the blob to Redis",
+          to: [{ id: redis, label: write, rate: "stage:flink.feature_store_write", p99: flink.feature_store_write, bulk: "stage:flink.feature_store_write_backfill" }] }
+      - { id: gateway, component: gateway, at: [2, 1], rate: "counter:gateway.decisions", p99: gateway.hot_path, sub: Kafka ingress,
+          does: "consumes the topic; one pipelined Redis round trip for the event's feature and profile blobs; re-windows customer / card state at the event's own time; model, rules, policy, deadlines",
+          to: [{ id: model, label: infer, rate: "counter:model.requests", p99: gateway.model_call }, { id: decisions, label: audit, rate: "counter:gateway.decisions", p99: gateway.audit_ack }] }
+      - { id: redis, component: redis, at: [3, 0], rate: "stage:flink.feature_store_write", p99: gateway.feature_lookup, sub: online store,
+          does: "the blobs the gateway reads in one round trip",
+          to: [{ id: gateway, label: lookup, p99: gateway.feature_lookup }] }
+      - { id: model, component: model_server, at: [3, 2], rate: "counter:model.requests", p99: gateway.model_call, sub: KServe v2,
+          does: "the KServe v2 call with the feature vector (micro-batching and hedging optional)" }
+      - { id: decisions, component: decisions_topic, at: [4, 1], rate: "counter:gateway.decisions", p99: gateway.audit_ack, sub: "audit WAL (acks=all)",
+          does: "the decision, durable before the source offset is committed",
+          to: [{ id: collector, label: consume, rate: "counter:collector.decided", p99: collector.egress }, { id: clickhouse, label: Kafka engine }] }
+      - { id: collector, component: collector, at: [5, 1], rate: "counter:collector.decided", p99: collector.e2e, sub: end to end,
+          does: "the instrument's end-to-end latency" }
+      - { id: clickhouse, component: clickhouse, at: [5, 2], sub: async audit, does: "the audit, analytics and training views" }
+    steps_with_flows:
+      - { id: emitter, component: emitter, at: [0, 1], rate: "counter:emitter.emitted", p99: emitter.schedule_lag, sub: "open-loop, paced",
+          does: "sends every message of a transaction at its own time, typed (x-event-type), keyed by customer",
+          to: [{ id: events, label: produce, rate: "counter:emitter.emitted" }] }
+      - { id: events, component: events_topic, at: [1, 1], rate: "counter:emitter.emitted", p99: emitter.produce_ack, sub: "messages, by customer",
+          does: "one customer's messages on one partition, in order", to: [{ id: assemble, label: consume }] }
+      - { id: assemble, component: flink_assembler, at: [2, 1], rate: "counter:flink.txn_parts", p99: collector.txn_assembly, sub: parts into transactions,
+          does: "keyed by customer, before the feature stages: holds a transaction's parts until its trigger and required parts are in (or the wait expires)",
+          to: [{ id: flink, label: features }, { id: assembled, label: publish }] }
+      - { id: flink, component: flink_features, at: [3, 0], rate: "stage:flink.state_card", p99: flink.store_update_lag, sub: keyed stages,
+          does: "the keyed feature stages on assembled transactions; blobs to Redis",
+          to: [{ id: redis, label: write, rate: "stage:flink.feature_store_write", p99: flink.feature_store_write, bulk: "stage:flink.feature_store_write_backfill" }] }
+      - { id: assembled, component: assembled_topic, at: [3, 1], sub: one more Kafka hop,
+          does: "every scoreable event with the trigger's trace, the assembly wait as a span, and x-txn; the gateway consumes this topic",
+          to: [{ id: gateway, label: consume, rate: "stage:collector.ingress", p99: collector.ingress }] }
+      - { id: redis, component: redis, at: [4, 0], rate: "stage:flink.feature_store_write", p99: gateway.feature_lookup, sub: online store,
+          does: "the blobs the gateway reads", to: [{ id: gateway, label: lookup, p99: gateway.feature_lookup }] }
+      - { id: gateway, component: gateway, at: [4, 1], rate: "counter:gateway.decisions", p99: gateway.hot_path, sub: Kafka ingress,
+          does: "scores each assembled transaction (event.txn.* in rules)",
+          to: [{ id: model, label: infer, rate: "counter:model.requests", p99: gateway.model_call }, { id: decisions, label: audit, rate: "counter:gateway.decisions", p99: gateway.audit_ack }] }
+      - { id: model, component: model_server, at: [5, 2], rate: "counter:model.requests", p99: gateway.model_call, sub: KServe v2, does: "the model call" }
+      - { id: decisions, component: decisions_topic, at: [5, 1], rate: "counter:gateway.decisions", p99: gateway.audit_ack, sub: "audit WAL (acks=all)",
+          does: "the decision, with the transaction's context",
+          to: [{ id: collector, label: consume, rate: "counter:collector.decided", p99: collector.egress }, { id: clickhouse, label: Kafka engine }] }
+      - { id: collector, component: collector, at: [6, 1], rate: "counter:collector.decided", p99: collector.e2e, sub: end to end,
+          does: "latency from the trigger's intended time: the customer's wait, including the wait for parts" }
+      - { id: clickhouse, component: clickhouse, at: [6, 2], sub: async audit, does: "the audit, analytics and training views" }
+    capabilities:
+      answers_caller: { status: "no", note: "decisions go to the decisions topic; a caller that must wait would need to correlate them (use gateway-grpc)" }
+      owned_features_exact: { status: partial, note: "customer and card state blobs are re-windowed at each event's time, so features are exact unless the customer's previous event was not yet in Redis (store lag). Measured 99.8-99.9% exact-set agreement; the verifier's target is 98%" }
+      shared_features_exact: { status: partial, note: "read as of the entity's last write to Redis: a busy merchant's 1-minute count can miss the events of the last few milliseconds. Reported as agreement, not judged" }
+      multi_message: { status: "yes", note: "Flink assembles them and publishes to payments.events.assembled: one more Kafka hop, measured as its own step" }
+      rescored_stages: { status: "yes", note: "a scored stage (a transfer's submission) is a decision of its own, read-only: its features are read, not counted again" }
+      model_and_rules: { status: "yes", note: "the full decision" }
+      deadline_fallback: { status: "yes", note: "feature and model deadlines give a rules-only decision, flagged degraded; or answer now and publish the final decision later (PROVISIONAL_THEN_ASYNC)" }
+      survives_flink_restart: { status: "yes", note: "the gateway keeps deciding on the last blobs in Redis; features go stale until Flink catches up (store freshness shows it)" }
+      audit: { status: "yes", note: "the source offset is committed only below the oldest decision not yet durable, so a gateway crash re-decides, never loses" }
+    scales_by: gateway replicas (one consumer group, up to the partition count) and Flink parallelism, independently
+    tail: two Kafka hops (in and out) and the Redis round trip; on a small shared host the broker's produce and fetch tails dominate
+    choose_when:
+      - event-driven checks where nobody waits on the line (transfers, account events, post-authorisation review)
+      - high throughput, with the scorer and the feature state scaled separately
+      - messages of one payment arrive separately (multi-message transactions)
+    avoid_when:
+      - the caller must get the answer in the same request (card authorisation)
+    enhancements:
+      - title: Assemble in the gateway
+        why: the assembled topic adds a Kafka hop (produce, fetch) to every multi-message transaction
+        effect: removes that hop; the gateway holds the parts per partition in memory and commits offsets below its oldest open transaction
+        status: idea
+      - title: Coalesce Flink's Redis writes per key
+        why: one SET per entity per event; hot merchants are written thousands of times a second
+        effect: less Redis load and smaller store lag at high TPS (a short per-key window, flushed on checkpoint)
+        status: planned
+      - title: Tune the Kafka clients and brokers for latency
+        why: produce ack and fetch dominate the tail on small hosts
+        effect: "producer linger.ms 0-1 and batching, consumer fetch.min.bytes 1 / fetch.max.wait.ms low, lz4; dedicated brokers on real hardware"
+        status: planned
+      - title: Serve shared-entity features inline
+        why: shared-entity features are only as fresh as the last Redis write
+        effect: a hybrid where Flink scores the channels that need exact shared-entity features (flink-inline) and the gateway the rest
+        status: available
+
+  gateway-grpc:
+    title: Gateway on gRPC (sync)
+    tagline: >-
+      The caller sends each payment to the gateway's Score API and waits for the answer: the card authorisation
+      path. Flink keeps features fresh from a mirror of the requests.
+    decides: the scoring gateway, behind a load balancer
+    flink: "`features` job, fed by the gateway's mirror of each request on payments.events.raw"
+    runtime: { ingress: grpc, scorer: gateway, flink_mode: features, flows: none, exact_target: 0.98 }
+    steps:
+      - { id: emitter, component: grpc_emitter, at: [0, 1], rate: "counter:emitter.emitted", p99: emitter.e2e, sub: "open-loop, Java",
+          does: "calls Score() at each event's intended time (unary, or a bidirectional stream); HTTP/JSON works on the same port",
+          to: [{ id: gateway, label: Score(), rate: "counter:emitter.emitted" }] }
+      - { id: mirror, component: mirror_topic, at: [1, 0], sub: mirrored for features,
+          does: "the gateway mirrors each request (x-mirrored); Flink folds it into state, the gateway's own consumer skips it",
+          to: [{ id: flink, label: consume }] }
+      - { id: flink, component: flink_features, at: [2, 0], rate: "stage:flink.state_card", p99: flink.store_update_lag, sub: keyed stages,
+          does: "keeps every entity's windows and writes the blobs to Redis",
+          to: [{ id: redis, label: write, rate: "stage:flink.feature_store_write", p99: flink.feature_store_write, bulk: "stage:flink.feature_store_write_backfill" }] }
+      - { id: gateway, component: gateway, at: [2, 1], rate: "counter:gateway.decisions", p99: gateway.hot_path, sub: sync gRPC,
+          does: "the same scoring as gateway-kafka (the caller's deadline_ms too); replies after the audit write",
+          to: [{ id: mirror, label: mirror }, { id: model, label: infer, rate: "counter:model.requests", p99: gateway.model_call },
+               { id: decisions, label: audit, rate: "counter:gateway.decisions", p99: gateway.audit_ack },
+               { id: emitter, label: response, p99: emitter.e2e }] }
+      - { id: redis, component: redis, at: [3, 0], rate: "stage:flink.feature_store_write", p99: gateway.feature_lookup, sub: online store,
+          does: "the blobs the gateway reads", to: [{ id: gateway, label: lookup, p99: gateway.feature_lookup }] }
+      - { id: model, component: model_server, at: [3, 2], rate: "counter:model.requests", p99: gateway.model_call, sub: KServe v2, does: "the model call" }
+      - { id: decisions, component: decisions_topic, at: [4, 1], rate: "counter:gateway.decisions", p99: gateway.audit_ack, sub: "audit WAL (acks=all)",
+          does: "the decision, durable before the reply is sent (the AUDIT_ACK span)",
+          to: [{ id: collector, label: consume, rate: "counter:collector.decided", p99: collector.egress }, { id: clickhouse, label: Kafka engine }] }
+      - { id: collector, component: collector, at: [5, 1], rate: "counter:collector.decided", p99: collector.e2e, sub: audit completeness,
+          does: "every answered request is in the audit (the emitter measures the latency)" }
+      - { id: clickhouse, component: clickhouse, at: [5, 2], sub: async audit, does: "the audit, analytics and training views" }
+    capabilities:
+      answers_caller: { status: "yes", note: "unary or bidirectional-stream gRPC, or HTTP/JSON; the reply comes after the audit record is durable" }
+      owned_features_exact: { status: partial, note: "as gateway-kafka, plus the mirror's lag: the request is folded into state after it is answered, so a customer's next payment within milliseconds can miss it" }
+      shared_features_exact: { status: partial, note: "as of the entity's last write to Redis" }
+      multi_message: { status: "no", note: "each Score() call carries one complete payment: a caller cannot wait for parts that arrive later. Assemble upstream, or run gateway-kafka; a scenario with traffic.flows is refused here" }
+      rescored_stages: { status: "no", note: "only if the caller calls Score() again at that stage" }
+      model_and_rules: { status: "yes", note: "the full decision" }
+      deadline_fallback: { status: "yes", note: "as gateway-kafka; the caller's deadline_ms is honoured as well" }
+      survives_flink_restart: { status: "yes", note: "decisions continue on the last blobs; features go stale until Flink catches up" }
+      audit: { status: "yes", note: "audit before reply: an answered payment is always in the audit log" }
+    scales_by: gateway replicas behind a load balancer; Flink parallelism independently
+    tail: the audit write before the reply, then the model call; bidirectional streams avoid per-call overhead
+    choose_when:
+      - card authorisation, or any request that must be answered before the customer moves on
+    avoid_when:
+      - messages of one payment arrive separately (the request must already be complete)
+    enhancements:
+      - title: Read pre-authorisation context from the store
+        why: a 3DS result arrives before its authorisation, but a sync request cannot wait for parts
+        effect: Flink writes optional parts (the 3DS result) to Redis by link id; Score() reads them in its one round trip, so the card flow's context reaches the sync path
+        status: idea
+      - title: Group-commit the audit write
+        why: audit before reply is the largest share of the sync tail
+        effect: one produce per micro-batch of decisions instead of per decision, or a local write-ahead file acknowledged first and shipped to Kafka asynchronously (SPOOL_LOCAL already does it on failure)
+        status: idea
+      - title: Use the bidirectional stream
+        why: unary calls pay per-call overhead
+        effect: "`sync: { mode: stream }` in the scenario (see sync-vs-async): measured e2e p99 44 ms against 96 ms unary at 500 TPS"
+        status: available
+
+  flink-inline:
+    title: Flink inline
+    tagline: >-
+      Flink does everything: the features in its keyed state and the decision in the same job, with no online
+      store on the decision path.
+    decides: the Flink job (async scoring operator after the keyed feature stages)
+    flink: "`both` job: features, then async scoring (model call, rules, policy) and the decisions sink; it also writes Redis blobs so a gateway can share the state"
+    runtime: { ingress: kafka, scorer: flink, flink_mode: both, flows: in_job, exact_target: 0.999 }
+    steps:
+      - { id: emitter, component: emitter, at: [0, 1], rate: "counter:emitter.emitted", p99: emitter.schedule_lag, sub: "open-loop, paced",
+          does: "sends each event at its intended time, keyed by customer", to: [{ id: events, label: produce, rate: "counter:emitter.emitted" }] }
+      - { id: events, component: events_topic, at: [1, 1], rate: "counter:emitter.emitted", p99: emitter.produce_ack, sub: Kafka topic,
+          does: "one customer's events on one partition, in order", to: [{ id: "flink-{entity}", label: keyBy }] }
+      - { id: "flink-{entity}", for_each: stream_entities, wrap: 4, component: flink_features, at: [next, 0], label: "keyBy {entity}",
+          rate: "stage:flink.state_{entity}", p99: "flink.state_{entity}", sub: RocksDB state,
+          in: { label: keyBy, rate: "stage:flink.shuffle_{entity}", p99: "flink.shuffle_{entity}" },
+          does: "a network shuffle to the key's owner, then RocksDB read, update, write", to: [{ id: score, label: async I/O }] }
+      - { id: score, component: flink_scoring, at: [next, 1], rate: "counter:flink.decisions", p99: flink.hot_path, sub: orchestrator,
+          does: "profiles from Redis, the same orchestrator as the gateway, the model call; an async timeout becomes REVIEW",
+          to: [{ id: redis, label: lookup }, { id: model, label: infer }, { id: decisions, label: sink, rate: "counter:collector.decided" }] }
+      - { id: redis, component: redis, at: [same, 0], rate: "stage:collector.feature_lookup", p99: collector.feature_lookup, sub: profiles,
+          does: "profiles only: stream features never leave the job" }
+      - { id: model, component: model_server, at: [same, 2], rate: "counter:model.requests", p99: collector.model_call, sub: KServe v2, does: "the model call" }
+      - { id: decisions, component: decisions_topic, at: [next, 1], rate: "counter:collector.decided", p99: collector.egress, sub: audit WAL,
+          does: "KafkaSink (at-least-once; exactly-once with transactions)",
+          to: [{ id: collector, label: consume, rate: "counter:collector.decided" }, { id: clickhouse, label: Kafka engine }] }
+      - { id: collector, component: collector, at: [next, 1], rate: "counter:collector.decided", p99: collector.e2e, sub: end to end, does: "end-to-end latency" }
+      - { id: clickhouse, component: clickhouse, at: [same, 2], sub: async audit, does: "the audit and training views" }
+    steps_with_flows:
+      - { id: emitter, component: emitter, at: [0, 1], rate: "counter:emitter.emitted", p99: emitter.schedule_lag, sub: "open-loop, paced",
+          does: "sends every message of a transaction at its own time, typed, keyed by customer", to: [{ id: events, label: produce, rate: "counter:emitter.emitted" }] }
+      - { id: events, component: events_topic, at: [1, 1], rate: "counter:emitter.emitted", p99: emitter.produce_ack, sub: "messages, by customer",
+          does: "one customer's messages on one partition, in order", to: [{ id: assemble, label: consume }] }
+      - { id: assemble, component: flink_assembler, at: [next, 1], rate: "counter:flink.txn_parts", p99: collector.txn_assembly, sub: parts into transactions,
+          does: "keyed by customer; the customer stage reuses its keying, so assembly adds no shuffle and no Kafka hop",
+          to: [{ id: "flink-{entity}", label: keyBy }] }
+      - { id: "flink-{entity}", for_each: stream_entities, wrap: 4, component: flink_features, at: [next, 0], label: "keyBy {entity}",
+          rate: "stage:flink.state_{entity}", p99: "flink.state_{entity}", sub: RocksDB state,
+          in: { label: keyBy, rate: "stage:flink.shuffle_{entity}", p99: "flink.shuffle_{entity}" },
+          does: "a network shuffle to the key's owner, then RocksDB read, update, write", to: [{ id: score, label: async I/O }] }
+      - { id: score, component: flink_scoring, at: [next, 1], rate: "counter:flink.decisions", p99: flink.hot_path, sub: orchestrator,
+          does: "scores each assembled transaction (event.txn.* in rules)",
+          to: [{ id: redis, label: lookup }, { id: model, label: infer }, { id: decisions, label: sink, rate: "counter:collector.decided" }] }
+      - { id: redis, component: redis, at: [same, 0], rate: "stage:collector.feature_lookup", p99: collector.feature_lookup, sub: profiles, does: "profiles only" }
+      - { id: model, component: model_server, at: [same, 2], rate: "counter:model.requests", p99: collector.model_call, sub: KServe v2, does: "the model call" }
+      - { id: decisions, component: decisions_topic, at: [next, 1], rate: "counter:collector.decided", p99: collector.egress, sub: audit WAL,
+          does: "the decision, with the transaction's context",
+          to: [{ id: collector, label: consume, rate: "counter:collector.decided" }, { id: clickhouse, label: Kafka engine }] }
+      - { id: collector, component: collector, at: [next, 1], rate: "counter:collector.decided", p99: collector.e2e, sub: end to end, does: "end-to-end latency" }
+      - { id: clickhouse, component: clickhouse, at: [same, 2], sub: async audit, does: "the audit and training views" }
+    capabilities:
+      answers_caller: { status: "no", note: "decisions go to the decisions topic" }
+      owned_features_exact: { status: "yes", note: "computed in the task that scores: no store, no lag. The verifier's target is 99.9%; measured 100%" }
+      shared_features_exact: { status: partial, note: "computed in-stream with no store lag (fresher than the gateway's), but the order of different customers' events at a shared entity is set by the shuffle, so the verifier measures agreement only" }
+      multi_message: { status: "yes", note: "assembled in the same job, with no extra hop" }
+      rescored_stages: { status: "yes", note: "read-only: the keyed stages read the state without counting the stage again" }
+      model_and_rules: { status: "yes", note: "the same orchestrator as the gateway" }
+      deadline_fallback: { status: "yes", note: "the orchestrator's deadlines, plus the async operator's timeout (1 s) that turns a stuck call into REVIEW" }
+      survives_flink_restart: { status: "no", note: "decisions stop until the job recovers from its last checkpoint, then the events since it are decided again (the collector keeps the first decision)" }
+      audit: { status: "yes", note: "the KafkaSink flushes on checkpoint; exactly-once adds the checkpoint interval to visibility" }
+    scales_by: Flink parallelism (scorer and state together), up to the partition count for the source
+    tail: the keyBy shuffles between the keyed stages sit on the decision path
+    choose_when:
+      - exact features matter more than the last milliseconds of tail latency
+      - asynchronous decisions (transfers, post-authorisation review), especially multi-message transactions
+    avoid_when:
+      - the caller waits for the answer
+      - a Flink restart must not pause decisions
+    enhancements:
+      - title: Fewer shuffles on the decision path
+        why: every keyed stage is a network shuffle before the decision
+        effect: "co-locate owned entities with their owner (card state under the customer key: one stage, no shuffle), and move features no rule or model needs off the path"
+        status: planned
+      - title: Faster recovery
+        why: a restart pauses decisions
+        effect: task-local recovery and smaller incremental checkpoints shorten the pause; a gateway fallback can take over while Flink is down (the hybrid)
+        status: idea
+
+  echo-kafka:
+    title: Echo (calibration)
+    tagline: >-
+      The gateway answers every event immediately, with no features, model or rules: what is left is the
+      instrument's own floor (the Kafka round trip and the driver).
+    decides: the gateway, without scoring (ScoringConfig.echo)
+    flink: untouched
+    runtime: { ingress: kafka, scorer: echo, flink_mode: none, flows: none, exact_target: null }
+    steps:
+      - { id: emitter, component: emitter, at: [0, 0], rate: "counter:emitter.emitted", p99: emitter.schedule_lag, sub: "open-loop, paced",
+          does: "sends each event at its intended time", to: [{ id: events, label: produce, rate: "counter:emitter.emitted" }] }
+      - { id: events, component: events_topic, at: [1, 0], rate: "counter:emitter.emitted", p99: emitter.produce_ack, sub: Kafka topic,
+          does: "the inbound hop", to: [{ id: gateway, label: consume, rate: "stage:collector.ingress", p99: collector.ingress }] }
+      - { id: gateway, component: gateway, at: [2, 0], label: Gateway (echo), rate: "counter:gateway.decisions", p99: collector.hot_path, sub: answers immediately,
+          does: "answers at once: no features, model or rules (ScoringConfig.echo)",
+          to: [{ id: decisions, label: audit, rate: "counter:collector.decided" }] }
+      - { id: decisions, component: decisions_topic, at: [3, 0], rate: "counter:collector.decided", p99: collector.egress, sub: audit WAL,
+          does: "the outbound hop", to: [{ id: collector, label: consume, rate: "counter:collector.decided" }] }
+      - { id: collector, component: collector, at: [4, 0], rate: "counter:collector.decided", p99: collector.e2e, sub: instrument floor,
+          does: "end-to-end latency: the floor any topology adds to" }
+    capabilities:
+      answers_caller: { status: "no", note: "asynchronous" }
+      owned_features_exact: { status: n/a, note: "no features" }
+      shared_features_exact: { status: n/a, note: "no features" }
+      multi_message: { status: "no", note: "no assembly" }
+      rescored_stages: { status: "no", note: "no assembly" }
+      model_and_rules: { status: "no", note: "skipped on purpose" }
+      deadline_fallback: { status: n/a, note: "nothing to wait for" }
+      survives_flink_restart: { status: n/a, note: "Flink is not used" }
+      audit: { status: "yes", note: "the echo decision is published like any other" }
+    scales_by: n/a
+    tail: the brokers and the driver themselves
+    choose_when:
+      - "before trusting a latency number: how much of it is the instrument and the brokers"
+      - after changing the host, brokers or Kafka settings
+    avoid_when:
+      - any question about fraud detection
+    enhancements: []
+
+  external:
+    title: Your scorer (black box)
+    tagline: >-
+      PulseBench drives the load and measures; your own decision service consumes the events and publishes
+      the decisions. Completeness, duplicates, end-to-end latency and the audit are measured exactly as for
+      the bundled topologies; features, rules and scores are your service's, so they are not recomputed.
+    decides: your service
+    flink: untouched (not part of the run)
+    runtime: { ingress: kafka, scorer: external, flink_mode: none, flows: none, exact_target: null }
+    steps:
+      - { id: emitter, component: emitter, at: [0, 0], rate: "counter:emitter.emitted", p99: emitter.schedule_lag, sub: "open-loop, paced",
+          does: "sends each event at its intended time, with its trace in the x-bench-trace header", to: [{ id: events, label: produce, rate: "counter:emitter.emitted" }] }
+      - { id: events, component: events_topic, at: [1, 0], rate: "counter:emitter.emitted", p99: emitter.produce_ack, sub: Kafka topic,
+          does: "the inbound hop your service consumes", to: [{ id: scorer, label: consume }] }
+      - { id: scorer, component: external_scorer, at: [2, 0], rate: "counter:collector.decided", p99: collector.e2e, sub: black box,
+          does: "decides: whatever your service does (features, model, rules) is inside this box",
+          to: [{ id: decisions, label: publish, rate: "counter:collector.decided" }] }
+      - { id: decisions, component: decisions_topic, at: [3, 0], rate: "counter:collector.decided", p99: collector.egress, sub: decisions,
+          does: "the outbound hop: one DecisionRecord per event", to: [{ id: collector, label: consume, rate: "counter:collector.decided" }] }
+      - { id: collector, component: collector, at: [4, 0], rate: "counter:collector.decided", p99: collector.e2e, sub: end to end,
+          does: "correlates each decision with its event and measures end to end", to: [{ id: clickhouse, label: audit }] }
+      - { id: clickhouse, component: clickhouse, at: [4, 1], sub: audit, does: "the decisions, labels and events your run produced, for the audit check" }
+    capabilities:
+      answers_caller: { status: "no", note: "asynchronous over Kafka (benchmark a synchronous API with your own client against the same scenario)" }
+      owned_features_exact: { status: n/a, note: "your service's features are not recomputed: PulseBench does not know how it computes them" }
+      shared_features_exact: { status: n/a, note: "as above" }
+      multi_message: { status: partial, note: "the parts are emitted as messages; assembling them is your service's job" }
+      rescored_stages: { status: n/a, note: "your service decides which stages it scores" }
+      model_and_rules: { status: n/a, note: "your service's own" }
+      deadline_fallback: { status: n/a, note: "your service's own" }
+      survives_flink_restart: { status: n/a, note: "Flink is not part of the run" }
+      audit: { status: "yes", note: "every decision your service publishes is collected and audited in ClickHouse; missing and duplicate decisions are counted" }
+    scales_by: your service
+    tail: your service (the echo topology gives the instrument's own floor to subtract)
+    choose_when:
+      - "benchmark the platform you built (from this repository or not) under the same load, clock and completeness checks as the bundled topologies"
+      - "compare your service with a bundled topology on the same scenario, seed and host"
+    avoid_when:
+      - "you need feature, rule and score parity proven: that needs the pipeline to be one PulseBench can recompute"
+    enhancements:
+      - title: Reference scorer
+        why: "the contract is easiest to see in code"
+        effect: "python -m realy.external_scorer consumes the events and publishes traced decisions (a fixed rule): a template, and the way to try the topology on the bundled stack"
+        status: available
+      - title: Declared feature parity for your scorer
+        why: "your service may compute features defined in the same schema"
+        effect: "verify would compare the vectors your decisions carry with the reference, as it does for the bundled scorers"
+        status: idea
+
+# The hybrid most institutions end up with, built from the topologies above.
+hybrid: >-
+  gateway-grpc on the card authorisation path, gateway-kafka on asynchronous channels, both reading one
+  Flink `features` job through Redis (one set of feature definitions, computed once), and flink-inline only
+  where exact shared-entity features are worth the shuffles on the decision path.
+
+# What to try when a stage holds the largest share of the slowest 1% of events (report tail_attribution),
+# per topology (`all` applies to every topology). Used by the run report's latency insight and the
+# console's advice.
+advice:
+  schedule_lag:
+    all: "the load generator is late: it, not the pipeline, is saturated. Add emitter shards, or use the Java load emitter for high rates, before reading the pipeline's numbers"
+  ingress:
+    all: "events wait before the scorer picks them up: the produce ack and the consumer fetch. Check consumer lag and partitions per consumer; tune producer linger / batching and consumer fetch.max.wait.ms; on a small host Kafka competes for CPU with everything else"
+    gateway-kafka: "events wait before the gateway picks them up (produce ack, fetch, and with multi-message flows the Flink assembly and the assembled topic). Check consumer lag and partitions per gateway consumer, the assembly wait step, and Kafka client settings"
+  queue_wait:
+    all: "decisions queue inside the scorer: raise its concurrency (MAX_INFLIGHT, workers) or add replicas"
+  shuffle:
+    all: "the keyBy shuffles between the keyed stages dominate: co-locate owned entities with their owner, drop stages no feature needs, check network buffers (buffer timeout) and backpressure"
+  state_features:
+    all: "RocksDB reads and writes dominate: block cache and write buffers, smaller state blobs, local SSD"
+  async_wait:
+    all: "the async scoring operator waits for capacity: raise async capacity or Flink parallelism"
+  feature_lookup:
+    all: "online-store lookups dominate: Redis latency (CPU, network), blob size, connection pool and pipelining"
+  model_call:
+    all: "the model call dominates: client micro-batching, hedging (hedge_after_ms), more model-server workers or GPUs"
+  rules:
+    all: "CEL rules dominate: look for an expensive rule (regex, large lists) with rules-whatif"
+  audit_ack:
+    all: "the audit write dominates: broker produce latency (acks=all, fsync); group commit or a faster disk"
+    gateway-grpc: "audit before reply dominates the sync tail: use the bidirectional stream, and look at broker produce latency (acks=all, fsync) or group-committing the audit write"
+  egress:
+    all: "the decision's trip back (decisions topic and collector) dominates: broker load and the collector's consumer. It is not the scorer's time, but production pays it too if a downstream system waits for the decision"

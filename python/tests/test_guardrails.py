@@ -42,9 +42,24 @@ def test_error_rate_aborts_on_this_runs_windows_only():
     # a gateway that failed 50k events in an EARLIER run: lifetime total is huge, this window is clean
     _guardrails(h, sc, {"source": "gateway", "counters": {"pipeline_errors": 0, "pipeline_errors_total": 50_000}}, lambda _: None)
     assert h.abort_reason is None
+    h.live.update(_emit(12_000, 10))                 # measure goes on: 2,000 more events, 700 of them failed
     for _ in range(7):
         _guardrails(h, sc, {"source": "gateway", "counters": {"pipeline_errors": 100}}, lambda _: None)
     assert h.stop.is_set() and "error rate" in h.abort_reason
+
+
+def test_warm_up_errors_do_not_abort_and_do_not_count_in_measure():
+    """A cold start (the sync rail's first seconds against a fresh JVM) is what warm-up absorbs."""
+    sc = load_scenario("smoke")
+    h = _handle(_emit(5_000, 1_500))                  # 30% of warm-up failed
+    h.phase = "WARMUP"
+    _guardrails(h, sc, {"source": "emitter", "stages": []}, lambda _: None)
+    assert h.abort_reason is None
+    h.phase = "MEASURE"
+    _guardrails(h, sc, {"source": "emitter", "stages": []}, lambda _: None)      # measure begins here
+    h.live.update(_emit(15_000, 1_510))               # 10,000 measured events, 10 failed (0.1%)
+    _guardrails(h, sc, {"source": "emitter", "stages": []}, lambda _: None)
+    assert h.abort_reason is None and not h.stop.is_set()
 
 
 def test_guardrails_ignore_warm_down_phases():

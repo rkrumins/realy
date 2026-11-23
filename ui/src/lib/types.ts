@@ -1,8 +1,8 @@
 /** API types (python/realy/control/app.py + the new console endpoints). u64 ids are strings. */
 
 export type Verdict = "PASS" | "FAIL" | "ABORTED" | "ERROR" | null | undefined;
-export type Topology = "gateway-kafka" | "gateway-grpc" | "flink-inline" | "echo-kafka";
-export const TOPOLOGIES: Topology[] = ["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka"];
+export type Topology = "gateway-kafka" | "gateway-grpc" | "flink-inline" | "echo-kafka" | "external";
+export const TOPOLOGIES: Topology[] = ["gateway-kafka", "gateway-grpc", "flink-inline", "echo-kafka", "external"];
 
 export interface ScenarioListItem {
   name: string;
@@ -10,7 +10,13 @@ export interface ScenarioListItem {
   description: string;
   tps: number | null;
   duration_s: number | null;
+  /** multi-message transaction contracts the scenario sends */
+  flows?: string[];
   yaml: string;
+  /** ships with the image; the console's copy was edited; the image has a newer version than the edit's base */
+  bundled?: boolean;
+  edited?: boolean;
+  update_available?: boolean;
 }
 
 export interface Budget {
@@ -20,7 +26,8 @@ export interface Budget {
 }
 
 export interface CurrentRun {
-  job_id: string;
+  /** null for a run this console did not start (CLI, a Kubernetes Job, another console) */
+  job_id: string | null;
   run_id: string | null;
   scenario: string;
   phase: string;
@@ -30,9 +37,16 @@ export interface CurrentRun {
   rate_multiplier: number;
   base_tps: number | null;
   topology: Topology | null;
+  /** multi-message transaction contracts the run sends (its map has the assembly hop) */
+  flows?: string[];
   budget: Budget | null;
   duration_s: number | null;
   warmup_s: number | null;
+  /** true: started by this console; false: started elsewhere and described from the lease + run directory */
+  local?: boolean;
+  owner?: string | null;
+  /** when live traffic started (s); warm-up and measurement are timed from here, not from the launch */
+  measure_started_at?: number | null;
 }
 
 export interface Job {
@@ -64,7 +78,10 @@ export interface LeaseHolder {
 }
 
 export interface Status {
+  /** the run this console's worker is executing */
   current: CurrentRun | null;
+  /** the run in progress on the pipeline, whoever started it (current, or one started elsewhere) */
+  active?: CurrentRun | null;
   queue: Job[];
   blocked_by?: LeaseHolder | null;
   lease?: LeaseHolder | null;
@@ -143,6 +160,8 @@ export interface RunSummary {
   measured_s?: number | null;
   owner?: string | null;
   verify_passed: boolean | null;
+  /** customer/card features exactly as the reference recomputes them (share of events), from verify */
+  exact_set_agreement?: number | null;
   has_html: boolean;
   job_id?: string;
   verify_requested?: boolean;
@@ -325,7 +344,7 @@ export interface VerifyResult {
     worst: [string, number][]; note: string;
   };
   rules?: { checked: number; parity: number; mismatches: unknown[] };
-  score?: { checked: number; parity: number; model_version?: string | null };
+  score?: { checked: number; parity: number | null; model_version?: string | null; not_checkable?: string };
   outcome?: { checked: number; parity: number };
   audit?: Record<string, number | boolean | string> & { error?: string };
 }
@@ -512,40 +531,79 @@ export interface TopologyResponse {
   edges: TopologyEdge[];
 }
 
+/** One measured event of a run, as search results and trails list it. Entity ids are null when the
+ *  payment has no such entity (a transfer has no card, a card-present payment no device). */
 export interface SearchRow {
   event_id: string;
-  customer_id: string;
-  card_id: string;
   event_time_us: number;
+  customer_id: string | null;
+  account_id: string | null;
+  card_id: string | null;
+  device_id: string | null;
+  merchant_id: string | null;
+  terminal_id: string | null;
+  payee_id: string | null;
+  ip: string | null;
+  ip_v4: number | null;
+  ip_country: string | null;
   payment_type: string;
   channel: string;
+  entry_mode: string;
+  card_present: boolean;
   amount_usd: number;
-  merchant_country: string;
+  merchant_country: string | null;
   outcome: string | null;
+  /** decision path; a RULES_ONLY_FALLBACK / PROVISIONAL / ECHO decision has no model score (score null) */
+  path: string | null;
   score: number | null;
+  model_version: string | null;
+  rule_hits: string[];
+  /** what happened to the payment: approved, declined, held for review, abandoned at step-up, … */
+  fate: string | null;
+  stepup: "pass" | "fail" | "abandon" | null;
   is_fraud: boolean;
   fraud_type: string;
   campaign_id: string;
+  role: string | null;
+  label: { fraud: boolean; after_days: number } | null;
   e2e_ms: number | null;
+}
+
+export interface SearchResponse {
+  results: SearchRow[];
+  /** every match, of which `results` is the first page */
+  total: number;
+  /** a bare id: how many events matched it as each kind of id (ids of different kinds can collide) */
+  matched: Record<string, number>;
+}
+
+/** A transaction assembled from several linked messages (contracts/transactions). */
+export interface TxnInfo {
+  name: string; stage: string; parts_present: number | null; partial: boolean;
+  context: Record<string, string | number>;
+  roles: { role: string; type: string; present: boolean; part: string }[];
 }
 
 export interface DecisionDetail {
   event: Record<string, unknown>;
   decision: {
-    outcome: string; score: number; path: string; degraded: boolean; ingress_mode: string;
+    outcome: string; score: number | null; score_note?: string | null; path: string; degraded: boolean; ingress_mode: string;
     reason_codes: string[]; rule_hits: string[]; model_version: string; revision: number; revisions?: number;
+    transaction?: TxnInfo;
   } | null;
   features: { index: number; name: string; entity: string | null; source: string; agg?: string; value: number; missing: boolean; default: number }[] | null;
+  features_note?: string | null;
   spans: { stage: number | null; stage_name: string; attr: number; entity?: string | null; domain: number | null; start_us: number | null; dur_us: number }[];
   timing: {
     t_intended_us?: number | null; t_sent_us?: number | null; t_ingest_us?: number | null;
     t_decision_us?: number | null; t_collected_us?: number | null; t_response_us?: number | null; e2e_ms?: number | null; ack_us?: number | null;
   };
   label: {
-    is_fraud: boolean; fraud_type: string; campaign_id: string;
+    is_fraud: boolean; fraud_type: string; campaign_id: string; role?: string | null; backfill?: boolean;
     story?: LabelStory; story_error?: string;
   };
   explanation?: Explanation | null;
+  warnings?: string[];
 }
 
 export interface LabelStory {
@@ -571,47 +629,108 @@ export interface Explanation {
   };
 }
 
-/** One event of a customer's decision trail: what the decision saw (stateful features) and did. */
+/** A column of the Explorer's trail (contracts/explorer.yaml). */
+export interface ViewColumn {
+  key: string;
+  kind?: "field" | "feature";
+  label: string;
+  link?: string | null;
+  /** usd_minor: a money aggregate in cents */
+  format?: "usd" | "usd_minor" | "flag" | "int" | "ratio" | null;
+}
+export interface ViewContext { name: string; title: string; columns: ViewColumn[] }
+export interface EntityDef {
+  name: string; key: string; title: string; format?: string | null; shared_by: string[]; shared_min: number;
+  profile?: string | null; common_point: boolean; features: ViewColumn[];
+}
+export interface Lens { name: string; title: string; search?: string; entity?: string; show?: string; sort?: string; description?: string }
+export interface ExplorerViews {
+  version: number; entities: Record<string, EntityDef>; contexts: ViewContext[]; lenses: Lens[]; kinds: string[];
+  problems: string[]; cache?: { runs: string[]; mb: number; budget_mb: number };
+}
+
+/** One event of an entity's decision trail: what the decision saw and did. */
 export interface TrailRow extends SearchRow {
-  rule_hits?: string[];
-  path?: string | null;
-  features?: Record<string, number> | null;
-  label?: { fraud: boolean; after_days: number } | null;
-  stepup?: "pass" | "fail" | "abandon" | null;
+  /** the context (kind of payment) that picked `ctx`'s columns */
+  context?: string | null;
+  /** the context's column values; null = n/a (the payment lacks it, or the run's schema did not have it) */
+  ctx?: Record<string, string | number | boolean | null>;
+  /** the entity's own state features at this event (null = defaulted / not applicable) */
+  state?: Record<string, number | null>;
+  /** older name of `state` */
+  features?: Record<string, number | null> | null;
+  /** false when the decision's feature vector was not recorded (feature sampling) */
+  features_recorded?: boolean;
 }
 
-export interface CustomerResponse {
-  customer: { customer_id: string; segment: string | number; home_country: string; tenure_days: number; avg_ticket_usd: number } | null;
+export interface TrailSummary {
+  events: number; cards?: number; fraud_events?: number; amount_usd?: number; first_us?: number; last_us?: number;
+  approve?: number; challenge?: number; review?: number; decline?: number; max_score?: number | null; unscored?: number;
+  fraud_usd_paid?: number; fraud_usd_stopped?: number; good_stopped?: number; payment_types?: Record<string, number>;
+}
+
+export interface RelatedEntity { distinct: number; top: { id: string; display: string; events: number; fraud: number }[] }
+
+export interface CommonPoint {
+  cards_seen: number; cards_later_fraud?: number; share?: number; baseline_share?: number; lift?: number | null;
+  by_type?: Record<string, number>; note?: string; error?: string;
+}
+
+export interface EntityResponse {
+  entity: string; id: string; display: string; title: string;
+  profile: Record<string, unknown> | null;
+  summary: TrailSummary;
+  related: Record<string, RelatedEntity>;
+  columns: { state: ViewColumn[]; contexts: ViewContext[] };
   events: TrailRow[];
-  summary?: { events: number; cards: number; fraud_events: number; amount_usd: number; first_us: number; last_us: number;
-    approve: number; challenge: number; review: number; decline: number; max_score: number | null };
-  /** the stateful features shown on the trail, in order */
-  features?: string[];
+  total: number; offset: number; truncated: boolean;
+  common_point?: CommonPoint;
+  features_note?: string | null;
+  note?: string;
 }
+export type CustomerResponse = EntityResponse & { customer?: Record<string, unknown> | null; features?: string[] };
 
-export interface CustomerRow {
-  customer_id: string; events: number; cards: number; fraud_events: number; fraud_types: string[];
+export interface EntityRow {
+  id: string; display: string; events: number; fraud_events: number; fraud_types: string[];
   flagged: number; declined: number; challenged: number; max_score: number | null; amount_usd: number;
-  first_us: number; last_us: number;
+  first_us: number; last_us: number; distinct: Record<string, number>;
+  common_point?: { cards_seen: number; cards_later_fraud: number; lift: number | null };
 }
+export type CustomerRow = EntityRow & { customer_id: string; cards: number };
 
-export interface CustomersResponse {
-  customers: CustomerRow[];
-  stats: { customers: number; events?: number; with_2_plus?: number; with_10_plus?: number; median_events?: number;
-    max_events?: number; with_fraud?: number; mixed?: number; multi_card?: number; note?: string };
+export interface EntitiesResponse {
+  entity: string;
+  rows: EntityRow[];
+  stats: { entities: number; events?: number; with_2_plus?: number; with_10_plus?: number; median_events?: number;
+    max_events?: number; with_fraud?: number; mixed?: number; shared?: number; shared_by?: string | null; shared_min?: number; note?: string };
 }
+export type CustomersResponse = EntitiesResponse & { customers: CustomerRow[] };
 
 export interface Campaign {
   campaign_id: string;
   fraud_type: string;
   events: number;
+  /** genuine events of the campaign's story (a victim's own payments, an account's build-up) */
+  story_events?: number;
+  customers?: number;
   flagged: number;
   declined: number;
+  challenged?: number;
+  stopped?: number;
   first_event_us: number;
   last_event_us: number;
   approved_before_first_decline: number;
+  /** fraud events paid out before the first one was stopped (declined, held, or failed / abandoned its step-up) */
+  approved_before_first_stop?: number;
   usd_total: number;
   usd_approved: number;
+  /** approved, plus passed step-ups and reviews that do not hold the payment */
+  usd_paid?: number;
+}
+
+export interface Typology {
+  id: number; name: string; title: string; description: string; pattern: string; mix_weight: number;
+  roles: string[]; signals: string[]; rules: string[]; disabled: boolean; source: string;
 }
 
 export interface DocsIndex {
@@ -621,4 +740,52 @@ export interface DocPage {
   path: string;
   title: string;
   markdown: string;
+}
+
+/* ---------------------------------------------------------------- topologies (contracts/topologies.yaml) */
+export type CapStatus = "yes" | "partial" | "no" | "n/a";
+export interface TopologyStep {
+  id: string; component: string; label?: string; does: string; sub?: string; for_each?: string;
+  to?: { id: string; label?: string }[];
+}
+export interface ComponentConfig { key: string; in: string; default?: string; effect: string }
+export interface TopologyComponent { kind: string; label: string; what: string; code: string; config?: ComponentConfig[]; extend: string }
+export interface AdviceItem {
+  severity: "critical" | "warning" | "info" | "good"; area: string; title: string; evidence: string; action: string;
+  stage?: string; component?: string; topology?: string;
+}
+export interface TopologyRunRow {
+  run_id: string; scenario: string | null; started_at: number; verdict: Verdict; e2e_p99_ms: number | null;
+  hot_path_p99_ms: number | null; achieved_tps: number | null; verify_passed: boolean | null;
+  exact_set_agreement: number | null; within_budget: number | null;
+}
+export interface TopologyInfo {
+  id: Topology; title: string; tagline: string; decides: string; flink: string;
+  runtime: { ingress: string; scorer: string; flink_mode: string; flows: string; exact_target: number | null };
+  steps: TopologyStep[]; steps_with_flows?: TopologyStep[];
+  capabilities: Record<string, { status: CapStatus; note: string }>;
+  scales_by?: string; tail?: string; choose_when: string[]; avoid_when?: string[];
+  enhancements: { title: string; why: string; effect: string; status: "available" | "planned" | "idea" }[];
+  scenarios: { name: string; description: string; flows: string[]; tps: number | null }[];
+  latest: RunSummary | null; runs: TopologyRunRow[]; advice: AdviceItem[];
+}
+export interface TopologiesResponse {
+  version: number; hybrid: string;
+  capabilities: Record<string, { label: string; why: string }>;
+  components: Record<string, TopologyComponent>;
+  advice_by_stage: Record<string, Record<string, string>>;
+  topologies: TopologyInfo[];
+}
+
+/* ---------------------------------------------------------------- preflight (realy.infra) */
+export type CheckStatus = "pass" | "warn" | "fail" | "skip";
+export interface PreflightComponent {
+  component: string; label: string; endpoint: string; implementation: "bundled" | "mock" | "external" | "unknown";
+  version: string | null; status: CheckStatus; probe_ms?: number;
+  checks: { name: string; status: CheckStatus; detail: string; fix: string }[];
+  facts: Record<string, unknown>;
+}
+export interface PreflightResult {
+  checked_at: number; topology: string; status: CheckStatus; components: PreflightComponent[];
+  simulated: { what: string; detail: string }[];
 }

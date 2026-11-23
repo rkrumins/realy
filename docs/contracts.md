@@ -40,7 +40,7 @@ on drift.
 
 ## Evolution rules
 
-* Protobuf: add fields only; never renumber or change types; `buf breaking` against `main`.
+* Protobuf: add fields only; never remove, renumber or change types. Enforced by `python/tests/test_proto_compat.py` against the committed snapshot `contracts/proto/compat.lock.json` (after adding fields: `python -m realy.proto_compat --update`). Every message, field by field: [reference/messages.md](reference/messages.md).
 * Feature schema: bump `schema_version` for any change to order/semantics; the online-store blob and
   Flink state carry the version (state resets on mismatch), decision records carry it, ClickHouse
   keeps `features_raw` so old versions stay replayable.

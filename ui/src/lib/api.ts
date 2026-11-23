@@ -1,8 +1,9 @@
 /** Thin typed client for the console API. Every 401 flips the app into the sign-in screen. */
 import type {
   AuthMe, BudgetCheck, BulkAbortResult, Campaign, ClickHouseEnv, CompareResponse, CustomerResponse, CustomersResponse, DecisionDetail, DocPage, DocsIndex,
+  EntitiesResponse, EntityResponse, ExplorerViews, SearchResponse, Typology,
   EnvResponse, FlinkEnv, Job, KafkaEnv, RedisEnv, RunDetail, RunsResponse, ScenarioListItem, Schedule, SearchRow,
-  Status, SummaryResponse, TopologyResponse,
+  Status, SummaryResponse, TopologyResponse, TopologiesResponse, PreflightResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -72,6 +73,7 @@ export const api = {
   scenario: (name: string) => request<{ name: string; yaml: string; scenario: Record<string, unknown> }>(`/api/scenarios/${enc(name)}`),
   validate: (yaml: string) => request<{ ok: boolean; scenario: Record<string, unknown>; fingerprint: string }>("/api/scenarios/validate", { method: "POST", json: { yaml } }),
   saveScenario: (name: string, yaml: string) => request<{ ok: boolean }>(`/api/scenarios/${enc(name)}`, { method: "PUT", json: { yaml } }),
+  resetScenario: (name: string) => request<{ ok: boolean }>(`/api/scenarios/${enc(name)}/reset`, { method: "POST" }),
   budget: (name: string, body: { overrides?: Record<string, unknown>; yaml?: string; samples?: number }) =>
     request<BudgetCheck>(`/api/scenarios/${enc(name)}/budget`, { method: "POST", json: body }),
   // runs
@@ -92,7 +94,10 @@ export const api = {
   liveRate: (tps: number) => request<{ published: boolean }>("/api/live/rate", { method: "POST", json: { tps } }),
   liveScoring: (body: Record<string, unknown>) => request<{ published: boolean; gateway_admin?: string }>("/api/live/scoring", { method: "POST", json: body }),
   liveModel: (body: Record<string, unknown>) => request<{ published: boolean; model_admin?: string }>("/api/live/model", { method: "POST", json: body }),
-  topology: (t: string) => request<TopologyResponse>(`/api/topology?topology=${enc(t)}`),
+  topology: (t: string, flows = false) => request<TopologyResponse>(`/api/topology?topology=${enc(t)}${flows ? "&flows=true" : ""}`),
+  topologies: () => request<TopologiesResponse>("/api/topologies"),
+  preflight: (q: { scenario?: string; topology?: string }) =>
+    request<PreflightResult>(`/api/env/preflight?${new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]).toString()}`),
   // schedules
   schedules: () => request<Schedule[]>("/api/schedules"),
   addSchedule: (body: { scenario: string; overrides?: Record<string, unknown>; verify?: boolean; at?: string; every_minutes?: number; count?: number }) =>
@@ -107,10 +112,16 @@ export const api = {
   envRedis: () => request<RedisEnv>("/api/env/redis"),
   envClickhouse: () => request<ClickHouseEnv>("/api/env/clickhouse"),
   // explorer
+  explorerViews: () => request<ExplorerViews>(`/api/explorer/views`),
+  usecases: () => request<{ typologies: Typology[] }>(`/api/usecases`),
   search: (run: string, q: string, kind = "auto", limit = 50) =>
-    request<{ results: SearchRow[] }>(`/api/runs/${enc(run)}/search?q=${enc(q)}&kind=${enc(kind)}&limit=${limit}`),
+    request<SearchResponse>(`/api/runs/${enc(run)}/search?q=${enc(q)}&kind=${enc(kind)}&limit=${limit}`),
   decision: (run: string, eventId: string, maturityDays = 30) =>
     request<DecisionDetail>(`/api/runs/${enc(run)}/decisions/${enc(eventId)}?maturity_days=${maturityDays}`),
+  entities: (run: string, entity: string, sort = "events", show = "all", limit = 100, q = "") =>
+    request<EntitiesResponse>(`/api/runs/${enc(run)}/entities/${enc(entity)}?sort=${enc(sort)}&show=${enc(show)}&limit=${limit}&q=${enc(q)}`),
+  entity: (run: string, entity: string, id: string, offset = 0, limit = 500) =>
+    request<EntityResponse>(`/api/runs/${enc(run)}/entities/${enc(entity)}/${enc(id)}?offset=${offset}&limit=${limit}`),
   customer: (run: string, cid: string) => request<CustomerResponse>(`/api/runs/${enc(run)}/customers/${enc(cid)}`),
   customers: (run: string, sort = "events", show = "all", limit = 100) =>
     request<CustomersResponse>(`/api/runs/${enc(run)}/customers?sort=${enc(sort)}&show=${enc(show)}&limit=${limit}`),

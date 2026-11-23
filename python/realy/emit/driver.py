@@ -106,6 +106,24 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
     wall_t = 0.0
     carry = 0.0
 
+    parts_writer = None
+
+    def log_parts(recs, t_start_us) -> None:
+        """Every part of a multi-message transaction, raw (the verifier decodes it with its binding):
+        parts-<shard>.parquet. The unified events stay in events-<shard>.parquet."""
+        nonlocal parts_writer
+        rows = [r for r in recs if r.type]
+        if not plan.write_events or not rows:
+            return
+        intended = [-1 if t_start_us is None else int((r.t_us - plan.sim_start_us) / ts) + t_start_us for r in rows]
+        table = pa.table({"type": [r.type for r in rows], "event_time_us": [r.t_us for r in rows],
+                          "customer_key": [r.key.decode() for r in rows], "payload": [r.payload for r in rows],
+                          "t_intended_us": intended, "backfill": [t_start_us is None] * len(rows)})
+        if parts_writer is None:
+            parts_writer = pq.ParquetWriter(Path(plan.run_dir) / f"parts-{plan.shard}.parquet", table.schema,
+                                            compression="zstd")
+        parts_writer.write_table(table)
+
     def flush() -> None:
         nonlocal writer, buf, buf_rows
         if not buf:
@@ -140,7 +158,12 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
                 bcarry = exp - k
                 b = gen.generate(k, t, t1)
                 if len(b):
-                    q.put(("backfill", si, b.payloads, b.keys, b.event_ids, b.labels))
+                    if b.records is not None:     # multi-message transactions: every message, typed
+                        q.put(("backfill", si, [r.payload for r in b.records], [r.key for r in b.records],
+                               b.event_ids, b.labels, [r.type for r in b.records], [r.scored for r in b.records]))
+                        log_parts(b.records, None)
+                    else:
+                        q.put(("backfill", si, b.payloads, b.keys, b.event_ids, b.labels))
                     backfilled += len(b)
                     if plan.write_events:
                         cols = dict(b.columns)
@@ -170,11 +193,21 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
         sim0 = plan.sim_start_us + int(wall_t * ts * 1e6)
         sim1 = plan.sim_start_us + int((wall_t + BLOCK_WALL_S) * ts * 1e6)
         b = gen.generate(n, sim0, sim1)
+        if len(b) and b.records is not None:
+            # multi-message transactions: send every message at its own time; the scored ones (unified
+            # events, each transaction's trigger) carry the trace under the decision's event id
+            recs = b.records
+            roffs = ((np.asarray([r.t_us for r in recs], np.int64) - plan.sim_start_us) / ts).astype(np.int64)
+            q.put(("batch", roffs, [r.payload for r in recs], [r.key for r in recs],
+                   np.asarray([r.event_id for r in recs], np.uint64), b.labels, time.process_time() * 1000.0,
+                   [r.type for r in recs], [r.scored for r in recs]))
+            log_parts(recs, t_start)
         if len(b):
             offs = ((b.event_time_us - plan.sim_start_us) / ts).astype(np.int64)
             # cumulative CPU of this generator process rides along, so the emitter can report the
             # driver's whole CPU cost per event (sizing the driver pool)
-            q.put(("batch", offs, b.payloads, b.keys, b.event_ids, b.labels, time.process_time() * 1000.0))
+            if b.records is None:
+                q.put(("batch", offs, b.payloads, b.keys, b.event_ids, b.labels, time.process_time() * 1000.0))
             if plan.write_events:
                 cols = dict(b.columns)
                 cols["t_intended_us"] = offs + t_start
@@ -187,6 +220,8 @@ def _generator(plan: ShardPlan, q, rate_mult, stop, start=None, go=None) -> None
     flush()
     if writer is not None:
         writer.close()
+    if parts_writer is not None:
+        parts_writer.close()
     q.put(("done", gen.seq))
 
 
@@ -289,7 +324,10 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                 seg_i, seg_t0, seg_n = si, time.monotonic(), 0
             bf_hdr = hdr.get(mode, hdr["bulk"])
             paced = mode == "prime" and prime_rate > 0
-            for p_, k_ in zip(item[2], item[3]):
+            btypes = item[6] if len(item) > 6 else None
+            bscored = item[7] if len(item) > 7 else None   # parts of transactions produce no decision of their own
+            for bi, (p_, k_) in enumerate(zip(item[2], item[3])):
+                h_ = bf_hdr if not (btypes and btypes[bi]) else bf_hdr + [("x-event-type", btypes[bi].encode())]
                 if paced and seg_n % 50 == 0:
                     ahead = seg_n / prime_rate - (time.monotonic() - seg_t0)
                     if ahead > 0.002:
@@ -297,13 +335,13 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                         time.sleep(ahead)
                 while True:
                     try:
-                        producer.produce(plan.events_topic, p_, k_, headers=bf_hdr)
+                        producer.produce(plan.events_topic, p_, k_, headers=h_)
                         break
                     except BufferError:
                         producer.poll(0.01)
                 backfilled += 1
                 seg_n += 1
-                if mode == "prime":
+                if mode == "prime" and (bscored is None or bscored[bi]):
                     primed += 1
                 # progress from inside a batch too: a paced prime batch can take tens of seconds
                 if results is not None and (seg_n & 511) == 0 and time.monotonic() - last_progress >= 0.5:
@@ -336,6 +374,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     next_metrics = (now_us() // 1_000_000 + 1) * 1_000_000
     sec_lags: list[int] = []
     sec_sent = 0
+    parts_sent = 0            # messages of multi-message transactions besides their triggers
     sec_bytes = 0
     gen_cpu_ms = 0.0          # generator process, cumulative (reported with each batch)
     gen_cpu_prev = 0.0
@@ -368,8 +407,24 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
         now = now_us()
         if cur is not None:
             offs, payloads, keys, ids = cur[1], cur[2], cur[3], cur[4]
+            rtypes = cur[7] if len(cur) > 8 else None
+            rscored = cur[8] if len(cur) > 8 else None
             off_now = now - t0
             while i < len(payloads) and offs[i] <= off_now:
+                if rscored is not None and not rscored[i]:
+                    # a part of a multi-message transaction: typed, not traced (the decision is the trigger's)
+                    while True:
+                        try:
+                            producer.produce(topic, payloads[i], keys[i],
+                                             headers=[("x-event-type", rtypes[i].encode()), ("x-run-id", run_b)],
+                                             timestamp=(t0 + int(offs[i])) // 1000)
+                            break
+                        except BufferError:
+                            producer.poll(0.001)
+                    parts_sent += 1
+                    sec_bytes += len(payloads[i])
+                    i += 1
+                    continue
                 pos = tm.n
                 if pos >= tm.event_id.shape[0]:
                     tm.grow()
@@ -380,9 +435,12 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
                 hdr = BT(run_id=run_id, gen_id=eid >> 48, seq=eid & 0xFFFFFFFFFFFF, t_intended_us=intended,
                          t_sent_us=sent, driver_domain=DRIVER_DOMAIN,
                          payload_crc32=zlib.crc32(payload)).SerializeToString()
+                headers = [("x-bench-trace", hdr), ("x-run-id", run_b)]
+                if rtypes is not None and rtypes[i]:
+                    headers.append(("x-event-type", rtypes[i].encode()))
                 while True:
                     try:
-                        producer.produce(topic, payload, keys[i], headers=[("x-bench-trace", hdr), ("x-run-id", run_b)],
+                        producer.produce(topic, payload, keys[i], headers=headers,
                                          timestamp=intended // 1000, on_delivery=partial(on_delivery, pos))
                         break
                     except BufferError:
@@ -444,7 +502,7 @@ def _emitter(plan: ShardPlan, q, stop, metrics_topic: str, results=None, start=N
     lag = tm.sent[:n] - tm.intended[:n]
     summary = {
         "shard": plan.shard, "gen_id": plan.shard, "emitted": int(n), "generated": total_gen, "backfilled": backfilled,
-        "errors": errors[0], "undelivered": int(remaining), "labels": labels_sent,
+        "errors": errors[0], "undelivered": int(remaining), "labels": labels_sent, "parts_sent": parts_sent,
         "first_seq": int(ev[0] & np.uint64(0xFFFFFFFFFFFF)) if n else None,
         "last_seq": int(ev[-1] & np.uint64(0xFFFFFFFFFFFF)) if n else None,
         "schedule_lag_p99_ms": float(np.percentile(lag, 99) / 1000) if n else None,

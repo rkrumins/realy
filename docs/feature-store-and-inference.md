@@ -169,12 +169,19 @@ ModelInferRequest {
   model_name: "fraud_mlp"
   inputs:  [{ name: "input__0", datatype: "FP32", shape: [1, 54] }]      # [B, 54]; B > 1 when micro-batched
   outputs: [{ name: "output__0" }]
-  raw_input_contents: [ 216 bytes = 54 little-endian float32 ]           # MODEL_INPUT_DIM pads to the production width
+  raw_input_contents: [ 216 bytes = 54 little-endian float32 ]           # as wide as the served model declares
 }
 -> ModelInferResponse { model_version: "proxy-105020-42", raw_output_contents: [ float32 score ] }
    parameters: queue_us, compute_us, batch_size      (mock and Triton report server-side time)
 ```
 
+- **Width:** the gateway sends as many features as the served model declares in its KServe model
+  metadata (input shape `[-1, N]`), read once at startup; `MODEL_INPUT_DIM` overrides it. Triton reads
+  its input positionally, and features are only ever appended, so a model trained on N features gets
+  exactly the first N of today's vector; a production-width proxy wider than the schema gets zeros after
+  them. The mock server binds rows by feature name instead. `tests/test_triton_configs.py` checks that
+  every committed Triton config declares its model's width and that those inputs are a prefix of the
+  schema.
 - **Score:** `0.0000116`. The model is confident this is legitimate, and it is.
 - **Call time:** 4.50 ms in total, of which 3.09 ms is server compute.
 - **Same contract everywhere:** the mock model server and Triton on L4 speak the same KServe v2
