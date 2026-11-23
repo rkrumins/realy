@@ -36,7 +36,7 @@ public final class KServeModelClient implements ModelClient {
     private final GRPCInferenceServiceGrpc.GRPCInferenceServiceFutureStub[] stubs;
     private final AtomicInteger rr = new AtomicInteger();
     private final String modelName;
-    private final int nFeatures;
+    private volatile int nFeatures;           // the model's input width (adopted from its metadata once readable)
     private final String inputName;
     private final String outputName;
     private volatile int windowUs;
@@ -91,8 +91,45 @@ public final class KServeModelClient implements ModelClient {
         KServeModelClient c = new KServeModelClient(target, modelName, width, channels);
         c.served = sv;
         c.target = target;
+        if (!sv.error().isEmpty()) c.retryMetadata(forced.isBlank());
         return c;
     }
+
+    /**
+     * The model server was not ready when this client started (both restarted together, a rolling
+     * deploy): keep asking for its metadata every 10 s until it answers, then report it and, unless
+     * MODEL_INPUT_DIM pins the width, adopt the served input width. Otherwise the gateway would report a
+     * stale error and send the schema width to a positional model until it is restarted.
+     */
+    private void retryMetadata(boolean adoptWidth) {
+        Thread t = new Thread(() -> {
+            String in = io.realy.common.Env.str("MODEL_INPUT_NAME", "input__0");
+            while (!Thread.currentThread().isInterrupted() && !served.error().isEmpty()) {
+                try {
+                    Thread.sleep(Long.parseLong(io.realy.common.Env.str("MODEL_METADATA_RETRY_MS", "10000")));
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (closed) return;
+                Served sv = served(target, modelName, in);
+                if (sv.error().isEmpty()) {
+                    served = sv;
+                    if (adoptWidth && sv.inputWidth() > 0 && sv.inputWidth() != nFeatures) {
+                        org.slf4j.LoggerFactory.getLogger(KServeModelClient.class).info(
+                                "model {} metadata now readable: {} inputs (was sending {})", modelName, sv.inputWidth(), nFeatures);
+                        nFeatures = sv.inputWidth();
+                    } else {
+                        org.slf4j.LoggerFactory.getLogger(KServeModelClient.class).info(
+                                "model {} metadata now readable ({}, {} inputs)", modelName, sv.platform(), sv.inputWidth());
+                    }
+                }
+            }
+        }, "model-metadata-retry");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private volatile boolean closed;
 
     /**
      * What the model server says about the model (KServe v2 ModelMetadata): its platform ("realy_mock" for
@@ -239,6 +276,7 @@ public final class KServeModelClient implements ModelClient {
 
     private void send(List<Pending> batch, long timeoutUs) {
         int b = batch.size();
+        final int nFeatures = this.nFeatures;     // one width per request, even if the metadata arrives meanwhile
         ByteBuffer buf = ByteBuffer.allocate(4 * b * nFeatures).order(ByteOrder.LITTLE_ENDIAN);
         for (Pending p : batch) {
             for (int i = 0; i < nFeatures; i++) buf.putFloat(i < p.row().length ? p.row()[i] : 0f);
@@ -342,6 +380,7 @@ public final class KServeModelClient implements ModelClient {
 
     @Override
     public void close() {
+        closed = true;
         for (ManagedChannel c : channels) c.shutdownNow();
     }
 }

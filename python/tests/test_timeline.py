@@ -91,6 +91,16 @@ def test_a_run_aborted_while_preparing_has_no_traffic(tmp_path):
     assert tl["aborted"] and tl["stage"] == "done"
 
 
+def test_skipped_steps_take_no_time(tmp_path):
+    d = _run(tmp_path)
+    st = Startup.resume(d)
+    st.skip("verify", "not requested")
+    st.write()
+    tl = timeline(d, now=T0 + 10_000)
+    assert tl["verify_start"] is None and tl["durations"]["verify_s"] is None
+    assert tl["finished_at"] == T0 + 168.0
+
+
 def test_a_run_aborted_while_measuring(tmp_path):
     tl = timeline(_run(tmp_path, abort_in="MEASURE"), now=T0 + 10_000)
     assert tl["aborted"] and tl["durations"]["measured_s"] == 20.0

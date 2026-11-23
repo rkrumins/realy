@@ -56,7 +56,10 @@ def timeline(run_dir: Path, job: dict[str, Any] | None = None, now: float | None
     steps = {s.get("id"): s for s in st.get("steps") or []}
 
     def at(sid: str, key: str) -> float | None:
-        v = (steps.get(sid) or {}).get(key)
+        s = steps.get(sid) or {}
+        if s.get("status") == "skipped":     # a skipped step took no time and marks no instant
+            return None
+        v = s.get(key)
         return float(v) if v else None
 
     def status(sid: str) -> str | None:
